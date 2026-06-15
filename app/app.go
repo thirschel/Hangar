@@ -781,7 +781,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.SessionAlive() {
 			return m, nil
 		}
 		// Terminal tab: attach to terminal session

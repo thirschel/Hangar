@@ -98,7 +98,7 @@ func makeStartedInstance(t *testing.T, title string) *session.Instance {
 		cmdExec: cmdExec,
 	}
 	tmuxSession := tmux.NewTmuxSessionWithDeps(sessionName, "bash", ptyFactory, cmdExec)
-	instance.SetTmuxSession(tmuxSession)
+	instance.SetTerminalSession(tmuxSession)
 
 	err = instance.Start(true)
 	require.NoError(t, err)
