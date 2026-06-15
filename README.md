@@ -44,9 +44,30 @@ To use a custom name for the binary:
 curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
 ```
 
+#### Windows (native, from this fork)
+
+This fork can run **natively on Windows without WSL or tmux**, using the Windows
+ConPTY API (ported from upstream PR #248). Build `cs.exe` from source:
+
+```bat
+:: Requires Go 1.23+ (https://go.dev/dl/) and git
+git clone https://github.com/thirschel/claude-squad.git
+cd claude-squad
+build.bat
+```
+
+`build.bat` produces `cs.exe` in the repo root. Put it on your `PATH` and run `cs`
+from within a git repository. Your agent (e.g. GitHub Copilot CLI) must be installed
+on Windows and resolvable (`where copilot`).
+
+Caveats:
+- The startup trust-prompt auto-dismiss recognises `claude`, `aider`, and `gemini`
+  only; with `copilot` you may need to accept the first prompt manually.
+- `gh` is still required for GitHub operations.
+
 ### Prerequisites
 
-- [tmux](https://github.com/tmux/tmux/wiki/Installing)
+- [tmux](https://github.com/tmux/tmux/wiki/Installing) (Unix/macOS/WSL only — not needed for the native Windows build)
 - [gh](https://cli.github.com/)
 
 > **Note (WSL / Linux):** the AI agent you run (e.g. `claude`, `copilot`, `aider`) must be a
