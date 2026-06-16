@@ -1,0 +1,200 @@
+// Package proto defines the wire protocol between the claude-squad TUI (client)
+// and the native-Windows session-host daemon. It is intentionally
+// platform-neutral (no Windows imports) so it can be unit-tested anywhere and
+// shared by both the client and the host.
+//
+// Transport is a go-winio named pipe in byte mode; this package only defines the
+// framing (length-prefixed JSON) and the request/response envelopes.
+package proto
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+)
+
+// Version is the protocol version. The client and host exchange it in the Hello
+// handshake; a mismatch means the host must be restarted (see plan §6.7).
+const Version = 1
+
+// MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
+// whole scrollback, so this is generous but still guards against abuse/OOM.
+const MaxFrameSize = 16 << 20 // 16 MiB
+
+// Method names for Request.Method.
+const (
+	MethodHello         = "Hello"
+	MethodCreateSession = "CreateSession"
+	MethodHasSession    = "HasSession"
+	MethodListSessions  = "ListSessions"
+	MethodCapturePane   = "CapturePane"
+	MethodSendKeys      = "SendKeys"
+	MethodResize        = "Resize"
+	MethodHasUpdated    = "HasUpdated"
+	MethodSetAutoYes    = "SetAutoYes"
+	MethodKillSession   = "KillSession"
+	MethodShutdown      = "Shutdown"
+)
+
+// Capture modes for MethodCapturePane.
+const (
+	CaptureScreen = "screen" // just the visible screen
+	CaptureFull   = "full"   // visible screen + scrollback history
+)
+
+// Request is the single envelope sent from client to host. Optional fields are
+// interpreted per Method.
+type Request struct {
+	ID      uint64 `json:"id"`
+	Method  string `json:"method"`
+	Session string `json:"session,omitempty"`
+
+	// CreateSession
+	Program string `json:"program,omitempty"`
+	WorkDir string `json:"workDir,omitempty"`
+	Cols    int    `json:"cols,omitempty"`
+	Rows    int    `json:"rows,omitempty"`
+	AutoYes bool   `json:"autoYes,omitempty"`
+
+	// SetAutoYes
+	Enabled bool `json:"enabled,omitempty"`
+
+	// SendKeys
+	Data []byte `json:"data,omitempty"`
+
+	// CapturePane
+	Mode     string `json:"mode,omitempty"`
+	WithANSI bool   `json:"withANSI,omitempty"`
+
+	// Hello
+	ClientVersion int `json:"clientVersion,omitempty"`
+}
+
+// SessionInfo is returned by ListSessions.
+type SessionInfo struct {
+	Name     string `json:"name"`
+	Alive    bool   `json:"alive"`
+	ExitCode int    `json:"exitCode"`
+	Program  string `json:"program"`
+}
+
+// Response is the single envelope sent from host to client.
+type Response struct {
+	ID    uint64 `json:"id"`
+	OK    bool   `json:"ok"`
+	Error string `json:"error,omitempty"`
+
+	// Hello
+	HostVersion int `json:"hostVersion,omitempty"`
+
+	// CapturePane
+	Content string `json:"content,omitempty"`
+
+	// HasSession
+	Exists bool `json:"exists,omitempty"`
+	Alive  bool `json:"alive,omitempty"`
+
+	// HasUpdated
+	Updated   bool `json:"updated,omitempty"`
+	HasPrompt bool `json:"hasPrompt,omitempty"`
+
+	// ListSessions
+	Sessions []SessionInfo `json:"sessions,omitempty"`
+
+	// CreateSession / Attach handshake: the per-session attach pipe + one-time token.
+	AttachPipe  string `json:"attachPipe,omitempty"`
+	AttachToken string `json:"attachToken,omitempty"`
+}
+
+// Errorf builds a failed Response for the given request id.
+func Errorf(id uint64, format string, args ...any) *Response {
+	return &Response{ID: id, OK: false, Error: fmt.Sprintf(format, args...)}
+}
+
+// WriteFrame writes v as a length-prefixed JSON frame.
+func WriteFrame(w io.Writer, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("marshal frame: %w", err)
+	}
+	if len(b) > MaxFrameSize {
+		return fmt.Errorf("frame too large: %d > %d", len(b), MaxFrameSize)
+	}
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(b)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err = w.Write(b)
+	return err
+}
+
+// ReadHeader reads the 4-byte length prefix and validates it against
+// MaxFrameSize. Splitting header/body lets a server apply a read deadline to the
+// body only, so it can keep a persistent control connection open while still
+// bounding a half-sent frame.
+func ReadHeader(r io.Reader) (uint32, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return 0, err
+	}
+	n := binary.BigEndian.Uint32(hdr[:])
+	if n > MaxFrameSize {
+		return 0, fmt.Errorf("frame too large: %d > %d", n, MaxFrameSize)
+	}
+	return n, nil
+}
+
+// ReadBody reads exactly n bytes (the frame payload).
+func ReadBody(r io.Reader, n uint32) ([]byte, error) {
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+// DecodeRequest decodes a raw frame payload into a Request.
+func DecodeRequest(b []byte) (*Request, error) {
+	var req Request
+	if err := json.Unmarshal(b, &req); err != nil {
+		return nil, fmt.Errorf("decode request: %w", err)
+	}
+	return &req, nil
+}
+
+// ReadFrameBytes reads one length-prefixed frame and returns the raw JSON.
+func ReadFrameBytes(r io.Reader) ([]byte, error) {
+	n, err := ReadHeader(r)
+	if err != nil {
+		return nil, err
+	}
+	return ReadBody(r, n)
+}
+
+// ReadRequest reads and decodes a single Request frame.
+func ReadRequest(r io.Reader) (*Request, error) {
+	b, err := ReadFrameBytes(r)
+	if err != nil {
+		return nil, err
+	}
+	var req Request
+	if err := json.Unmarshal(b, &req); err != nil {
+		return nil, fmt.Errorf("decode request: %w", err)
+	}
+	return &req, nil
+}
+
+// ReadResponse reads and decodes a single Response frame.
+func ReadResponse(r io.Reader) (*Response, error) {
+	b, err := ReadFrameBytes(r)
+	if err != nil {
+		return nil, err
+	}
+	var resp Response
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &resp, nil
+}
