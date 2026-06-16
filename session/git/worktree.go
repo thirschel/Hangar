@@ -5,10 +5,17 @@ import (
 	"claude-squad/log"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 func getWorktreeDirectory() (string, error) {
+	// A user-configured location (set in the desktop app's settings) overrides the
+	// default; new worktrees are created directly under it.
+	if dir := strings.TrimSpace(config.LoadConfig().WorktreeDir); dir != "" {
+		return dir, nil
+	}
+
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return "", err

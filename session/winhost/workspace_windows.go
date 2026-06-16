@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -145,6 +146,143 @@ func agentLaunchCommand(program, sessionID string) string {
 	return program
 }
 
+// defaultTitle is the placeholder name for a workspace created without a title:
+// the repo folder name, shown until the agent renames it after the first message.
+func defaultTitle(repoPath string) string {
+	base := filepath.Base(strings.TrimRight(repoPath, `\/`))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return "workspace"
+	}
+	return base
+}
+
+// titleAnsiRe strips ANSI/VT escape sequences from one-shot agent output before
+// it is used as a title.
+var titleAnsiRe = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+
+// supportsTitleGen reports whether we know a one-shot, non-interactive mode for
+// this agent that can summarize a task into a title. Currently only copilot (its
+// `-p` flag prints a reply to stdout and exits).
+func supportsTitleGen(program string) bool {
+	return strings.Contains(strings.ToLower(program), "copilot")
+}
+
+// generateTitle asks the workspace's agent to name the task from the user's first
+// message and persists the result as the workspace title. The agent call can take
+// a few seconds, so it runs in the background; the app picks up the new title on
+// its next poll. Unsupported agents and any failure fall back to a title derived
+// from the message, so a title is always set.
+func (m *workspaceManager) generateTitle(req *proto.Request) *proto.Response {
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		return proto.Errorf(req.ID, "message required")
+	}
+	m.mu.Lock()
+	w, ok := m.wss[req.WorkspaceID]
+	if !ok {
+		m.mu.Unlock()
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+	id, program := w.ID, w.Program
+	m.mu.Unlock()
+
+	go func() {
+		title := m.titleFor(program, message)
+		if title == "" {
+			return
+		}
+		m.mu.Lock()
+		if w, ok := m.wss[id]; ok {
+			w.Title = title
+			m.saveLocked()
+		}
+		m.mu.Unlock()
+		m.host.logger.Printf("titled workspace %s -> %q", id, title)
+	}()
+
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+// titleFor produces a short workspace title from the user's first message. It
+// uses a one-shot agent call when we know how (copilot); otherwise — or on any
+// failure/empty/timeout — it falls back to a title derived from the message.
+func (m *workspaceManager) titleFor(program, message string) string {
+	if supportsTitleGen(program) {
+		if t := m.agentTitle(program, message); t != "" {
+			return t
+		}
+	}
+	return deriveTitle(message)
+}
+
+// agentTitle runs a one-shot, non-interactive agent invocation to summarize the
+// first message into a short title (copilot's `-p` prints to stdout and exits).
+// It runs windowless in a neutral temp cwd (so the agent can't touch the
+// worktree), bounded by a timeout, and the output is sanitized to one short line.
+// Returns "" on any failure so the caller can fall back.
+func (m *workspaceManager) agentTitle(program, message string) string {
+	fields := strings.Fields(program)
+	if len(fields) == 0 {
+		return ""
+	}
+	prompt := "Reply with ONLY a short 3 to 6 word title for the following coding task. " +
+		"No quotes, no trailing punctuation, no explanation.\n\nTask: " + message
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, fields[0], "-p", prompt)
+	cmd.Dir = os.TempDir()
+	hideConsole(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		m.host.logger.Printf("title generation via %q failed: %v", fields[0], err)
+		return ""
+	}
+	return sanitizeTitle(string(out))
+}
+
+// deriveTitle makes a short title from the first non-empty line of the user's
+// message — the fallback when the agent can't generate one.
+func deriveTitle(message string) string {
+	for _, line := range strings.Split(message, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return truncateTitle(line)
+		}
+	}
+	return "workspace"
+}
+
+// sanitizeTitle reduces raw agent output to a single short, clean title line.
+func sanitizeTitle(s string) string {
+	s = titleAnsiRe.ReplaceAllString(s, "")
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return -1
+			}
+			return r
+		}, line)
+		line = strings.TrimSpace(strings.Trim(strings.TrimSpace(line), "\"'`*.#"))
+		if line != "" {
+			return truncateTitle(line)
+		}
+	}
+	return ""
+}
+
+// truncateTitle caps a title to a sane length (a few words).
+func truncateTitle(s string) string {
+	const maxChars = 60
+	if words := strings.Fields(s); len(words) > 8 {
+		s = strings.Join(words[:8], " ")
+	}
+	if len(s) > maxChars {
+		s = strings.TrimSpace(s[:maxChars])
+	}
+	return s
+}
+
 // worktreeFor reconstructs a GitWorktree handle from stored metadata so we can
 // run diff/remove without re-resolving paths.
 func (w *workspace) worktreeFor() *git.GitWorktree {
@@ -244,7 +382,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
-		title = "workspace"
+		title = defaultTitle(req.RepoPath)
 	}
 	program := req.Program
 	if program == "" {

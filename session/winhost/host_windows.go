@@ -259,6 +259,8 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.workspaces.stopRun(req)
 	case proto.MethodWorkspaceRunOutput:
 		return h.workspaces.runOutput(req)
+	case proto.MethodGenerateWorkspaceTitle:
+		return h.workspaces.generateTitle(req)
 	default:
 		return proto.Errorf(req.ID, "unknown method %q", req.Method)
 	}

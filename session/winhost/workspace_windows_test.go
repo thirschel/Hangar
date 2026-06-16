@@ -311,3 +311,52 @@ func TestReviveSessionOnAttach(t *testing.T) {
 		t.Fatalf("workspace %s missing from list after revive", ws.ID)
 	}
 }
+
+func TestSanitizeTitle(t *testing.T) {
+	cases := map[string]string{
+		"Add login flow":                 "Add login flow",
+		`  "Refactor auth module"  `:     "Refactor auth module",
+		"\x1b[32mFix flaky tests\x1b[0m": "Fix flaky tests",
+		"Title one\nTitle two":           "Title one",
+		"\n\n   Trimmed title  \n":       "Trimmed title",
+		"### Heading title":              "Heading title",
+		"":                               "",
+	}
+	for in, want := range cases {
+		if got := sanitizeTitle(in); got != want {
+			t.Errorf("sanitizeTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestTruncateTitle(t *testing.T) {
+	if got := truncateTitle("one two three four five six seven eight nine ten"); len(strings.Fields(got)) > 8 {
+		t.Errorf("truncateTitle kept too many words: %q", got)
+	}
+	if got := truncateTitle(strings.Repeat("x", 200)); len(got) > 60 {
+		t.Errorf("truncateTitle did not cap length: len=%d", len(got))
+	}
+}
+
+func TestDeriveTitle(t *testing.T) {
+	if got := deriveTitle("\n  Implement the parser  \nmore detail"); got != "Implement the parser" {
+		t.Errorf("deriveTitle first line = %q", got)
+	}
+	if got := deriveTitle("   \n  "); got != "workspace" {
+		t.Errorf("deriveTitle empty fallback = %q", got)
+	}
+}
+
+func TestDefaultTitle(t *testing.T) {
+	cases := map[string]string{
+		`C:\dev\claude-squad`:  "claude-squad",
+		`C:\dev\claude-squad\`: "claude-squad",
+		`D:\repos\my-app\`:     "my-app",
+		"":                     "workspace",
+	}
+	for in, want := range cases {
+		if got := defaultTitle(in); got != want {
+			t.Errorf("defaultTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

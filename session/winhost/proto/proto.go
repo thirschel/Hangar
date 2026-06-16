@@ -18,7 +18,8 @@ import (
 // handshake; a mismatch means the host must be restarted (see plan §6.7).
 // v2 adds the workspace methods (the desktop "core daemon" surface).
 // v3 adds per-workspace run process control and output polling.
-const Version = 3
+// v4 adds agent-generated workspace titles (GenerateWorkspaceTitle).
+const Version = 4
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
 // whole scrollback, so this is generous but still guards against abuse/OOM.
@@ -52,6 +53,9 @@ const (
 	MethodStartRun            = "StartRun"
 	MethodStopRun             = "StopRun"
 	MethodWorkspaceRunOutput  = "WorkspaceRunOutput"
+
+	// Title generation (v4): summarize the first message into a workspace title.
+	MethodGenerateWorkspaceTitle = "GenerateWorkspaceTitle"
 )
 
 // Capture modes for MethodCapturePane.
