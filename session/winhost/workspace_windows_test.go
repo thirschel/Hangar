@@ -94,6 +94,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 			found = true
 		}
 	}
+
 	if !found {
 		t.Fatalf("expected NEW.txt with +2 in changed files, got %+v", files)
 	}
@@ -118,5 +119,49 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	list, err = c.ListWorkspaces()
 	if err != nil || len(list) != 0 {
 		t.Fatalf("expected empty list after archive, got err=%v list=%+v", err, list)
+	}
+}
+
+func TestWorkspaceCommit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GIT_AUTHOR_NAME", "t")
+	t.Setenv("GIT_AUTHOR_EMAIL", "t@t")
+	t.Setenv("GIT_COMMITTER_NAME", "t")
+	t.Setenv("GIT_COMMITTER_EMAIL", "t@t")
+
+	repo := initTempRepo(t)
+
+	pipe, cleanup := startTestHost(t)
+	defer cleanup()
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	ws, err := c.CreateWorkspace(repo, "Commit Test", "agent", "")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	defer func() { _ = c.ArchiveWorkspace(ws.ID) }()
+
+	if err := os.WriteFile(filepath.Join(ws.WorktreePath, "COMMIT.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const message = "workspace commit test"
+	if err := c.CommitWorkspace(ws.ID, message); err != nil {
+		t.Fatalf("CommitWorkspace: %v", err)
+	}
+
+	cmd := exec.Command("git", "--no-pager", "log", "--oneline", "-1")
+	cmd.Dir = ws.WorktreePath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), message) {
+		t.Fatalf("latest commit %q does not contain %q", out, message)
 	}
 }

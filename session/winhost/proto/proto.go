@@ -45,6 +45,8 @@ const (
 	MethodGetWorkspace        = "GetWorkspace"
 	MethodArchiveWorkspace    = "ArchiveWorkspace"
 	MethodWorkspaceDiff       = "WorkspaceDiff"
+	MethodWorkspaceCommit     = "WorkspaceCommit"
+	MethodWorkspacePush       = "WorkspacePush"
 	MethodSetWorkspaceAutoYes = "SetWorkspaceAutoYes"
 )
 
@@ -87,6 +89,7 @@ type Request struct {
 	BaseBranch  string `json:"baseBranch,omitempty"`
 	WorkspaceID string `json:"workspaceId,omitempty"`
 	File        string `json:"file,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.

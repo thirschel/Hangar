@@ -216,6 +216,14 @@ func (c *Client) WorkspaceFileDiff(id, file string) (string, error) {
 	return r.Diff, nil
 }
 
+func (c *Client) CommitWorkspace(id, message string) error {
+	return respErr(c.call(&proto.Request{Method: proto.MethodWorkspaceCommit, WorkspaceID: id, Message: message}))
+}
+
+func (c *Client) PushWorkspace(id string) error {
+	return respErr(c.call(&proto.Request{Method: proto.MethodWorkspacePush, WorkspaceID: id}))
+}
+
 // connectAndHello dials the pipe and validates the protocol version.
 func connectAndHello(pipe string, timeout time.Duration) (*Client, error) {
 	c, err := dialClient(pipe, timeout)
