@@ -74,3 +74,40 @@ func TestAutoYesEdgeSequence(t *testing.T) {
 		t.Fatalf("expected exactly 2 taps across two prompt appearances, got %d", taps)
 	}
 }
+
+// TestMaybeAutoYesPausesWhileAttached exercises the real integration of
+// detectPrompt + the emulator + the attachedCnt gate (no child process needed):
+// with a copilot approval prompt on screen, AutoYes fires (disarms) when not
+// attached and is paused (stays armed) while a client is attached.
+func TestMaybeAutoYesPausesWhileAttached(t *testing.T) {
+	mk := func() *conptySession {
+		s := newConptySession("t", "copilot", "", 80, 24, true).(*conptySession)
+		_, _ = s.emu.Write([]byte("Do you want to run this command?\r\n" +
+			"  3. No, and tell Copilot what to do differently (Esc to stop)"))
+		return s
+	}
+
+	// Not attached: the rising edge should fire (sendKeys no-ops with a nil pty,
+	// but the decision disarms).
+	s := mk()
+	s.maybeAutoYes()
+	s.mu.Lock()
+	armed := s.autoYesArmed
+	s.mu.Unlock()
+	if armed {
+		t.Fatal("expected host AutoYes to fire (disarm) when not attached")
+	}
+
+	// Attached: must not fire; stays armed so the user keeps control.
+	s2 := mk()
+	s2.mu.Lock()
+	s2.attachedCnt = 1
+	s2.mu.Unlock()
+	s2.maybeAutoYes()
+	s2.mu.Lock()
+	armed2 := s2.autoYesArmed
+	s2.mu.Unlock()
+	if !armed2 {
+		t.Fatal("expected host AutoYes to stay armed (paused) while attached")
+	}
+}
