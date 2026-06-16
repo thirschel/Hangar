@@ -9,6 +9,7 @@ export type DaemonConfig = {
   auto_yes?: boolean;
   daemon_poll_interval?: number;
   branch_prefix?: string;
+  worktree_dir?: string;
   [key: string]: unknown;
 };
 
@@ -25,6 +26,7 @@ export type Settings = {
   defaultProgram: string;
   autoYes: boolean;
   branchPrefix: string;
+  workspaceDir: string;
   notifications: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
@@ -71,6 +73,7 @@ export function getSettings(): Settings {
     defaultProgram: (cfg.default_program as string) || 'copilot',
     autoYes: Boolean(cfg.auto_yes),
     branchPrefix: (cfg.branch_prefix as string) || '',
+    workspaceDir: (cfg.worktree_dir as string) || '',
     notifications: app.notifications,
     minimizeToTray: app.minimizeToTray,
     uiRefreshMs: app.uiRefreshMs,
@@ -83,9 +86,15 @@ export function applySettings(patch: Partial<Settings>): Settings {
   mkdirSync(csDir(), { recursive: true });
 
   const cfg = readDaemonConfig();
-  if (patch.defaultProgram !== undefined) cfg.default_program = patch.defaultProgram.trim() || 'copilot';
+  if (patch.defaultProgram !== undefined)
+    cfg.default_program = patch.defaultProgram.trim() || 'copilot';
   if (patch.autoYes !== undefined) cfg.auto_yes = patch.autoYes;
   if (patch.branchPrefix !== undefined) cfg.branch_prefix = patch.branchPrefix;
+  if (patch.workspaceDir !== undefined) {
+    const dir = patch.workspaceDir.trim();
+    if (dir) cfg.worktree_dir = dir;
+    else delete cfg.worktree_dir;
+  }
   writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n');
 
   const app = readAppSettings();
@@ -93,7 +102,9 @@ export function applySettings(patch: Partial<Settings>): Settings {
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
   if (patch.uiRefreshMs !== undefined) {
     const n = Number(patch.uiRefreshMs);
-    app.uiRefreshMs = Number.isFinite(n) ? Math.min(60000, Math.max(500, n)) : APP_DEFAULTS.uiRefreshMs;
+    app.uiRefreshMs = Number.isFinite(n)
+      ? Math.min(60000, Math.max(500, n))
+      : APP_DEFAULTS.uiRefreshMs;
   }
   writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n');
 

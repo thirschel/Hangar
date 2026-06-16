@@ -6,26 +6,31 @@ import type { FileData } from 'react-diff-view';
 
 type ReviewPanelProps = {
   workspace: WorkspaceInfo | null;
+  embedded?: boolean;
+  onFilesCount?: (n: number) => void;
 };
 
-export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
+export function ReviewPanel({ workspace, embedded, onFilesCount }: ReviewPanelProps): JSX.Element {
   const [files, setFiles] = useState<FileDiffInfo[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState('');
   const [commitMessage, setCommitMessage] = useState('');
   const [busyAction, setBusyAction] = useState<'commit' | 'push' | null>(null);
-  const [actionStatus, setActionStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  const [actionStatus, setActionStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(
+    null,
+  );
   const id = workspace?.id ?? null;
 
   const refreshChanges = useCallback(async (): Promise<void> => {
     if (!id) return;
     const f = await window.cs.workspaceFiles(id);
     setFiles(f);
+    onFilesCount?.(f.length);
     if (selectedFile) {
       const d = await window.cs.workspaceFileDiff(id, selectedFile);
       setDiff(d);
     }
-  }, [id, selectedFile]);
+  }, [id, selectedFile, onFilesCount]);
 
   useEffect(() => {
     setSelectedFile(null);
@@ -34,12 +39,16 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
     setCommitMessage('');
     setActionStatus(null);
     setBusyAction(null);
+    onFilesCount?.(0);
     if (!id) return;
     let active = true;
     const load = async (): Promise<void> => {
       try {
         const f = await window.cs.workspaceFiles(id);
-        if (active) setFiles(f);
+        if (active) {
+          setFiles(f);
+          onFilesCount?.(f.length);
+        }
       } catch {
         // transient; will retry on the next tick
       }
@@ -50,7 +59,7 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
       active = false;
       clearInterval(timer);
     };
-  }, [id]);
+  }, [id, onFilesCount]);
 
   const commitChanges = useCallback(async (): Promise<void> => {
     if (!id) return;
@@ -66,7 +75,10 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
       setCommitMessage('');
       await refreshChanges();
     } catch (error) {
-      setActionStatus({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+      setActionStatus({
+        kind: 'error',
+        text: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setBusyAction(null);
     }
@@ -79,9 +91,15 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
     try {
       const content = await window.cs.pushWorkspace(id);
       const trimmed = content.trim();
-      setActionStatus({ kind: 'ok', text: trimmed && trimmed.length <= 160 ? `Pushed · ${trimmed}` : 'Pushed' });
+      setActionStatus({
+        kind: 'ok',
+        text: trimmed && trimmed.length <= 160 ? `Pushed · ${trimmed}` : 'Pushed',
+      });
     } catch (error) {
-      setActionStatus({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+      setActionStatus({
+        kind: 'error',
+        text: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setBusyAction(null);
     }
@@ -107,7 +125,7 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
   if (!workspace) {
     return (
       <aside className="review-panel">
-        <div className="panel-header">Changes</div>
+        {!embedded && <div className="panel-header">Changes</div>}
         <div className="empty-state">
           <div className="empty-state__title">No workspace selected</div>
           <p>Pick a workspace to review its changes.</p>
@@ -118,9 +136,11 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
 
   return (
     <aside className="review-panel">
-      <div className="panel-header">
-        Changes <span className="count">{files.length}</span>
-      </div>
+      {!embedded && (
+        <div className="panel-header">
+          Changes <span className="count">{files.length}</span>
+        </div>
+      )}
       <div className="changed-files">
         {files.length === 0 && (
           <div className="empty-state">
@@ -157,7 +177,9 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
           <button
             type="button"
             onClick={() => void commitChanges()}
-            disabled={files.length === 0 || commitMessage.trim().length === 0 || busyAction !== null}
+            disabled={
+              files.length === 0 || commitMessage.trim().length === 0 || busyAction !== null
+            }
           >
             {busyAction === 'commit' ? 'Committing…' : 'Commit all changes'}
           </button>
@@ -166,7 +188,9 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
           </button>
         </div>
         {actionStatus && (
-          <div className={`commit-panel__status commit-panel__status--${actionStatus.kind}`}>{actionStatus.text}</div>
+          <div className={`commit-panel__status commit-panel__status--${actionStatus.kind}`}>
+            {actionStatus.text}
+          </div>
         )}
       </div>
       {selectedFile && <DiffView text={diff} />}
