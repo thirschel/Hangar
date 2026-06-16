@@ -16,9 +16,8 @@ import (
 	"github.com/Microsoft/go-winio"
 )
 
-// idleTimeout: the host self-exits after this long with zero sessions and zero
-// connected clients (matches tmux-server-like behaviour without lingering
-// forever). Overridable in tests via newHost.
+// defaultIdleTimeout: the host self-exits after this long with zero sessions and
+// zero connected clients (tmux-server-like, without lingering forever).
 const defaultIdleTimeout = 5 * time.Minute
 
 // bodyReadTimeout bounds how long the host waits for a frame body once its
@@ -26,46 +25,24 @@ const defaultIdleTimeout = 5 * time.Minute
 // idle persistent control connections stay open.
 const bodyReadTimeout = 15 * time.Second
 
-// echoSession is a placeholder session used in P1 to exercise the full protocol
-// and lifecycle without a real ConPTY. P2 replaces it with a ConPTY + VT
-// emulator backed session implementing the same surface.
-type echoSession struct {
-	name    string
-	program string
-	workDir string
-
-	mu       sync.Mutex
-	autoYes  bool
-	buf      []byte
-	changed  bool
-	alive    bool
-	exitCode int
-}
-
-func (s *echoSession) sendKeys(b []byte) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.buf = append(s.buf, b...)
-	s.changed = true
-}
-
-func (s *echoSession) capture() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return string(s.buf)
-}
-
-func (s *echoSession) hasUpdated() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	u := s.changed
-	s.changed = false
-	return u
+// managedSession is the host's view of a session. The real implementation is
+// conptySession (ConPTY + VT emulator); tests inject a fake via host.newSession.
+type managedSession interface {
+	start() error
+	capture(full, withANSI bool) string
+	sendKeys(b []byte) error
+	resize(cols, rows int) error
+	hasUpdated() (updated, hasPrompt bool)
+	setAutoYes(enabled bool)
+	info() proto.SessionInfo
+	alive() bool
+	close() error
 }
 
 type host struct {
 	mu          sync.RWMutex
-	sessions    map[string]*echoSession
+	sessions    map[string]managedSession
+	newSession  func(name, program, workDir string, cols, rows int, autoYes bool) managedSession
 	activeConns int
 	lastActive  time.Time
 	idleTimeout time.Duration
@@ -78,12 +55,22 @@ type host struct {
 
 func newHost(logw io.Writer, idle time.Duration) *host {
 	return &host{
-		sessions:    make(map[string]*echoSession),
+		sessions: make(map[string]managedSession),
+		newSession: func(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
+			return newConptySession(name, program, workDir, cols, rows, autoYes)
+		},
 		lastActive:  time.Now(),
 		idleTimeout: idle,
 		logger:      log.New(logw, "[host] ", log.LstdFlags|log.Lmicroseconds),
 		shutdownCh:  make(chan struct{}),
 	}
+}
+
+func sizeOr(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 func (h *host) touch() {
@@ -162,9 +149,7 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		s, ok := h.getSession(req.Session)
 		r := &proto.Response{ID: req.ID, OK: true, Exists: ok}
 		if ok {
-			s.mu.Lock()
-			r.Alive = s.alive
-			s.mu.Unlock()
+			r.Alive = s.alive()
 		}
 		return r
 	case proto.MethodListSessions:
@@ -174,33 +159,38 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		if !ok {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
-		return &proto.Response{ID: req.ID, OK: true, Content: s.capture()}
+		return &proto.Response{ID: req.ID, OK: true, Content: s.capture(req.Mode == proto.CaptureFull, req.WithANSI)}
 	case proto.MethodSendKeys:
 		s, ok := h.getSession(req.Session)
 		if !ok {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
-		s.sendKeys(req.Data)
+		if err := s.sendKeys(req.Data); err != nil {
+			return proto.Errorf(req.ID, "send keys: %v", err)
+		}
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodResize:
-		if _, ok := h.getSession(req.Session); !ok {
+		s, ok := h.getSession(req.Session)
+		if !ok {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
-		return &proto.Response{ID: req.ID, OK: true} // echo: no-op
+		if err := s.resize(req.Cols, req.Rows); err != nil {
+			return proto.Errorf(req.ID, "resize: %v", err)
+		}
+		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodHasUpdated:
 		s, ok := h.getSession(req.Session)
 		if !ok {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
-		return &proto.Response{ID: req.ID, OK: true, Updated: s.hasUpdated(), HasPrompt: false}
+		u, p := s.hasUpdated()
+		return &proto.Response{ID: req.ID, OK: true, Updated: u, HasPrompt: p}
 	case proto.MethodSetAutoYes:
 		s, ok := h.getSession(req.Session)
 		if !ok {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
-		s.mu.Lock()
-		s.autoYes = req.Enabled
-		s.mu.Unlock()
+		s.setAutoYes(req.Enabled)
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodKillSession:
 		h.killSession(req.Session)
@@ -216,26 +206,27 @@ func (h *host) createSession(req *proto.Request) *proto.Response {
 	if req.Session == "" {
 		return proto.Errorf(req.ID, "session name required")
 	}
+	if req.Program == "" {
+		return proto.Errorf(req.ID, "program required")
+	}
+	cols, rows := sizeOr(req.Cols, 80), sizeOr(req.Rows, 24)
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.sessions[req.Session]; exists {
 		return proto.Errorf(req.ID, "session already exists: %s", req.Session)
 	}
-	s := &echoSession{
-		name:    req.Session,
-		program: req.Program,
-		workDir: req.WorkDir,
-		autoYes: req.AutoYes,
-		alive:   true,
-		buf:     []byte(fmt.Sprintf("[echo session %q running %q]\n", req.Session, req.Program)),
+	s := h.newSession(req.Session, req.Program, req.WorkDir, cols, rows, req.AutoYes)
+	if err := s.start(); err != nil {
+		return proto.Errorf(req.ID, "start session: %v", err)
 	}
 	h.sessions[req.Session] = s
 	h.lastActive = time.Now()
-	h.logger.Printf("created session %q (program=%q)", req.Session, req.Program)
+	h.logger.Printf("created session %q (program=%q cols=%d rows=%d)", req.Session, req.Program, cols, rows)
 	return &proto.Response{ID: req.ID, OK: true}
 }
 
-func (h *host) getSession(name string) (*echoSession, bool) {
+func (h *host) getSession(name string) (managedSession, bool) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	s, ok := h.sessions[name]
@@ -247,21 +238,20 @@ func (h *host) listSessions() []proto.SessionInfo {
 	defer h.mu.RUnlock()
 	out := make([]proto.SessionInfo, 0, len(h.sessions))
 	for _, s := range h.sessions {
-		s.mu.Lock()
-		out = append(out, proto.SessionInfo{Name: s.name, Alive: s.alive, ExitCode: s.exitCode, Program: s.program})
-		s.mu.Unlock()
+		out = append(out, s.info())
 	}
 	return out
 }
 
 func (h *host) killSession(name string) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if s, ok := h.sessions[name]; ok {
-		s.mu.Lock()
-		s.alive = false
-		s.mu.Unlock()
+	s, ok := h.sessions[name]
+	if ok {
 		delete(h.sessions, name)
+	}
+	h.mu.Unlock()
+	if ok {
+		_ = s.close()
 		h.logger.Printf("killed session %q", name)
 	}
 }
@@ -289,6 +279,17 @@ func (h *host) idleLoop() {
 
 func (h *host) triggerShutdown() {
 	h.shutdownOnce.Do(func() {
+		// Tear down any live sessions so no child processes are orphaned.
+		h.mu.Lock()
+		sessions := make([]managedSession, 0, len(h.sessions))
+		for _, s := range h.sessions {
+			sessions = append(sessions, s)
+		}
+		h.sessions = make(map[string]managedSession)
+		h.mu.Unlock()
+		for _, s := range sessions {
+			_ = s.close()
+		}
 		close(h.shutdownCh)
 		if h.ln != nil {
 			_ = h.ln.Close()
