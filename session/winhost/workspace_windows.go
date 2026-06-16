@@ -281,6 +281,7 @@ func (m *workspaceManager) diff(req *proto.Request) *proto.Response {
 
 func runWorkspaceGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %s (%w)", strings.Join(args, " "), strings.TrimSpace(string(out)), err)

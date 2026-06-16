@@ -15,6 +15,7 @@ const MaxBranchSearchResults = 50
 // FetchBranches fetches and prunes remote-tracking branches (best-effort, won't fail if offline).
 func FetchBranches(repoPath string) {
 	cmd := exec.Command("git", "-C", repoPath, "fetch", "--prune")
+	hideConsole(cmd)
 	_ = cmd.Run()
 }
 
@@ -25,6 +26,7 @@ func SearchBranches(repoPath, filter string) ([]string, error) {
 	cmd := exec.Command("git", "-C", repoPath, "branch", "-a",
 		"--sort=-committerdate",
 		"--format=%(refname:short)")
+	hideConsole(cmd)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list branches: %s (%w)", output, err)
@@ -58,6 +60,7 @@ func SearchBranches(repoPath, filter string) ([]string, error) {
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
 	baseArgs := []string{"-C", path}
 	cmd := exec.Command("git", append(baseArgs, args...)...)
+	hideConsole(cmd)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -96,10 +99,12 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// First push the branch to remote to ensure it exists
 	pushCmd := exec.Command("gh", "repo", "sync", "--source", "-b", g.branchName)
 	pushCmd.Dir = g.worktreePath
+	hideConsole(pushCmd)
 	if err := pushCmd.Run(); err != nil {
 		// If sync fails, try creating the branch on remote first
 		gitPushCmd := exec.Command("git", "push", "-u", "origin", g.branchName)
 		gitPushCmd.Dir = g.worktreePath
+		hideConsole(gitPushCmd)
 		if pushOutput, pushErr := gitPushCmd.CombinedOutput(); pushErr != nil {
 			log.ErrorLog.Print(pushErr)
 			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
@@ -109,6 +114,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	// Now sync with remote
 	syncCmd := exec.Command("gh", "repo", "sync", "-b", g.branchName)
 	syncCmd.Dir = g.worktreePath
+	hideConsole(syncCmd)
 	if output, err := syncCmd.CombinedOutput(); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
@@ -196,6 +202,7 @@ func (g *GitWorktree) OpenBranchURL() error {
 
 	cmd := exec.Command("gh", "browse", "--branch", g.branchName)
 	cmd.Dir = g.worktreePath
+	hideConsole(cmd)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to open branch URL: %w", err)
 	}

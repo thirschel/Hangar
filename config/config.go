@@ -121,6 +121,7 @@ func GetClaudeCommand() (string, error) {
 func getClaudeCommandWindows() (string, error) {
 	// Try "where claude" which searches PATH on Windows
 	cmd := exec.Command("cmd", "/c", "where claude")
+	hideConsole(cmd)
 	output, err := cmd.Output()
 	if err == nil && len(output) > 0 {
 		// "where" may return multiple lines; use the first match
