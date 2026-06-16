@@ -61,7 +61,8 @@ type conptySession struct {
 	exitCode     int
 	prevHash     string
 	statusHash   string // separate from prevHash: tracks content for the status indicator
-	lastChangeMs int64  // last time the screen content changed (UnixMilli)
+	lastChangeMs int64  // last time the screen content changed due to agent output (UnixMilli)
+	lastInputMs  int64  // last time the user sent keystrokes (UnixMilli)
 	statusPrompt bool   // cached detectPrompt result (waiting for input)
 
 	drainDone   chan struct{}
@@ -209,6 +210,9 @@ func (s *conptySession) wait() {
 }
 
 func (s *conptySession) sendKeys(b []byte) error {
+	s.mu.Lock()
+	s.lastInputMs = time.Now().UnixMilli()
+	s.mu.Unlock()
 	if s.pty == nil {
 		return fmt.Errorf("session not started")
 	}
@@ -272,10 +276,19 @@ func (s *conptySession) hasUpdated() (bool, bool) {
 	return changed, detectPrompt(s.program, plain)
 }
 
+// Status indicator timing. A content change within statusInputEchoMs of the
+// user's last keystroke is treated as that keystroke echoing to the screen (not
+// agent activity). The agent reads "busy" while content has changed within
+// statusBusyWindowMs.
+const (
+	statusInputEchoMs  = 600
+	statusBusyWindowMs = 1500
+)
+
 // updateStatus samples the agent's screen for the status indicator: it records
-// when the visible content last changed and whether a prompt is currently shown.
-// Side-effect-free for readers; called from the autoYesLoop tick so it runs
-// regardless of whether AutoYes is enabled.
+// when the visible content last changed *due to agent output* and whether a
+// prompt is currently shown. Side-effect-free for readers; called from the
+// autoYesLoop tick so it runs regardless of whether AutoYes is enabled.
 func (s *conptySession) updateStatus() {
 	plain := plainScreen(s.emu)
 	sum := sha256.Sum256([]byte(plain))
@@ -285,7 +298,11 @@ func (s *conptySession) updateStatus() {
 	s.mu.Lock()
 	if h != s.statusHash {
 		s.statusHash = h
-		s.lastChangeMs = now
+		// Ignore changes that immediately follow user input: those are the user's
+		// own keystrokes echoing to the screen, not the agent doing work.
+		if now-s.lastInputMs > statusInputEchoMs {
+			s.lastChangeMs = now
+		}
 	}
 	s.statusPrompt = prompt
 	s.mu.Unlock()
@@ -301,7 +318,7 @@ func (s *conptySession) agentStatus() (busy, waiting bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	waiting = s.statusPrompt
-	busy = !waiting && s.lastChangeMs != 0 && (time.Now().UnixMilli()-s.lastChangeMs) < 1500
+	busy = !waiting && s.lastChangeMs != 0 && (time.Now().UnixMilli()-s.lastChangeMs) < statusBusyWindowMs
 	return busy, waiting
 }
 
