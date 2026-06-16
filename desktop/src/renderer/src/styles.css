@@ -917,3 +917,130 @@ button {
 .modal__primary:hover {
   background: #1177bb;
 }
+
+/* Center-pane tabbed surface (Agent / Files / Terminal) */
+.tab-bar {
+  flex: none;
+}
+.tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tab-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tab-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tab-pane[hidden] {
+  display: none;
+}
+.tab-pane > .agent-terminal,
+.tab-pane > .agent-terminal--empty {
+  flex: 1;
+  min-height: 0;
+  margin: 6px;
+}
+
+/* Files tab (read-only worktree browser) */
+.files-panel {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+}
+.files-panel--empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8a8a8a;
+  font-size: 12px;
+}
+.files-tree {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #2d2d30;
+}
+.files-tree__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  color: #cccccc;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid #2d2d30;
+}
+.files-tree__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #cfcfcf;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-row:hover {
+  background: #2a2d2e;
+}
+.tree-row--selected {
+  background: #094771;
+  color: #ffffff;
+}
+.tree-icon {
+  width: 14px;
+  display: inline-block;
+  text-align: center;
+  opacity: 0.85;
+}
+.files-viewer {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.files-viewer__path {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #9d9d9d;
+  border-bottom: 1px solid #2d2d30;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.files-viewer__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.files-viewer__pre {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #d4d4d4;
+  white-space: pre;
+  tab-size: 4;
+}
+.files-viewer__note {
+  padding: 14px;
+  color: #8a8a8a;
+  font-size: 12px;
+}

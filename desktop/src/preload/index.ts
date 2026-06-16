@@ -1,9 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { FileDiffInfo, Request, Response, WorkspaceInfo } from '../main/host-client';
+import type { DirEntry, FileContents, FileDiffInfo, Request, Response, WorkspaceInfo } from '../main/host-client';
 import type { Settings } from '../main/settings';
 
 export type ReadyInfo = {
   session: string;
+};
+
+export type TermData = {
+  session: string;
+  chunk: Uint8Array;
+};
+
+export type TermClosed = {
+  session: string;
+};
+
+export type TermError = {
+  session: string;
+  message: string;
 };
 
 export type HostReadyInfo = {
@@ -105,10 +119,13 @@ const api = {
     };
   },
 
-  // Terminal attach for the selected workspace.
-  attachWorkspace: (sessionName: string, size?: { cols?: number; rows?: number }): Promise<Response> =>
-    ipcRenderer.invoke('cs:attach-workspace', { sessionName, ...size }),
-  detach: (): Promise<void> => ipcRenderer.invoke('cs:detach'),
+  // Terminal streams (session-scoped: agent + shell can be live at once).
+  attachSession: (sessionName: string, size?: { cols?: number; rows?: number }): Promise<Response> =>
+    ipcRenderer.invoke('cs:attach-session', { sessionName, ...size }),
+  detachSession: (sessionName: string): Promise<void> => ipcRenderer.invoke('cs:detach-session', sessionName),
+  ensureShell: (workspaceId: string, worktreePath: string, size?: { cols?: number; rows?: number }): Promise<string> =>
+    ipcRenderer.invoke('cs:ensure-shell', { workspaceId, worktreePath, ...size }),
+  closeShell: (workspaceId: string): Promise<void> => ipcRenderer.invoke('cs:close-shell', workspaceId),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
@@ -117,14 +134,21 @@ const api = {
   notify: (n: { title: string; body: string; workspaceId?: string }): Promise<void> =>
     ipcRenderer.invoke('cs:notify', n),
 
-  onData: (callback: (chunk: Uint8Array) => void): Unsubscribe => on('term:data', callback),
+  // Files tab (read-only worktree browser).
+  listDir: (worktreePath: string, relDir: string): Promise<DirEntry[]> =>
+    ipcRenderer.invoke('cs:fs-list', { worktreePath, relDir }),
+  readFile: (worktreePath: string, relFile: string): Promise<FileContents> =>
+    ipcRenderer.invoke('cs:fs-read', { worktreePath, relFile }),
+
+  onData: (callback: (data: TermData) => void): Unsubscribe => on('term:data', callback),
   onReady: (callback: (info: ReadyInfo) => void): Unsubscribe => on('term:ready', callback),
   onHostReady: (callback: (info: HostReadyInfo) => void): Unsubscribe => on('cs:ready', callback),
-  onClosed: (callback: () => void): Unsubscribe => on('term:closed', callback),
-  onError: (callback: (message: string) => void): Unsubscribe => on('term:error', callback),
+  onClosed: (callback: (info: TermClosed) => void): Unsubscribe => on('term:closed', callback),
+  onError: (callback: (info: TermError) => void): Unsubscribe => on('term:error', callback),
   onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe => on('cs:focus-workspace', callback),
-  sendInput: (data: string): void => ipcRenderer.send('term:input', data),
-  resize: (cols: number, rows: number): void => ipcRenderer.send('term:resize', { cols, rows }),
+  sendInput: (session: string, data: string): void => ipcRenderer.send('term:input', { session, data }),
+  resize: (session: string, cols: number, rows: number): void =>
+    ipcRenderer.send('term:resize', { session, cols, rows }),
 };
 
 contextBridge.exposeInMainWorld('cs', api);
