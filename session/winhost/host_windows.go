@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"claude-squad/session/winhost/proto"
@@ -37,6 +38,8 @@ type managedSession interface {
 	info() proto.SessionInfo
 	alive() bool
 	close() error
+	subscribe(cols, rows int) (snapshot []byte, sub *subscriber)
+	unsubscribe(sub *subscriber)
 }
 
 type host struct {
@@ -51,6 +54,7 @@ type host struct {
 	logger       *log.Logger
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
+	attachSeq    atomic.Uint64
 }
 
 func newHost(logw io.Writer, idle time.Duration) *host {
@@ -195,6 +199,8 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 	case proto.MethodKillSession:
 		h.killSession(req.Session)
 		return &proto.Response{ID: req.ID, OK: true}
+	case proto.MethodAttach:
+		return h.attachSession(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
 	default:
@@ -253,6 +259,92 @@ func (h *host) killSession(name string) {
 	if ok {
 		_ = s.close()
 		h.logger.Printf("killed session %q", name)
+	}
+}
+
+// attachSession sets up a dedicated, token-guarded attach pipe for a session and
+// returns its name + token to the client. A goroutine accepts one connection and
+// streams output/input until the client detaches (closes the pipe).
+func (h *host) attachSession(req *proto.Request) *proto.Response {
+	sess, ok := h.getSession(req.Session)
+	if !ok {
+		return proto.Errorf(req.ID, "no such session: %s", req.Session)
+	}
+	sid, err := currentUserSID()
+	if err != nil {
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	sddl, err := currentUserSDDL()
+	if err != nil {
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	seq := h.attachSeq.Add(1)
+	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-att-%s-%s-%d`, sid, req.Session, seq)
+	ln, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
+	if err != nil {
+		return proto.Errorf(req.ID, "attach listen: %v", err)
+	}
+	token := randomNonce()
+	go h.runAttach(sess, ln, token, req.Cols, req.Rows)
+	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token}
+}
+
+func (h *host) runAttach(sess managedSession, ln net.Listener, token string, cols, rows int) {
+	defer ln.Close()
+
+	// Watchdog: if no client connects shortly, tear down the pipe.
+	connected := make(chan struct{})
+	go func() {
+		select {
+		case <-connected:
+		case <-time.After(10 * time.Second):
+			_ = ln.Close()
+		case <-h.shutdownCh:
+			_ = ln.Close()
+		}
+	}()
+
+	conn, err := ln.Accept()
+	close(connected)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	// First frame must be the auth token.
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	tok, err := proto.ReadFrameBytes(conn)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil || string(tok) != token {
+		return
+	}
+
+	snapshot, sub := sess.subscribe(cols, rows)
+	defer sess.unsubscribe(sub)
+
+	if _, err := conn.Write(snapshot); err != nil {
+		return
+	}
+
+	// Output: stream live bytes to the client.
+	go func() {
+		for b := range sub.ch {
+			if _, err := conn.Write(b); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Input: forward the client's keystrokes to the child until it detaches.
+	buf := make([]byte, 4096)
+	for {
+		n, rerr := conn.Read(buf)
+		if n > 0 {
+			_ = sess.sendKeys(append([]byte(nil), buf[:n]...))
+		}
+		if rerr != nil {
+			return
+		}
 	}
 }
 

@@ -34,6 +34,7 @@ const (
 	MethodHasUpdated    = "HasUpdated"
 	MethodSetAutoYes    = "SetAutoYes"
 	MethodKillSession   = "KillSession"
+	MethodAttach        = "Attach"
 	MethodShutdown      = "Shutdown"
 )
 
@@ -118,6 +119,12 @@ func WriteFrame(w io.Writer, v any) error {
 	if err != nil {
 		return fmt.Errorf("marshal frame: %w", err)
 	}
+	return WriteRawFrame(w, b)
+}
+
+// WriteRawFrame writes raw bytes as a length-prefixed frame (no JSON encoding).
+// Used for the attach handshake token and any raw payloads.
+func WriteRawFrame(w io.Writer, b []byte) error {
 	if len(b) > MaxFrameSize {
 		return fmt.Errorf("frame too large: %d > %d", len(b), MaxFrameSize)
 	}
@@ -126,7 +133,7 @@ func WriteFrame(w io.Writer, v any) error {
 	if _, err := w.Write(hdr[:]); err != nil {
 		return err
 	}
-	_, err = w.Write(b)
+	_, err := w.Write(b)
 	return err
 }
 

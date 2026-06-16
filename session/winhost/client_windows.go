@@ -154,6 +154,19 @@ func (c *Client) Kill(name string) error {
 	return respErr(c.call(&proto.Request{Method: proto.MethodKillSession, Session: name}))
 }
 
+// Attach requests an attach pipe for the session at the given console size,
+// returning the pipe name and one-time auth token.
+func (c *Client) Attach(name string, cols, rows int) (pipe, token string, err error) {
+	r, e := c.call(&proto.Request{Method: proto.MethodAttach, Session: name, Cols: cols, Rows: rows})
+	if e != nil {
+		return "", "", e
+	}
+	if !r.OK {
+		return "", "", errors.New(r.Error)
+	}
+	return r.AttachPipe, r.AttachToken, nil
+}
+
 // Shutdown asks the host to stop. The host stops after replying.
 func (c *Client) Shutdown() error {
 	return respErr(c.call(&proto.Request{Method: proto.MethodShutdown}))

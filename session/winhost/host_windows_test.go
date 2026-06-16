@@ -63,6 +63,12 @@ func (f *fakeSession) info() proto.SessionInfo {
 }
 func (f *fakeSession) alive() bool  { f.mu.Lock(); defer f.mu.Unlock(); return f.aliveFlag }
 func (f *fakeSession) close() error { f.mu.Lock(); f.aliveFlag = false; f.mu.Unlock(); return nil }
+func (f *fakeSession) subscribe(cols, rows int) ([]byte, *subscriber) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]byte(nil), f.buf...), &subscriber{ch: make(chan []byte, 16)}
+}
+func (f *fakeSession) unsubscribe(sub *subscriber) { close(sub.ch) }
 
 // startTestHost starts an in-process host on a unique pipe using the fake
 // session factory (no real processes spawned).
@@ -261,5 +267,98 @@ func TestConptySessionResizeAndAnsi(t *testing.T) {
 	// plain capture must not contain raw ESC bytes.
 	if strings.ContainsRune(s.capture(false, false), 0x1b) {
 		t.Fatal("plain capture leaked ESC bytes")
+	}
+}
+
+// TestHostAttachPlumbing verifies the attach pipe: token auth, snapshot
+// delivery, and that keystrokes written to the attach pipe reach the session.
+func TestHostAttachPlumbing(t *testing.T) {
+	pipe, cleanup := startTestHost(t)
+	defer cleanup()
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.CreateSession("att", "copilot", "", 80, 24, false); err != nil {
+		t.Fatal(err)
+	}
+
+	apipe, token, err := c.Attach("att", 80, 24)
+	if err != nil {
+		t.Fatalf("attach rpc: %v", err)
+	}
+	if apipe == "" || token == "" {
+		t.Fatalf("empty attach pipe/token: %q %q", apipe, token)
+	}
+
+	to := 3 * time.Second
+	aconn, err := winio.DialPipe(apipe, &to)
+	if err != nil {
+		t.Fatalf("dial attach pipe: %v", err)
+	}
+	defer aconn.Close()
+	if err := proto.WriteRawFrame(aconn, []byte(token)); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	// Snapshot is the first thing written to the pipe.
+	_ = aconn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 4096)
+	n, err := aconn.Read(buf)
+	_ = aconn.SetReadDeadline(time.Time{})
+	if err != nil {
+		t.Fatalf("read snapshot: %v", err)
+	}
+	if !strings.Contains(string(buf[:n]), "echo session") {
+		t.Fatalf("snapshot missing banner: %q", string(buf[:n]))
+	}
+
+	// Keystrokes written to the attach pipe must reach the session.
+	if _, err := aconn.Write([]byte("PUMP_OK_42")); err != nil {
+		t.Fatalf("write keystrokes: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var capd string
+	for time.Now().Before(deadline) {
+		capd, _ = c.CapturePane("att", proto.CaptureScreen, false)
+		if strings.Contains(capd, "PUMP_OK_42") {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(capd, "PUMP_OK_42") {
+		t.Fatalf("keystrokes did not reach session: %q", capd)
+	}
+}
+
+func TestHostAttachRejectsBadToken(t *testing.T) {
+	pipe, cleanup := startTestHost(t)
+	defer cleanup()
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.CreateSession("att", "copilot", "", 80, 24, false); err != nil {
+		t.Fatal(err)
+	}
+	apipe, _, err := c.Attach("att", 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := 3 * time.Second
+	aconn, err := winio.DialPipe(apipe, &to)
+	if err != nil {
+		t.Fatalf("dial attach pipe: %v", err)
+	}
+	defer aconn.Close()
+	if err := proto.WriteRawFrame(aconn, []byte("wrong-token")); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	// Host must reject and close: the read should fail rather than deliver a snapshot.
+	_ = aconn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := aconn.Read(make([]byte, 16)); err == nil {
+		t.Fatal("expected host to reject a bad attach token")
 	}
 }
