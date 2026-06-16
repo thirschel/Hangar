@@ -39,6 +39,14 @@ func dialClient(pipe string, timeout time.Duration) (*Client, error) {
 	return &Client{conn: conn}, nil
 }
 
+// transportError marks a connection-level failure (as opposed to a logical
+// error returned by the host in Response.Error). The Session backend resets and
+// reconnects on transportError but not on logical errors.
+type transportError struct{ err error }
+
+func (e *transportError) Error() string { return e.err.Error() }
+func (e *transportError) Unwrap() error { return e.err }
+
 func (c *Client) call(req *proto.Request) (*proto.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -46,17 +54,17 @@ func (c *Client) call(req *proto.Request) (*proto.Response, error) {
 	req.ID = c.nextID
 	_ = c.conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 	if err := proto.WriteFrame(c.conn, req); err != nil {
-		return nil, err
+		return nil, &transportError{err}
 	}
 	_ = c.conn.SetWriteDeadline(time.Time{})
 	_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	resp, err := proto.ReadResponse(c.conn)
 	_ = c.conn.SetReadDeadline(time.Time{})
 	if err != nil {
-		return nil, err
+		return nil, &transportError{err}
 	}
 	if resp.ID != req.ID {
-		return nil, fmt.Errorf("response id mismatch: got %d want %d", resp.ID, req.ID)
+		return nil, &transportError{fmt.Errorf("response id mismatch: got %d want %d", resp.ID, req.ID)}
 	}
 	return resp, nil
 }

@@ -4,21 +4,25 @@ package session
 
 import (
 	"claude-squad/cmd"
-	"claude-squad/session/winterminal"
+	"claude-squad/session/winhost"
 )
 
 // NewTerminalSession creates a new terminal session for the current platform.
-// On Windows, this returns a Windows Terminal-backed session.
+// On Windows, this returns a native session-host-backed session (ConPTY + VT
+// emulator), which persists across TUI restarts like tmux does on Unix.
 func NewTerminalSession(name, program string) TerminalSession {
-	return winterminal.NewWindowsTerminalSession(name, program)
+	return winhost.NewSession(name, program)
 }
 
-// NewTerminalSessionWithDeps creates a new terminal session with provided dependencies for testing.
-func NewTerminalSessionWithDeps(name, program string, cmdExec cmd.Executor) TerminalSession {
-	return winterminal.NewWindowsTerminalSessionWithDeps(name, program, cmdExec)
+// NewTerminalSessionWithDeps creates a session for testing. The Windows backend
+// has no injectable dependencies (it talks to the host over a pipe), so the
+// executor is ignored.
+func NewTerminalSessionWithDeps(name, program string, _ cmd.Executor) TerminalSession {
+	return winhost.NewSession(name, program)
 }
 
-// CleanupTerminalSessions cleans up all terminal sessions created by claude-squad.
-func CleanupTerminalSessions(cmdExec cmd.Executor) error {
-	return winterminal.CleanupSessions(cmdExec)
+// CleanupTerminalSessions stops the session host (killing all sessions). Used by
+// `cs reset`.
+func CleanupTerminalSessions(_ cmd.Executor) error {
+	return winhost.Shutdown()
 }
