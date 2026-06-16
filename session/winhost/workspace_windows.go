@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -145,6 +146,14 @@ func (m *workspaceManager) list(req *proto.Request) *proto.Response {
 	for _, w := range m.wss {
 		out = append(out, m.toInfo(w))
 	}
+	// Map iteration order is random; sort by creation time (then ID) so the list
+	// is stable across polls and the sidebar doesn't reshuffle.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedUnix != out[j].CreatedUnix {
+			return out[i].CreatedUnix < out[j].CreatedUnix
+		}
+		return out[i].ID < out[j].ID
+	})
 	return &proto.Response{ID: req.ID, OK: true, Workspaces: out}
 }
 
@@ -157,6 +166,41 @@ func (m *workspaceManager) get(req *proto.Request) *proto.Response {
 	}
 	info := m.toInfo(w)
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
+}
+
+// reviveBySession recreates the agent session for the workspace whose SessionName
+// matches, when that session is currently missing or dead. After a daemon restart
+// (or reboot) we only load workspace metadata from disk, not the live sessions, so
+// the first attach must resurrect the session from the persisted program/worktree
+// (this is exactly the Pause -> Resume semantics). Returns true if a matching
+// workspace was found and its session is now alive; false (with no error) if no
+// workspace owns this session name.
+func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (bool, error) {
+	m.mu.Lock()
+	var w *workspace
+	for _, cand := range m.wss {
+		if cand.SessionName == sessionName {
+			w = cand
+			break
+		}
+	}
+	m.mu.Unlock()
+	if w == nil {
+		return false, nil
+	}
+	if s, ok := m.host.getSession(sessionName); ok {
+		if s.alive() {
+			return true, nil
+		}
+		// A dead session object lingers under this name; remove it so the name is
+		// free for startManagedSession to recreate.
+		m.host.killSession(sessionName)
+	}
+	cols, rows = sizeOr(cols, 120), sizeOr(rows, 30)
+	if err := m.host.startManagedSession(w.SessionName, w.Program, w.WorktreePath, cols, rows, w.AutoYes); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m *workspaceManager) create(req *proto.Request) *proto.Response {
