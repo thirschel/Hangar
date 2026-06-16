@@ -60,6 +60,9 @@ type conptySession struct {
 	aliveFlag    bool
 	exitCode     int
 	prevHash     string
+	statusHash   string // separate from prevHash: tracks content for the status indicator
+	lastChangeMs int64  // last time the screen content changed (UnixMilli)
+	statusPrompt bool   // cached detectPrompt result (waiting for input)
 
 	drainDone   chan struct{}
 	autoYesStop chan struct{}
@@ -269,6 +272,39 @@ func (s *conptySession) hasUpdated() (bool, bool) {
 	return changed, detectPrompt(s.program, plain)
 }
 
+// updateStatus samples the agent's screen for the status indicator: it records
+// when the visible content last changed and whether a prompt is currently shown.
+// Side-effect-free for readers; called from the autoYesLoop tick so it runs
+// regardless of whether AutoYes is enabled.
+func (s *conptySession) updateStatus() {
+	plain := plainScreen(s.emu)
+	sum := sha256.Sum256([]byte(plain))
+	h := hex.EncodeToString(sum[:])
+	prompt := detectPrompt(s.program, plain)
+	now := time.Now().UnixMilli()
+	s.mu.Lock()
+	if h != s.statusHash {
+		s.statusHash = h
+		s.lastChangeMs = now
+	}
+	s.statusPrompt = prompt
+	s.mu.Unlock()
+}
+
+// agentStatus reports what the agent is doing, for the UI indicator:
+//   - waiting: the screen shows a prompt awaiting the user's input.
+//   - busy: the content changed very recently (the agent is producing output) and
+//     it is not waiting.
+//
+// Both false means idle/ready.
+func (s *conptySession) agentStatus() (busy, waiting bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	waiting = s.statusPrompt
+	busy = !waiting && s.lastChangeMs != 0 && (time.Now().UnixMilli()-s.lastChangeMs) < 1500
+	return busy, waiting
+}
+
 func (s *conptySession) setAutoYes(enabled bool) {
 	s.mu.Lock()
 	s.autoYes = enabled
@@ -293,6 +329,7 @@ func (s *conptySession) autoYesLoop() {
 		case <-s.autoYesStop:
 			return
 		case <-ticker.C:
+			s.updateStatus()
 			s.maybeAutoYes()
 		}
 	}

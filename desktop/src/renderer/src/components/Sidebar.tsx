@@ -138,39 +138,54 @@ export function Sidebar({
             <p>Click + to start a parallel agent in its own git worktree.</p>
           </div>
         )}
-        {workspaces.map((w) => (
-          <div
-            key={w.id}
-            className={`workspace-item${w.id === selectedId ? ' workspace-item--selected' : ''}`}
-            onClick={() => onSelect(w.id)}
-            role="button"
-            tabIndex={0}
-          >
-            <span className={`workspace-item__dot ${w.alive ? 'is-live' : 'is-dead'}`} />
-            <div className="workspace-item__body">
-              <div className="workspace-item__name">{w.title}</div>
-              <div className="workspace-item__detail">
-                <span className="workspace-item__branch">{w.branch}</span>
-                {(w.added > 0 || w.removed > 0) && (
-                  <span className="diffstat">
-                    <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              className="icon-button archive"
-              type="button"
-              title="Archive workspace"
-              onClick={(e) => {
-                e.stopPropagation();
-                void onArchive(w.id);
-              }}
+        {workspaces.map((w) => {
+          const status = !w.alive ? 'exited' : w.waiting ? 'waiting' : w.busy ? 'busy' : 'idle';
+          const statusTitle =
+            status === 'exited'
+              ? 'Agent exited'
+              : status === 'waiting'
+                ? 'Waiting for input'
+                : status === 'busy'
+                  ? 'Working…'
+                  : 'Ready';
+          return (
+            <div
+              key={w.id}
+              className={`workspace-item${w.id === selectedId ? ' workspace-item--selected' : ''}`}
+              onClick={() => onSelect(w.id)}
+              role="button"
+              tabIndex={0}
             >
-              ×
-            </button>
-          </div>
-        ))}
+              {status === 'busy' ? (
+                <span className="workspace-item__spinner" title={statusTitle} aria-label={statusTitle} />
+              ) : (
+                <span className={`workspace-item__dot is-${status}`} title={statusTitle} aria-label={statusTitle} />
+              )}
+              <div className="workspace-item__body">
+                <div className="workspace-item__name">{w.title}</div>
+                <div className="workspace-item__detail">
+                  <span className="workspace-item__branch">{w.branch}</span>
+                  {(w.added > 0 || w.removed > 0) && (
+                    <span className="diffstat">
+                      <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button
+                className="icon-button archive"
+                type="button"
+                title="Archive workspace"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void onArchive(w.id);
+                }}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </nav>
     </aside>
   );

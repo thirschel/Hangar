@@ -123,6 +123,8 @@ type WorkspaceInfo struct {
 	RunCommand   string `json:"runCommand"`
 	Running      bool   `json:"running"`
 	PreviewURL   string `json:"previewUrl"`
+	Busy         bool   `json:"busy"`    // agent is actively producing output
+	Waiting      bool   `json:"waiting"` // agent is at a prompt awaiting input
 }
 
 // FileDiffInfo is a per-file change summary in a WorkspaceDiff response.

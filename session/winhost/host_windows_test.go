@@ -55,7 +55,8 @@ func (f *fakeSession) hasUpdated() (bool, bool) {
 	f.changed = false
 	return u, false
 }
-func (f *fakeSession) setAutoYes(e bool) { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
+func (f *fakeSession) agentStatus() (bool, bool) { return false, false }
+func (f *fakeSession) setAutoYes(e bool)         { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
 func (f *fakeSession) info() proto.SessionInfo {
 	f.mu.Lock()
 	defer f.mu.Unlock()
