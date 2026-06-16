@@ -33,6 +33,29 @@ func TestDetectPromptCopilot(t *testing.T) {
 	}
 }
 
+func TestDetectWaiting(t *testing.T) {
+	cases := []struct {
+		name    string
+		program string
+		plain   string
+		want    bool
+	}{
+		{"copilot selection menu", "copilot", "Question\nWhat would you like to work on?\n 1. Build a new feature\n 2. Fix a bug\n ↑/↓ to select · enter to confirm · esc to cancel", true},
+		{"copilot approval still counts", "copilot", "No, and tell Copilot what to do differently", true},
+		{"yes/no prompt", "aider", "Apply changes? (Y)es/(N)o", true},
+		{"press enter to continue", "copilot", "Press enter to continue", true},
+		{"copilot banner is not waiting", "copilot", "Copilot v1.0.63 uses AI.\nCheck for mistakes.\nTip: /resume", false},
+		{"plain output is not waiting", "copilot", "thinking...\nwriting code", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectWaiting(tc.program, tc.plain); got != tc.want {
+				t.Fatalf("detectWaiting(%q, ...) = %v, want %v", tc.program, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAutoYesDecision(t *testing.T) {
 	type in struct{ enabled, attached, prompt, armed bool }
 	type out struct{ tap, nextArmed bool }

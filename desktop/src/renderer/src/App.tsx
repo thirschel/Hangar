@@ -23,6 +23,7 @@ export function App(): JSX.Element {
   const ready = useRef(false);
   const workspacesRef = useRef<WorkspaceInfo[]>([]);
   const aliveRef = useRef<Map<string, boolean>>(new Map());
+  const connectionRef = useRef<ConnectionState>('connecting');
 
   const refresh = useCallback(async (): Promise<WorkspaceInfo[]> => {
     try {
@@ -40,6 +41,12 @@ export function App(): JSX.Element {
       for (const w of list) next.set(w.id, w.alive);
       aliveRef.current = next;
       setWorkspaces(list);
+      // Recover the status banner if a previous poll had errored (e.g. the daemon
+      // restarted and the control pipe reconnected).
+      if (connectionRef.current !== 'connected') {
+        setConnection('connected');
+        setStatusText('connected · daemon live');
+      }
       return list;
     } catch (error) {
       setConnection('error');
@@ -124,6 +131,7 @@ export function App(): JSX.Element {
   }, []);
 
   workspacesRef.current = workspaces;
+  connectionRef.current = connection;
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
 
   const onCreate = useCallback(

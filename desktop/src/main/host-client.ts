@@ -202,6 +202,10 @@ export class ControlClient {
     this.rejectAll(new Error('control client closed'));
   }
 
+  public isClosed(): boolean {
+    return this.closed;
+  }
+
   private rejectAll(error: Error): void {
     while (this.queue.length > 0) {
       this.queue.shift()?.reject(error);

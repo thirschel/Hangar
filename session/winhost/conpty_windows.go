@@ -293,7 +293,7 @@ func (s *conptySession) updateStatus() {
 	plain := plainScreen(s.emu)
 	sum := sha256.Sum256([]byte(plain))
 	h := hex.EncodeToString(sum[:])
-	prompt := detectPrompt(s.program, plain)
+	prompt := detectWaiting(s.program, plain)
 	now := time.Now().UnixMilli()
 	s.mu.Lock()
 	if h != s.statusHash {
@@ -482,6 +482,32 @@ func detectPrompt(program, plain string) bool {
 		return strings.Contains(plain, "(Y)es/(N)o/(D)on't ask again")
 	case strings.Contains(program, "gemini"):
 		return strings.Contains(plain, "Yes, allow once")
+	}
+	return false
+}
+
+// detectWaiting is a broader, status-only signal than detectPrompt: it reports
+// whether the agent appears to be blocking for the user's input. It includes the
+// AutoYes approval prompts PLUS common interactive selection/confirmation footers
+// (e.g. copilot's "↑/↓ to select · enter to confirm · esc to cancel"). It must NOT
+// drive AutoYes — tapping Enter on a selection menu would pick the default option.
+func detectWaiting(program, plain string) bool {
+	if detectPrompt(program, plain) {
+		return true
+	}
+	low := strings.ToLower(plain)
+	hints := []string{
+		"esc to cancel",
+		"enter to confirm",
+		"to select", // "↑/↓ to select" selection menus
+		"(y)es/(n)o",
+		"[y/n]",
+		"press enter",
+	}
+	for _, h := range hints {
+		if strings.Contains(low, h) {
+			return true
+		}
 	}
 	return false
 }

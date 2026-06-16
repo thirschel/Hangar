@@ -37,21 +37,28 @@ process.on('uncaughtException', (err) => log.error('uncaughtException', err));
 process.on('unhandledRejection', (reason) => log.error('unhandledRejection', reason));
 
 async function getControlClient(): Promise<ControlClient> {
-  if (control) {
+  if (control && !control.isClosed()) {
     return control;
   }
+  // Drop a dead client so a daemon restart triggers a fresh connect.
+  control = null;
   if (!setupPromise) {
     setupPromise = (async () => {
-      const pipeName = await ensureHost(CS_EXE);
-      const client = new ControlClient(await connectPipe(pipeName));
-      const hello = await client.call({ method: 'Hello', clientVersion: PROTO_VERSION });
-      console.log('Hello ->', hello.hostVersion, hello.ok);
-      if (!hello.ok) {
-        throw new Error(`Hello failed: ${hello.error || 'unknown error'}`);
+      try {
+        const pipeName = await ensureHost(CS_EXE);
+        const client = new ControlClient(await connectPipe(pipeName));
+        const hello = await client.call({ method: 'Hello', clientVersion: PROTO_VERSION });
+        log.info('Hello ->', hello.hostVersion, hello.ok);
+        if (!hello.ok) {
+          throw new Error(`Hello failed: ${hello.error || 'unknown error'}`);
+        }
+        control = client;
+        sendToRenderer('cs:ready', { hostVersion: hello.hostVersion, ok: hello.ok });
+        return client;
+      } finally {
+        // Always clear the in-flight promise so a future reconnect can re-run setup.
+        setupPromise = null;
       }
-      control = client;
-      sendToRenderer('cs:ready', { hostVersion: hello.hostVersion, ok: hello.ok });
-      return client;
     })();
   }
   return setupPromise;
@@ -138,8 +145,15 @@ function sendToRenderer(channel: string, payload?: unknown): void {
 }
 
 ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
-  const client = await getControlClient();
-  return client.call(request);
+  try {
+    const client = await getControlClient();
+    return await client.call(request);
+  } catch {
+    // If the pipe dropped (daemon restarted), reconnect and retry once.
+    if (control?.isClosed()) control = null;
+    const client = await getControlClient();
+    return await client.call(request);
+  }
 });
 
 ipcMain.handle(
