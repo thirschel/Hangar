@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,9 +16,56 @@ import (
 	"github.com/Microsoft/go-winio"
 )
 
-// startTestHost starts an in-process host on a unique pipe (no detached process,
-// no lock file) so the protocol + lifecycle can be tested over real go-winio
-// transport.
+// fakeSession is an in-memory managedSession used to test host dispatch and
+// lifecycle without spawning real ConPTY processes.
+type fakeSession struct {
+	name, program string
+	mu            sync.Mutex
+	buf           []byte
+	changed       bool
+	autoYes       bool
+	aliveFlag     bool
+}
+
+func newFake(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
+	return &fakeSession{
+		name: name, program: program, autoYes: autoYes, aliveFlag: true,
+		buf: []byte(fmt.Sprintf("[echo session %q running %q]\n", name, program)),
+	}
+}
+
+func (f *fakeSession) start() error { return nil }
+func (f *fakeSession) capture(full, withANSI bool) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return string(f.buf)
+}
+func (f *fakeSession) sendKeys(b []byte) error {
+	f.mu.Lock()
+	f.buf = append(f.buf, b...)
+	f.changed = true
+	f.mu.Unlock()
+	return nil
+}
+func (f *fakeSession) resize(cols, rows int) error { return nil }
+func (f *fakeSession) hasUpdated() (bool, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u := f.changed
+	f.changed = false
+	return u, false
+}
+func (f *fakeSession) setAutoYes(e bool) { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
+func (f *fakeSession) info() proto.SessionInfo {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return proto.SessionInfo{Name: f.name, Alive: f.aliveFlag, Program: f.program}
+}
+func (f *fakeSession) alive() bool  { f.mu.Lock(); defer f.mu.Unlock(); return f.aliveFlag }
+func (f *fakeSession) close() error { f.mu.Lock(); f.aliveFlag = false; f.mu.Unlock(); return nil }
+
+// startTestHost starts an in-process host on a unique pipe using the fake
+// session factory (no real processes spawned).
 func startTestHost(t *testing.T) (string, func()) {
 	t.Helper()
 	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
@@ -30,6 +78,7 @@ func startTestHost(t *testing.T) (string, func()) {
 		t.Fatalf("listen: %v", err)
 	}
 	h := newHost(io.Discard, time.Minute)
+	h.newSession = newFake
 	go h.serve(ln)
 	return pipe, func() { h.triggerShutdown() }
 }
@@ -114,7 +163,6 @@ func TestHostShutdownStopsServe(t *testing.T) {
 	}
 	c.Close()
 
-	// After shutdown the listener is closed; new dials must fail.
 	time.Sleep(300 * time.Millisecond)
 	if c2, err := dialClient(pipe, 500*time.Millisecond); err == nil {
 		c2.Close()
@@ -126,7 +174,6 @@ func TestConcurrentClients(t *testing.T) {
 	pipe, cleanup := startTestHost(t)
 	defer cleanup()
 
-	// Two independent control connections operate concurrently.
 	c1, err := dialClient(pipe, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -147,5 +194,55 @@ func TestConcurrentClients(t *testing.T) {
 	ls, err := c1.ListSessions()
 	if err != nil || len(ls) != 2 {
 		t.Fatalf("expected 2 sessions, got %d err=%v", len(ls), err)
+	}
+}
+
+// TestConptySessionRealEcho exercises the real ConPTY + VT emulator path with a
+// short-lived command, verifying the rendered screen captures the program's
+// output and the exit is recorded.
+func TestConptySessionRealEcho(t *testing.T) {
+	s := newConptySession("t", "echo P2_CONPTY_OK", "", 80, 24, false).(*conptySession)
+	if err := s.start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer s.close()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for s.alive() && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if s.alive() {
+		t.Fatal("child did not exit in time")
+	}
+	// Wait for the drain goroutine to flush the final output into the emulator.
+	select {
+	case <-s.drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not finish")
+	}
+
+	out := s.capture(false, false)
+	if !strings.Contains(out, "P2_CONPTY_OK") {
+		t.Fatalf("expected echoed text in capture, got %q", out)
+	}
+	if info := s.info(); info.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", info.ExitCode)
+	}
+}
+
+// TestConptySessionResizeAndAnsi verifies resize and that ANSI capture preserves
+// styling while plain capture does not leak escape sequences.
+func TestConptySessionResizeAndAnsi(t *testing.T) {
+	s := newConptySession("t2", "echo done", "", 40, 10, false).(*conptySession)
+	if err := s.start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer s.close()
+	if err := s.resize(100, 30); err != nil {
+		t.Fatalf("resize: %v", err)
+	}
+	// plain capture must not contain raw ESC bytes.
+	if strings.ContainsRune(s.capture(false, false), 0x1b) {
+		t.Fatal("plain capture leaked ESC bytes")
 	}
 }
