@@ -1,0 +1,101 @@
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+
+// The daemon's config (read by the Go core-daemon). We preserve unknown keys on
+// write so the daemon's own fields aren't clobbered.
+export type DaemonConfig = {
+  default_program?: string;
+  auto_yes?: boolean;
+  daemon_poll_interval?: number;
+  branch_prefix?: string;
+  [key: string]: unknown;
+};
+
+// Desktop-only settings, kept in a separate file so writing them never drops the
+// daemon's config keys (the daemon rewrites config.json and would lose unknowns).
+export type AppSettings = {
+  notifications: boolean;
+  minimizeToTray: boolean;
+  uiRefreshMs: number;
+};
+
+// The merged, flat view the renderer's Settings UI works with.
+export type Settings = {
+  defaultProgram: string;
+  autoYes: boolean;
+  branchPrefix: string;
+  notifications: boolean;
+  minimizeToTray: boolean;
+  uiRefreshMs: number;
+};
+
+const APP_DEFAULTS: AppSettings = {
+  notifications: true,
+  minimizeToTray: true,
+  uiRefreshMs: 2000,
+};
+
+function csDir(): string {
+  return path.join(os.homedir(), '.claude-squad');
+}
+
+function configPath(): string {
+  return path.join(csDir(), 'config.json');
+}
+
+function appSettingsPath(): string {
+  return path.join(csDir(), 'desktop.json');
+}
+
+function readJson<T>(file: string, fallback: T): T {
+  try {
+    return { ...fallback, ...(JSON.parse(readFileSync(file, 'utf8')) as object) } as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function readDaemonConfig(): DaemonConfig {
+  return readJson<DaemonConfig>(configPath(), {});
+}
+
+export function readAppSettings(): AppSettings {
+  return readJson<AppSettings>(appSettingsPath(), { ...APP_DEFAULTS });
+}
+
+export function getSettings(): Settings {
+  const cfg = readDaemonConfig();
+  const app = readAppSettings();
+  return {
+    defaultProgram: (cfg.default_program as string) || 'copilot',
+    autoYes: Boolean(cfg.auto_yes),
+    branchPrefix: (cfg.branch_prefix as string) || '',
+    notifications: app.notifications,
+    minimizeToTray: app.minimizeToTray,
+    uiRefreshMs: app.uiRefreshMs,
+  };
+}
+
+// applySettings merges a partial Settings patch back into the two stores. Daemon
+// fields go to config.json (preserving its other keys); app fields to desktop.json.
+export function applySettings(patch: Partial<Settings>): Settings {
+  mkdirSync(csDir(), { recursive: true });
+
+  const cfg = readDaemonConfig();
+  if (patch.defaultProgram !== undefined) cfg.default_program = patch.defaultProgram.trim() || 'copilot';
+  if (patch.autoYes !== undefined) cfg.auto_yes = patch.autoYes;
+  if (patch.branchPrefix !== undefined) cfg.branch_prefix = patch.branchPrefix;
+  writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n');
+
+  const app = readAppSettings();
+  if (patch.notifications !== undefined) app.notifications = patch.notifications;
+  if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
+  if (patch.uiRefreshMs !== undefined) {
+    const n = Number(patch.uiRefreshMs);
+    app.uiRefreshMs = Number.isFinite(n) ? Math.min(60000, Math.max(500, n)) : APP_DEFAULTS.uiRefreshMs;
+  }
+  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n');
+
+  return getSettings();
+}

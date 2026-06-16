@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { FileDiffInfo, Request, Response, WorkspaceInfo } from '../main/host-client';
+import type { Settings } from '../main/settings';
 
 export type ReadyInfo = {
   session: string;
@@ -111,12 +112,17 @@ const api = {
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
+  getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
+  setSettings: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke('cs:set-settings', patch),
+  notify: (n: { title: string; body: string; workspaceId?: string }): Promise<void> =>
+    ipcRenderer.invoke('cs:notify', n),
 
   onData: (callback: (chunk: Uint8Array) => void): Unsubscribe => on('term:data', callback),
   onReady: (callback: (info: ReadyInfo) => void): Unsubscribe => on('term:ready', callback),
   onHostReady: (callback: (info: HostReadyInfo) => void): Unsubscribe => on('cs:ready', callback),
   onClosed: (callback: () => void): Unsubscribe => on('term:closed', callback),
   onError: (callback: (message: string) => void): Unsubscribe => on('term:error', callback),
+  onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe => on('cs:focus-workspace', callback),
   sendInput: (data: string): void => ipcRenderer.send('term:input', data),
   resize: (cols: number, rows: number): void => ipcRenderer.send('term:resize', { cols, rows }),
 };

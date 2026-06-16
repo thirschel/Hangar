@@ -775,3 +775,114 @@ button {
   background: #162b3a;
   color: #4ec9b0;
 }
+
+/* Top-bar settings button */
+.top-bar__settings {
+  background: transparent;
+  border: none;
+  color: #9d9d9d;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+.top-bar__settings:hover {
+  color: #ffffff;
+  background: #2d2d30;
+}
+
+/* Modal (settings) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  width: 460px;
+  max-width: 92vw;
+  background: #252526;
+  border: 1px solid #3c3c3c;
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+.modal__header {
+  padding: 14px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffffff;
+  border-bottom: 1px solid #2d2d30;
+}
+.modal__body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  color: #cfcfcf;
+}
+.field > span {
+  color: #9d9d9d;
+}
+.field input {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.field--row > span {
+  color: #cfcfcf;
+}
+.field--row input {
+  width: auto;
+}
+.modal__error {
+  margin: 0 18px;
+  padding: 6px 8px;
+  background: #3a1d1d;
+  color: #f1aeae;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.modal__footer {
+  padding: 14px 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid #2d2d30;
+}
+.modal__footer button {
+  border: 1px solid #3c3c3c;
+  background: #2d2d30;
+  color: #dddddd;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.modal__primary {
+  background: #0e639c;
+  border-color: #0e639c;
+  color: #ffffff;
+}
+.modal__primary:hover {
+  background: #1177bb;
+}

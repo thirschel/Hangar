@@ -5,6 +5,7 @@ import { Composer } from './components/Composer';
 import { ReviewPanel } from './components/ReviewPanel';
 import { RunPanel } from './components/RunPanel';
 import { Sidebar } from './components/Sidebar';
+import { SettingsModal } from './components/SettingsModal';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 
@@ -16,11 +17,28 @@ export function App(): JSX.Element {
   const [statusText, setStatusText] = useState('connecting to session-host…');
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [createNonce, setCreateNonce] = useState(0);
+  const [refreshMs, setRefreshMs] = useState(2000);
   const ready = useRef(false);
+  const workspacesRef = useRef<WorkspaceInfo[]>([]);
+  const aliveRef = useRef<Map<string, boolean>>(new Map());
 
   const refresh = useCallback(async (): Promise<WorkspaceInfo[]> => {
     try {
       const list = await window.cs.listWorkspaces();
+      // Notify when an agent session goes alive -> not alive (i.e. it exited).
+      const prev = aliveRef.current;
+      if (prev.size > 0) {
+        for (const w of list) {
+          if (prev.get(w.id) === true && !w.alive) {
+            void window.cs.notify({ title: 'Agent finished', body: w.title, workspaceId: w.id });
+          }
+        }
+      }
+      const next = new Map<string, boolean>();
+      for (const w of list) next.set(w.id, w.alive);
+      aliveRef.current = next;
       setWorkspaces(list);
       return list;
     } catch (error) {
@@ -54,15 +72,58 @@ export function App(): JSX.Element {
       }
     })();
 
-    const timer = setInterval(() => {
-      if (ready.current) void refresh();
-    }, 2000);
+    window.cs
+      .getSettings()
+      .then((s) => {
+        if (active) setRefreshMs(s.uiRefreshMs);
+      })
+      .catch(() => {});
+    const unsubFocus = window.cs.onFocusWorkspace((id) => setSelectedId(id));
+
     return () => {
       active = false;
-      clearInterval(timer);
+      unsubFocus();
     };
   }, [refresh]);
 
+  // Poll the workspace list at the configured interval.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (ready.current) void refresh();
+    }, refreshMs);
+    return () => clearInterval(timer);
+  }, [refreshMs, refresh]);
+
+  // App keyboard shortcuts.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setShowSettings(false);
+        return;
+      }
+      if (e.ctrlKey && e.key === ',') {
+        e.preventDefault();
+        setShowSettings((s) => !s);
+        return;
+      }
+      if (e.ctrlKey && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault();
+        setCreateNonce((n) => n + 1);
+        return;
+      }
+      if (e.altKey && e.key >= '1' && e.key <= '9') {
+        const w = workspacesRef.current[Number(e.key) - 1];
+        if (w) {
+          e.preventDefault();
+          setSelectedId(w.id);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  workspacesRef.current = workspaces;
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
 
   const onCreate = useCallback(
@@ -113,6 +174,14 @@ export function App(): JSX.Element {
           <span className="connection__dot" />
           {statusText}
         </div>
+        <button
+          type="button"
+          className="top-bar__settings"
+          title="Settings (Ctrl+,)"
+          onClick={() => setShowSettings(true)}
+        >
+          ⚙
+        </button>
       </header>
 
       <main className="workspace">
@@ -122,6 +191,7 @@ export function App(): JSX.Element {
           onSelect={setSelectedId}
           onCreate={onCreate}
           onArchive={onArchive}
+          openCreateNonce={createNonce}
         />
         <CenterPane
           workspace={selected}
@@ -141,6 +211,10 @@ export function App(): JSX.Element {
           {workspaces.length} workspace{workspaces.length === 1 ? '' : 's'} · thin client · Windows ConPTY
         </span>
       </footer>
+
+      {showSettings && (
+        <SettingsModal onClose={() => setShowSettings(false)} onSaved={(s) => setRefreshMs(s.uiRefreshMs)} />
+      )}
     </div>
   );
 }

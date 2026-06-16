@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -12,9 +12,16 @@ import {
   connectPipe,
   ensureHost,
 } from './host-client';
+import { getSettings, applySettings, type Settings } from './settings';
+import { createTray, destroyTray } from './tray';
+import { buildAsset } from './assets';
+import { log } from './logger';
 
 const CS_EXE =
-  process.env.CS_EXE || path.resolve(app.getAppPath(), '..', 'dist', 'cs.exe');
+  process.env.CS_EXE ||
+  (app.isPackaged
+    ? path.join(process.resourcesPath, 'dist', 'cs.exe')
+    : path.resolve(app.getAppPath(), '..', 'dist', 'cs.exe'));
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 30;
 
@@ -23,6 +30,7 @@ let control: ControlClient | null = null;
 let attachSocket: net.Socket | null = null;
 let activeSession: string | null = null;
 let setupPromise: Promise<ControlClient> | null = null;
+let isQuitting = false;
 
 async function getControlClient(): Promise<ControlClient> {
   if (control) {
@@ -87,12 +95,22 @@ function createWindow(): void {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: '#1e1e1e',
+    icon: buildAsset('icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '..\\preload\\index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  // Closing the window minimizes to the tray (keeping workspaces + daemon live)
+  // unless the user is really quitting or has disabled the behavior.
+  mainWindow.on('close', (e) => {
+    if (!isQuitting && getSettings().minimizeToTray) {
+      e.preventDefault();
+      mainWindow?.hide();
+    }
   });
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -103,7 +121,7 @@ function createWindow(): void {
 
   mainWindow.webContents.once('did-finish-load', () => {
     getControlClient().catch((error) => {
-      console.error('setup error:', error);
+      log.error('setup error:', error);
       sendToRenderer('term:error', String(error.message || error));
     });
   });
@@ -169,6 +187,31 @@ ipcMain.handle('cs:open-external', async (_event, url: string): Promise<void> =>
   }
 });
 
+ipcMain.handle('cs:get-settings', async (): Promise<Settings> => getSettings());
+
+ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Promise<Settings> => {
+  return applySettings(patch);
+});
+
+// Show a native OS notification (e.g. agent finished / needs input). Clicking it
+// reveals the window and asks the renderer to select the originating workspace.
+ipcMain.handle(
+  'cs:notify',
+  async (_event, n: { title: string; body: string; workspaceId?: string }): Promise<void> => {
+    if (!getSettings().notifications || !Notification.isSupported()) return;
+    const notification = new Notification({ title: n.title, body: n.body, icon: buildAsset('icon.png') });
+    notification.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+      }
+      if (n.workspaceId) sendToRenderer('cs:focus-workspace', n.workspaceId);
+    });
+    notification.show();
+  },
+);
+
 ipcMain.on('term:input', (_event, data: string) => {
   if (attachSocket) {
     attachSocket.write(Buffer.from(data, 'utf8'));
@@ -181,9 +224,22 @@ ipcMain.on('term:resize', (_event, { cols, rows }: { cols: number; rows: number 
   }
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  createTray(() => mainWindow);
+  // Global hotkey: summon/focus the app window from anywhere.
+  globalShortcut.register('CommandOrControl+Shift+Space', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (mainWindow.isVisible()) mainWindow.focus();
+    else mainWindow.show();
+  });
+});
 
 app.on('before-quit', () => {
+  isQuitting = true;
+  globalShortcut.unregisterAll();
+  destroyTray();
   detachWorkspace();
 });
 
