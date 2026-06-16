@@ -46,11 +46,13 @@ curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.s
 
 #### Windows (native, from this fork)
 
-This fork can run **natively on Windows without WSL or tmux**, using the Windows
-ConPTY API (ported from upstream PR #248). Build `cs.exe` from source:
+This fork runs **natively on Windows without WSL or tmux**. Each agent runs in a
+real Windows console (ConPTY) owned by a background **session host** process; the
+`cs` TUI talks to it over a per-user named pipe and renders each session through a
+VT emulator (the equivalent of tmux's `capture-pane`). Build `cs.exe` from source:
 
 ```bat
-:: Requires Go 1.23+ (https://go.dev/dl/) and git
+:: Requires Go 1.25+ (https://go.dev/dl/) and git
 git clone https://github.com/thirschel/claude-squad.git
 cd claude-squad
 build.bat
@@ -60,9 +62,27 @@ build.bat
 from within a git repository. Your agent (e.g. GitHub Copilot CLI) must be installed
 on Windows and resolvable (`where copilot`).
 
-Caveats:
-- The startup trust-prompt auto-dismiss recognises `claude`, `aider`, and `gemini`
-  only; with `copilot` you may need to accept the first prompt manually.
+How the native Windows build differs from the tmux backend:
+
+- **Architecture.** A detached `cs session-host` process owns the agent consoles,
+  so sessions keep running while the TUI is closed and are reattached when you
+  reopen `cs`. Run `cs debug` to see the host's pipe, PID, protocol version, and
+  live sessions.
+- **Persistence scope.** Sessions survive **restarting the TUI**, but **not a
+  reboot** or `cs reset` — the session host (and the consoles it owns) is a normal
+  process that does not come back after a reboot. On the next launch `cs` recreates
+  each missing session in its existing worktree.
+- **Attach / detach.** Press <kbd>Enter</kbd> to attach to a session and
+  <kbd>Ctrl</kbd>+<kbd>q</kbd> to detach back to the TUI. <kbd>Ctrl</kbd>+<kbd>c</kbd>
+  passes through to the agent.
+- **AutoYes** is owned by the session host, so approval prompts are auto-approved
+  even while the TUI is closed, and it pauses automatically while you are attached.
+  It recognises `claude`, `copilot`, `aider`, and `gemini` approval prompts.
+- **Pause / Resume.** Pausing commits your changes and stops the session; resuming
+  starts a **fresh** agent in the recreated worktree (the prior agent conversation
+  is not restored).
+- **Terminal tab.** The in-TUI Terminal tab is disabled on native Windows — use
+  attach (<kbd>Enter</kbd>) instead.
 - `gh` is still required for GitHub operations.
 
 ### Prerequisites
@@ -97,8 +117,9 @@ Run `cs debug` to print the resolved config and log-file paths.
 
 **Where is state stored, and how do I reset it?** All state lives in `~/.claude-squad/`: `state.json`
 holds your sessions/instances, `config.json` the configuration, and `daemon.pid` the autoyes daemon.
-Run `cs reset` to clear stored instances, kill `claudesquad_*` tmux sessions, remove worktrees, and
-stop the daemon — or delete `~/.claude-squad/` manually.
+On **native Windows** the session host also writes `host.json` (its pipe/PID/version) and `host.lock`
+there. Run `cs reset` to clear stored instances, remove worktrees, stop the daemon, and (on Windows)
+shut down the session host and its running sessions — or delete `~/.claude-squad/` manually.
 
 ### Usage
 
@@ -200,7 +221,8 @@ underlying program (ex. `claude`) to the latest version.
 
 ### How It Works
 
-1. **tmux** to create isolated terminal sessions for each agent
+1. **tmux** to create isolated terminal sessions for each agent (on **native
+   Windows**, a background **session host** owns a ConPTY console per agent instead)
 2. **git worktrees** to isolate codebases so each session works on its own branch
 3. A simple TUI interface for easy navigation and management
 
