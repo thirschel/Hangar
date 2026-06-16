@@ -8,9 +8,17 @@ type SidebarProps = {
   onSelect: (id: string) => void;
   onCreate: (args: CreateWorkspaceArgs) => Promise<void>;
   onArchive: (id: string) => Promise<void>;
+  openCreateNonce?: number;
 };
 
-export function Sidebar({ workspaces, selectedId, onSelect, onCreate, onArchive }: SidebarProps): JSX.Element {
+export function Sidebar({
+  workspaces,
+  selectedId,
+  onSelect,
+  onCreate,
+  onArchive,
+  openCreateNonce,
+}: SidebarProps): JSX.Element {
   const [showForm, setShowForm] = useState(false);
   const [repoPath, setRepoPath] = useState('');
   const [title, setTitle] = useState('');
@@ -19,6 +27,11 @@ export function Sidebar({ workspaces, selectedId, onSelect, onCreate, onArchive 
   const [baseBranch, setBaseBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Open the create form when the app requests it (Ctrl+N).
+  useEffect(() => {
+    if (openCreateNonce && openCreateNonce > 0) setShowForm(true);
+  }, [openCreateNonce]);
 
   // Pre-fill the agent with the daemon's default so the field is never silently
   // blank (a blank agent falls back to the config default, which can be stale).
