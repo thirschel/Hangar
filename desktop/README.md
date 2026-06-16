@@ -1,7 +1,10 @@
 # claude-squad Desktop (Electron, Windows)
 
+> **New here? Read [`HANDOFF.md`](./HANDOFF.md) first** — it covers what's built, where it lives, how to
+> build/test, the quirks/gotchas, and what's outstanding.
+
 Electron + TypeScript + React + Vite **thin client** for the claude-squad Go **core daemon**
-(`cs session-host`, protocol **v2**). The app talks to the per-user SID named pipe (length-prefixed
+(`cs session-host`, protocol **v3**). The app talks to the per-user SID named pipe (length-prefixed
 JSON-RPC), owns no durable state itself, and renders each workspace's agent as a live xterm.js
 terminal. The daemon owns the workspace lifecycle (git worktree + branch + ConPTY session), diffs,
 persistence, and host-side AutoYes.
