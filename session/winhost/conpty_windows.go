@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"claude-squad/session/winhost/proto"
 
@@ -47,33 +48,38 @@ type conptySession struct {
 	subMu sync.Mutex
 	subs  map[*subscriber]struct{}
 
-	mu        sync.Mutex
-	autoYes   bool
-	cols      int
-	rows      int
-	detCols   int // detached/preview size to restore when a client detaches
-	detRows   int
-	rawRing   []byte
-	aliveFlag bool
-	exitCode  int
-	prevHash  string
+	mu           sync.Mutex
+	autoYes      bool
+	autoYesArmed bool // edge-trigger guard: tap Enter once per prompt appearance
+	attachedCnt  int  // >0 while a client is interactively attached (AutoYes pauses)
+	cols         int
+	rows         int
+	detCols      int // detached/preview size to restore when a client detaches
+	detRows      int
+	rawRing      []byte
+	aliveFlag    bool
+	exitCode     int
+	prevHash     string
 
-	drainDone chan struct{}
-	closeOnce sync.Once
+	drainDone   chan struct{}
+	autoYesStop chan struct{}
+	closeOnce   sync.Once
 }
 
 func newConptySession(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
 	return &conptySession{
-		name:    name,
-		program: program,
-		workDir: workDir,
-		cols:    cols,
-		rows:    rows,
-		detCols: cols,
-		detRows: rows,
-		autoYes: autoYes,
-		emu:     vt.NewSafeEmulator(cols, rows),
-		subs:    make(map[*subscriber]struct{}),
+		name:         name,
+		program:      program,
+		workDir:      workDir,
+		cols:         cols,
+		rows:         rows,
+		detCols:      cols,
+		detRows:      rows,
+		autoYes:      autoYes,
+		autoYesArmed: true,
+		emu:          vt.NewSafeEmulator(cols, rows),
+		subs:         make(map[*subscriber]struct{}),
+		autoYesStop:  make(chan struct{}),
 	}
 }
 
@@ -105,6 +111,7 @@ func (s *conptySession) start() error {
 	s.drainDone = make(chan struct{})
 	go s.drain()
 	go s.wait()
+	go s.autoYesLoop()
 	return nil
 }
 
@@ -154,6 +161,9 @@ func (s *conptySession) subscribe(cols, rows int) ([]byte, *subscriber) {
 	if cols > 0 && rows > 0 {
 		_ = s.applyResize(cols, rows)
 	}
+	s.mu.Lock()
+	s.attachedCnt++
+	s.mu.Unlock()
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
 	// Clear+home, then the rendered screen, so the client repaints cleanly.
@@ -172,6 +182,9 @@ func (s *conptySession) unsubscribe(sub *subscriber) {
 	}
 	s.subMu.Unlock()
 	s.mu.Lock()
+	if s.attachedCnt > 0 {
+		s.attachedCnt--
+	}
 	dc, dr := s.detCols, s.detRows
 	s.mu.Unlock()
 	_ = s.applyResize(dc, dr)
@@ -257,7 +270,68 @@ func (s *conptySession) hasUpdated() (bool, bool) {
 func (s *conptySession) setAutoYes(enabled bool) {
 	s.mu.Lock()
 	s.autoYes = enabled
+	if enabled {
+		// Re-arm so a prompt that is already on screen gets approved.
+		s.autoYesArmed = true
+	}
 	s.mu.Unlock()
+}
+
+// autoYesLoop drives host-side AutoYes: it periodically checks for an approval
+// prompt and, if AutoYes is enabled and no client is attached, taps Enter once
+// per prompt appearance. Running it in the host (not the TUI) means unattended
+// agents keep progressing even when the TUI is closed, while pausing whenever a
+// user is interactively attached.
+func (s *conptySession) autoYesLoop() {
+	ticker := time.NewTicker(400 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.autoYesStop:
+			return
+		case <-ticker.C:
+			s.maybeAutoYes()
+		}
+	}
+}
+
+func (s *conptySession) maybeAutoYes() {
+	s.mu.Lock()
+	enabled := s.autoYes
+	attached := s.attachedCnt > 0
+	armed := s.autoYesArmed
+	s.mu.Unlock()
+	// Pause while attached so we never approve a prompt out from under the user.
+	prompt := false
+	if enabled && !attached {
+		prompt = detectPrompt(s.program, plainScreen(s.emu))
+	}
+	tap, nextArmed := autoYesDecision(enabled, attached, prompt, armed)
+	s.mu.Lock()
+	s.autoYesArmed = nextArmed
+	s.mu.Unlock()
+	if tap {
+		_ = s.sendKeys([]byte{0x0d})
+	}
+}
+
+// autoYesDecision is the pure edge-trigger core of host-side AutoYes: given the
+// current state it returns whether to tap Enter now and the next armed value.
+// It taps once on the rising edge of a prompt (prompt && armed) and re-arms once
+// the prompt clears, so a single prompt is approved exactly once. While disabled
+// or attached it never taps and leaves armed unchanged.
+func autoYesDecision(enabled, attached, prompt, armed bool) (tap, nextArmed bool) {
+	if !enabled || attached {
+		return false, armed
+	}
+	switch {
+	case prompt && armed:
+		return true, false
+	case !prompt && !armed:
+		return false, true
+	default:
+		return false, armed
+	}
 }
 
 func (s *conptySession) info() proto.SessionInfo {
@@ -277,6 +351,7 @@ func (s *conptySession) alive() bool {
 func (s *conptySession) close() error {
 	var err error
 	s.closeOnce.Do(func() {
+		close(s.autoYesStop) // stop the AutoYes ticker
 		if s.pty != nil {
 			err = s.pty.Close()
 		}
@@ -335,12 +410,17 @@ func rowText(se *vt.SafeEmulator, y int, scrollback bool, w int) string {
 	return b.String()
 }
 
-// detectPrompt mirrors the tmux backend's prompt heuristics. P6 refines this
-// (incl. copilot) and moves AutoYes decisions fully host-side.
+// detectPrompt mirrors the tmux backend's prompt heuristics, plus copilot. When
+// AutoYes is on, the host taps Enter on these prompts (the default option is the
+// affirmative one). The copilot match is the "reject" option that appears on
+// every copilot approval prompt (shell command, file edit, etc.), so it is
+// prompt-type-agnostic and stable.
 func detectPrompt(program, plain string) bool {
 	switch {
 	case strings.Contains(program, "claude"):
 		return strings.Contains(plain, "No, and tell Claude what to do differently")
+	case strings.Contains(program, "copilot"):
+		return strings.Contains(plain, "No, and tell Copilot what to do differently")
 	case strings.Contains(program, "aider"):
 		return strings.Contains(plain, "(Y)es/(N)o/(D)on't ask again")
 	case strings.Contains(program, "gemini"):

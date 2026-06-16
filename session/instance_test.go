@@ -67,6 +67,10 @@ func (m *mockTerminalSession) TapEnter() error {
 	return m.tapEnterErr
 }
 
+func (m *mockTerminalSession) SetAutoYes(enabled bool) error {
+	return nil
+}
+
 func (m *mockTerminalSession) SendKeys(keys string) error {
 	m.sendKeysCalled = true
 	m.sendKeysInput = keys

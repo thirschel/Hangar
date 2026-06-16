@@ -178,8 +178,15 @@ func (s *Session) HasUpdated() (updated bool, hasPrompt bool) {
 	return updated, hasPrompt
 }
 
-func (s *Session) TapEnter() error {
-	return withClient(func(c *Client) error { return c.SendKeys(s.name, []byte{0x0d}) })
+// TapEnter is intentionally a no-op on the native-Windows host model. AutoYes
+// auto-Enter is owned by the session host (see conptySession.autoYesLoop), which
+// also pauses while a client is attached. If the TUI/daemon also tapped Enter
+// here we'd double-approve. SendKeys (e.g. for trust prompts) is unaffected.
+func (s *Session) TapEnter() error { return nil }
+
+// SetAutoYes enables/disables host-side AutoYes for this session.
+func (s *Session) SetAutoYes(enabled bool) error {
+	return withClient(func(c *Client) error { return c.SetAutoYes(s.name, enabled) })
 }
 
 func (s *Session) SendKeys(keys string) error {
@@ -209,17 +216,18 @@ func (s *Session) DoesSessionExist() bool {
 func (s *Session) DetachSafely() error { return nil }
 
 // CheckAndHandleTrustPrompt dismisses the one-time trust/confirmation prompt for
-// supported agents. (P6 moves this fully host-side.)
+// supported agents. It uses SendKeys (not TapEnter, which is a host-owned no-op
+// on Windows) so it works regardless of AutoYes state.
 func (s *Session) CheckAndHandleTrustPrompt() bool {
 	content, err := s.capturePlain()
 	if err != nil {
 		return false
 	}
 	switch {
-	case strings.Contains(s.program, "claude"):
+	case strings.Contains(s.program, "claude"), strings.Contains(s.program, "copilot"):
 		if strings.Contains(content, "Do you trust the files in this folder?") ||
 			strings.Contains(content, "new MCP server") {
-			_ = s.TapEnter()
+			_ = s.SendKeys("\r")
 			return true
 		}
 	case strings.Contains(s.program, "aider"), strings.Contains(s.program, "gemini"):

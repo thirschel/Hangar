@@ -282,6 +282,15 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 
 	i.SetStatus(Running)
 
+	// Propagate AutoYes to the backend in case it was set before the session
+	// existed (e.g. restored instances, or the -y flag). On Windows this enables
+	// host-side AutoYes; on Unix it is a no-op.
+	if i.AutoYes {
+		if err := i.termSession.SetAutoYes(true); err != nil {
+			log.ErrorLog.Printf("error propagating auto-yes on start: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -363,6 +372,19 @@ func (i *Instance) TapEnter() {
 	}
 	if err := i.termSession.TapEnter(); err != nil {
 		log.ErrorLog.Printf("error tapping enter: %v", err)
+	}
+}
+
+// SetAutoYes sets the AutoYes flag and propagates it to the terminal backend.
+// On Windows this hands AutoYes ownership to the session host (so prompts are
+// auto-approved even when the TUI is closed, and paused while attached); on
+// Unix the backend call is a no-op and AutoYes stays TUI/daemon-driven.
+func (i *Instance) SetAutoYes(enabled bool) {
+	i.AutoYes = enabled
+	if i.started && i.termSession != nil {
+		if err := i.termSession.SetAutoYes(enabled); err != nil {
+			log.ErrorLog.Printf("error setting auto-yes: %v", err)
+		}
 	}
 }
 
