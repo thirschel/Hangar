@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { DirEntry, FileContents, FileDiffInfo, Request, Response, WorkspaceInfo } from '../main/host-client';
+import type {
+  DirEntry,
+  FileContents,
+  FileDiffInfo,
+  Request,
+  Response,
+  WorkspaceInfo,
+} from '../main/host-client';
 import type { Settings } from '../main/settings';
 
 export type ReadyInfo = {
@@ -27,7 +34,7 @@ export type HostReadyInfo = {
 
 export type CreateWorkspaceArgs = {
   repoPath: string;
-  title: string;
+  title?: string;
   program?: string;
   baseBranch?: string;
   autoYes?: boolean;
@@ -48,7 +55,8 @@ const on = <T>(channel: string, callback: (payload: T) => void): Unsubscribe => 
   return () => ipcRenderer.removeListener(channel, listener);
 };
 
-const rpc = (request: Omit<Request, 'id'>): Promise<Response> => ipcRenderer.invoke('cs:call', request);
+const rpc = (request: Omit<Request, 'id'>): Promise<Response> =>
+  ipcRenderer.invoke('cs:call', request);
 
 const api = {
   call: rpc,
@@ -70,6 +78,10 @@ const api = {
     });
     if (!r.ok || !r.workspace) throw new Error(r.error || 'CreateWorkspace failed');
     return r.workspace;
+  },
+  generateWorkspaceTitle: async (workspaceId: string, message: string): Promise<void> => {
+    const r = await rpc({ method: 'GenerateWorkspaceTitle', workspaceId, message });
+    if (!r.ok) throw new Error(r.error || 'GenerateWorkspaceTitle failed');
   },
   archiveWorkspace: async (id: string): Promise<void> => {
     const r = await rpc({ method: 'ArchiveWorkspace', workspaceId: id });
@@ -120,17 +132,26 @@ const api = {
   },
 
   // Terminal streams (session-scoped: agent + shell can be live at once).
-  attachSession: (sessionName: string, size?: { cols?: number; rows?: number }): Promise<Response> =>
-    ipcRenderer.invoke('cs:attach-session', { sessionName, ...size }),
-  detachSession: (sessionName: string): Promise<void> => ipcRenderer.invoke('cs:detach-session', sessionName),
-  ensureShell: (workspaceId: string, worktreePath: string, size?: { cols?: number; rows?: number }): Promise<string> =>
+  attachSession: (
+    sessionName: string,
+    size?: { cols?: number; rows?: number },
+  ): Promise<Response> => ipcRenderer.invoke('cs:attach-session', { sessionName, ...size }),
+  detachSession: (sessionName: string): Promise<void> =>
+    ipcRenderer.invoke('cs:detach-session', sessionName),
+  ensureShell: (
+    workspaceId: string,
+    worktreePath: string,
+    size?: { cols?: number; rows?: number },
+  ): Promise<string> =>
     ipcRenderer.invoke('cs:ensure-shell', { workspaceId, worktreePath, ...size }),
-  closeShell: (workspaceId: string): Promise<void> => ipcRenderer.invoke('cs:close-shell', workspaceId),
+  closeShell: (workspaceId: string): Promise<void> =>
+    ipcRenderer.invoke('cs:close-shell', workspaceId),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
-  setSettings: (patch: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke('cs:set-settings', patch),
+  setSettings: (patch: Partial<Settings>): Promise<Settings> =>
+    ipcRenderer.invoke('cs:set-settings', patch),
   notify: (n: { title: string; body: string; workspaceId?: string }): Promise<void> =>
     ipcRenderer.invoke('cs:notify', n),
 
@@ -145,8 +166,10 @@ const api = {
   onHostReady: (callback: (info: HostReadyInfo) => void): Unsubscribe => on('cs:ready', callback),
   onClosed: (callback: (info: TermClosed) => void): Unsubscribe => on('term:closed', callback),
   onError: (callback: (info: TermError) => void): Unsubscribe => on('term:error', callback),
-  onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe => on('cs:focus-workspace', callback),
-  sendInput: (session: string, data: string): void => ipcRenderer.send('term:input', { session, data }),
+  onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe =>
+    on('cs:focus-workspace', callback),
+  sendInput: (session: string, data: string): void =>
+    ipcRenderer.send('term:input', { session, data }),
   resize: (session: string, cols: number, rows: number): void =>
     ipcRenderer.send('term:resize', { session, cols, rows }),
 };

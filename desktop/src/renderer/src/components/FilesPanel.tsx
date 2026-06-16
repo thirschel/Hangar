@@ -12,7 +12,14 @@ type TreeNodeProps = {
   onOpen: (rel: string) => void;
 };
 
-function TreeNode({ worktreePath, entry, rel, depth, selected, onOpen }: TreeNodeProps): JSX.Element {
+function TreeNode({
+  worktreePath,
+  entry,
+  rel,
+  depth,
+  selected,
+  onOpen,
+}: TreeNodeProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<DirEntry[] | null>(null);
 
@@ -44,7 +51,13 @@ function TreeNode({ worktreePath, entry, rel, depth, selected, onOpen }: TreeNod
 
   return (
     <>
-      <div className="tree-row tree-row--dir" style={pad} onClick={() => setOpen((o) => !o)} role="button" tabIndex={0}>
+      <div
+        className="tree-row tree-row--dir"
+        style={pad}
+        onClick={() => setOpen((o) => !o)}
+        role="button"
+        tabIndex={0}
+      >
         <span className="tree-icon">{open ? '▾' : '▸'}</span>
         {entry.name}
       </div>
@@ -66,9 +79,10 @@ function TreeNode({ worktreePath, entry, rel, depth, selected, onOpen }: TreeNod
 
 type FilesPanelProps = {
   workspace: WorkspaceInfo | null;
+  embedded?: boolean;
 };
 
-export function FilesPanel({ workspace }: FilesPanelProps): JSX.Element {
+export function FilesPanel({ workspace, embedded }: FilesPanelProps): JSX.Element {
   const worktreePath = workspace?.worktreePath ?? '';
   const [roots, setRoots] = useState<DirEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -102,19 +116,28 @@ export function FilesPanel({ workspace }: FilesPanelProps): JSX.Element {
     window.cs
       .readFile(worktreePath, rel)
       .then(setContents)
-      .catch((e) => setContents({ kind: 'error', message: e instanceof Error ? e.message : String(e) }));
+      .catch((e) =>
+        setContents({ kind: 'error', message: e instanceof Error ? e.message : String(e) }),
+      );
   };
 
   if (!workspace) {
-    return <div className="files-panel files-panel--empty">Select a workspace to browse its files.</div>;
+    return (
+      <div className="files-panel files-panel--empty">Select a workspace to browse its files.</div>
+    );
   }
 
   return (
     <div className="files-panel">
       <div className="files-tree">
         <div className="files-tree__header">
-          <span>Files</span>
-          <button type="button" className="icon-button" title="Refresh" onClick={() => setNonce((n) => n + 1)}>
+          <span>{embedded ? '' : 'Files'}</span>
+          <button
+            type="button"
+            className="icon-button"
+            title="Refresh"
+            onClick={() => setNonce((n) => n + 1)}
+          >
             ⟳
           </button>
         </div>
@@ -138,12 +161,20 @@ export function FilesPanel({ workspace }: FilesPanelProps): JSX.Element {
             <div className="files-viewer__path">{selected}</div>
             <div className="files-viewer__body">
               {contents === null && <div className="files-viewer__note">Loading…</div>}
-              {contents?.kind === 'text' && <pre className="files-viewer__pre">{contents.text}</pre>}
-              {contents?.kind === 'binary' && <div className="files-viewer__note">Binary file — not shown.</div>}
-              {contents?.kind === 'tooLarge' && (
-                <div className="files-viewer__note">File too large to preview ({contents.size.toLocaleString()} bytes).</div>
+              {contents?.kind === 'text' && (
+                <pre className="files-viewer__pre">{contents.text}</pre>
               )}
-              {contents?.kind === 'error' && <div className="files-viewer__note">Error: {contents.message}</div>}
+              {contents?.kind === 'binary' && (
+                <div className="files-viewer__note">Binary file — not shown.</div>
+              )}
+              {contents?.kind === 'tooLarge' && (
+                <div className="files-viewer__note">
+                  File too large to preview ({contents.size.toLocaleString()} bytes).
+                </div>
+              )}
+              {contents?.kind === 'error' && (
+                <div className="files-viewer__note">Error: {contents.message}</div>
+              )}
             </div>
           </>
         ) : (

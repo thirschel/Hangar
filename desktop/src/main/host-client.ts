@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
 
-export const PROTO_VERSION = 3;
+export const PROTO_VERSION = 4;
 const MAX_FRAME = 16 << 20;
 
 export interface SessionInfo {
@@ -70,6 +70,7 @@ export interface Request {
     | 'StartRun'
     | 'StopRun'
     | 'WorkspaceRunOutput'
+    | 'GenerateWorkspaceTitle'
     | string;
   session?: string;
   program?: string;
@@ -292,7 +293,10 @@ export async function ensureHost(csExe: string): Promise<string> {
   throw new Error('session-host did not become ready');
 }
 
-export async function connectAttachStream(attachPipe: string, attachToken: string): Promise<net.Socket> {
+export async function connectAttachStream(
+  attachPipe: string,
+  attachToken: string,
+): Promise<net.Socket> {
   const socket = await connectPipe(attachPipe);
   socket.write(frame(Buffer.from(attachToken, 'utf8')));
   return socket;
