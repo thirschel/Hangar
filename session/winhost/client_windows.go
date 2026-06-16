@@ -163,6 +163,59 @@ func (c *Client) Shutdown() error {
 	return respErr(c.call(&proto.Request{Method: proto.MethodShutdown}))
 }
 
+// --- Workspace methods (v2) ---
+
+func (c *Client) CreateWorkspace(repoPath, title, program, baseBranch string) (*proto.WorkspaceInfo, error) {
+	r, e := c.call(&proto.Request{
+		Method: proto.MethodCreateWorkspace, RepoPath: repoPath, Title: title,
+		Program: program, BaseBranch: baseBranch,
+	})
+	if e != nil {
+		return nil, e
+	}
+	if !r.OK {
+		return nil, errors.New(r.Error)
+	}
+	return r.Workspace, nil
+}
+
+func (c *Client) ListWorkspaces() ([]proto.WorkspaceInfo, error) {
+	r, e := c.call(&proto.Request{Method: proto.MethodListWorkspaces})
+	if e != nil {
+		return nil, e
+	}
+	if !r.OK {
+		return nil, errors.New(r.Error)
+	}
+	return r.Workspaces, nil
+}
+
+func (c *Client) ArchiveWorkspace(id string) error {
+	return respErr(c.call(&proto.Request{Method: proto.MethodArchiveWorkspace, WorkspaceID: id}))
+}
+
+func (c *Client) WorkspaceFiles(id string) ([]proto.FileDiffInfo, error) {
+	r, e := c.call(&proto.Request{Method: proto.MethodWorkspaceDiff, WorkspaceID: id})
+	if e != nil {
+		return nil, e
+	}
+	if !r.OK {
+		return nil, errors.New(r.Error)
+	}
+	return r.Files, nil
+}
+
+func (c *Client) WorkspaceFileDiff(id, file string) (string, error) {
+	r, e := c.call(&proto.Request{Method: proto.MethodWorkspaceDiff, WorkspaceID: id, File: file})
+	if e != nil {
+		return "", e
+	}
+	if !r.OK {
+		return "", errors.New(r.Error)
+	}
+	return r.Diff, nil
+}
+
 // connectAndHello dials the pipe and validates the protocol version.
 func connectAndHello(pipe string, timeout time.Duration) (*Client, error) {
 	c, err := dialClient(pipe, timeout)

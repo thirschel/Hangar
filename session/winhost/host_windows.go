@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	cslog "claude-squad/log"
 	"claude-squad/session/winhost/proto"
 
 	"github.com/Microsoft/go-winio"
@@ -55,10 +56,12 @@ type host struct {
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 	attachSeq    atomic.Uint64
+
+	workspaces *workspaceManager
 }
 
 func newHost(logw io.Writer, idle time.Duration) *host {
-	return &host{
+	h := &host{
 		sessions: make(map[string]managedSession),
 		newSession: func(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
 			return newConptySession(name, program, workDir, cols, rows, autoYes)
@@ -68,6 +71,8 @@ func newHost(logw io.Writer, idle time.Duration) *host {
 		logger:      log.New(logw, "[host] ", log.LstdFlags|log.Lmicroseconds),
 		shutdownCh:  make(chan struct{}),
 	}
+	h.workspaces = newWorkspaceManager(h)
+	return h
 }
 
 func sizeOr(v, def int) int {
@@ -203,6 +208,18 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.attachSession(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
+	case proto.MethodListWorkspaces:
+		return h.workspaces.list(req)
+	case proto.MethodCreateWorkspace:
+		return h.workspaces.create(req)
+	case proto.MethodGetWorkspace:
+		return h.workspaces.get(req)
+	case proto.MethodArchiveWorkspace:
+		return h.workspaces.archive(req)
+	case proto.MethodWorkspaceDiff:
+		return h.workspaces.diff(req)
+	case proto.MethodSetWorkspaceAutoYes:
+		return h.workspaces.setAutoYes(req)
 	default:
 		return proto.Errorf(req.ID, "unknown method %q", req.Method)
 	}
@@ -216,20 +233,29 @@ func (h *host) createSession(req *proto.Request) *proto.Response {
 		return proto.Errorf(req.ID, "program required")
 	}
 	cols, rows := sizeOr(req.Cols, 80), sizeOr(req.Rows, 24)
+	if err := h.startManagedSession(req.Session, req.Program, req.WorkDir, cols, rows, req.AutoYes); err != nil {
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
 
+// startManagedSession creates, starts and registers a ConPTY session. It is the
+// shared path used by both the CreateSession RPC and the workspace manager (so
+// workspaces own their agent terminal directly, not via an RPC-to-self).
+func (h *host) startManagedSession(name, program, workDir string, cols, rows int, autoYes bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, exists := h.sessions[req.Session]; exists {
-		return proto.Errorf(req.ID, "session already exists: %s", req.Session)
+	if _, exists := h.sessions[name]; exists {
+		return fmt.Errorf("session already exists: %s", name)
 	}
-	s := h.newSession(req.Session, req.Program, req.WorkDir, cols, rows, req.AutoYes)
+	s := h.newSession(name, program, workDir, cols, rows, autoYes)
 	if err := s.start(); err != nil {
-		return proto.Errorf(req.ID, "start session: %v", err)
+		return fmt.Errorf("start session: %w", err)
 	}
-	h.sessions[req.Session] = s
+	h.sessions[name] = s
 	h.lastActive = time.Now()
-	h.logger.Printf("created session %q (program=%q cols=%d rows=%d)", req.Session, req.Program, cols, rows)
-	return &proto.Response{ID: req.ID, OK: true}
+	h.logger.Printf("created session %q (program=%q cols=%d rows=%d)", name, program, cols, rows)
+	return nil
 }
 
 func (h *host) getSession(name string) (managedSession, bool) {
@@ -403,6 +429,11 @@ func RunHost() error {
 		return nil
 	}
 	defer releaseLock(lock)
+
+	// Initialize the global loggers: the host now drives config/git (workspace
+	// management), which log via this package and would otherwise nil-panic.
+	cslog.Initialize(true)
+	defer cslog.Close()
 
 	var logw io.Writer = io.Discard
 	if lp, err := hostLogPath(); err == nil {

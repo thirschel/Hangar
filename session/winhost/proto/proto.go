@@ -16,7 +16,8 @@ import (
 
 // Version is the protocol version. The client and host exchange it in the Hello
 // handshake; a mismatch means the host must be restarted (see plan §6.7).
-const Version = 1
+// v2 adds the workspace methods (the desktop "core daemon" surface).
+const Version = 2
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
 // whole scrollback, so this is generous but still guards against abuse/OOM.
@@ -36,6 +37,15 @@ const (
 	MethodKillSession   = "KillSession"
 	MethodAttach        = "Attach"
 	MethodShutdown      = "Shutdown"
+
+	// Workspace methods (v2): the desktop core-daemon surface. A workspace is a
+	// git worktree + branch + an agent terminal session, owned by the host.
+	MethodListWorkspaces      = "ListWorkspaces"
+	MethodCreateWorkspace     = "CreateWorkspace"
+	MethodGetWorkspace        = "GetWorkspace"
+	MethodArchiveWorkspace    = "ArchiveWorkspace"
+	MethodWorkspaceDiff       = "WorkspaceDiff"
+	MethodSetWorkspaceAutoYes = "SetWorkspaceAutoYes"
 )
 
 // Capture modes for MethodCapturePane.
@@ -70,6 +80,13 @@ type Request struct {
 
 	// Hello
 	ClientVersion int `json:"clientVersion,omitempty"`
+
+	// Workspace methods (v2)
+	RepoPath    string `json:"repoPath,omitempty"`
+	Title       string `json:"title,omitempty"`
+	BaseBranch  string `json:"baseBranch,omitempty"`
+	WorkspaceID string `json:"workspaceId,omitempty"`
+	File        string `json:"file,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -78,6 +95,29 @@ type SessionInfo struct {
 	Alive    bool   `json:"alive"`
 	ExitCode int    `json:"exitCode"`
 	Program  string `json:"program"`
+}
+
+// WorkspaceInfo describes a workspace (git worktree + branch + agent session).
+type WorkspaceInfo struct {
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	Program      string `json:"program"`
+	RepoPath     string `json:"repoPath"`
+	WorktreePath string `json:"worktreePath"`
+	Branch       string `json:"branch"`
+	SessionName  string `json:"sessionName"`
+	Alive        bool   `json:"alive"`
+	AutoYes      bool   `json:"autoYes"`
+	Added        int    `json:"added"`
+	Removed      int    `json:"removed"`
+	CreatedUnix  int64  `json:"createdUnix"`
+}
+
+// FileDiffInfo is a per-file change summary in a WorkspaceDiff response.
+type FileDiffInfo struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
 }
 
 // Response is the single envelope sent from host to client.
@@ -106,6 +146,12 @@ type Response struct {
 	// CreateSession / Attach handshake: the per-session attach pipe + one-time token.
 	AttachPipe  string `json:"attachPipe,omitempty"`
 	AttachToken string `json:"attachToken,omitempty"`
+
+	// Workspace methods (v2)
+	Workspaces []WorkspaceInfo `json:"workspaces,omitempty"`
+	Workspace  *WorkspaceInfo  `json:"workspace,omitempty"`
+	Files      []FileDiffInfo  `json:"files,omitempty"`
+	Diff       string          `json:"diff,omitempty"`
 }
 
 // Errorf builds a failed Response for the given request id.
