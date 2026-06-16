@@ -3,6 +3,7 @@ import { AgentTerminal } from './components/AgentTerminal';
 import { CenterPane } from './components/CenterPane';
 import { Composer } from './components/Composer';
 import { ReviewPanel } from './components/ReviewPanel';
+import { RunPanel } from './components/RunPanel';
 import { Sidebar } from './components/Sidebar';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
@@ -33,13 +34,13 @@ export function App(): JSX.Element {
     let active = true;
     void (async () => {
       try {
-        const hello = await window.cs.call({ method: 'Hello', clientVersion: 2 });
+        const hello = await window.cs.call({ method: 'Hello', clientVersion: 3 });
         if (!active) return;
         const hv = hello.hostVersion ?? 0;
         setHostVersion(hv);
-        if (hv < 2) {
+        if (hv < 3) {
           setConnection('error');
-          setStatusText(`daemon is v${hv} — the desktop app needs v2. Run \`cs reset\`, then relaunch.`);
+          setStatusText(`daemon is v${hv} — the desktop app needs v3. Run \`cs reset\`, then relaunch.`);
           return;
         }
         setConnection('connected');
@@ -128,7 +129,10 @@ export function App(): JSX.Element {
           terminal={<AgentTerminal key={selected?.sessionName ?? 'none'} sessionName={selected?.sessionName ?? null} />}
           composer={<Composer disabled={!selected} onSend={sendInput} />}
         />
-        <ReviewPanel workspace={selected} />
+        <div className="right-column">
+          <ReviewPanel workspace={selected} />
+          <RunPanel workspace={selected} />
+        </div>
       </main>
 
       <footer className="status-bar">

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Diff, Hunk, parseDiff } from 'react-diff-view';
 import 'react-diff-view/style/index.css';
 import type { FileDiffInfo, WorkspaceInfo } from '../../../main/host-client';
@@ -12,12 +12,28 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
   const [files, setFiles] = useState<FileDiffInfo[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState('');
+  const [commitMessage, setCommitMessage] = useState('');
+  const [busyAction, setBusyAction] = useState<'commit' | 'push' | null>(null);
+  const [actionStatus, setActionStatus] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
   const id = workspace?.id ?? null;
+
+  const refreshChanges = useCallback(async (): Promise<void> => {
+    if (!id) return;
+    const f = await window.cs.workspaceFiles(id);
+    setFiles(f);
+    if (selectedFile) {
+      const d = await window.cs.workspaceFileDiff(id, selectedFile);
+      setDiff(d);
+    }
+  }, [id, selectedFile]);
 
   useEffect(() => {
     setSelectedFile(null);
     setDiff('');
     setFiles([]);
+    setCommitMessage('');
+    setActionStatus(null);
+    setBusyAction(null);
     if (!id) return;
     let active = true;
     const load = async (): Promise<void> => {
@@ -34,6 +50,41 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
       active = false;
       clearInterval(timer);
     };
+  }, [id]);
+
+  const commitChanges = useCallback(async (): Promise<void> => {
+    if (!id) return;
+    setBusyAction('commit');
+    setActionStatus(null);
+    try {
+      const content = await window.cs.commitWorkspace(id, commitMessage.trim());
+      if (content === 'nothing to commit') {
+        setActionStatus({ kind: 'ok', text: content });
+      } else {
+        setActionStatus({ kind: 'ok', text: `Committed ${content.slice(0, 7)}` });
+      }
+      setCommitMessage('');
+      await refreshChanges();
+    } catch (error) {
+      setActionStatus({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusyAction(null);
+    }
+  }, [commitMessage, id, refreshChanges]);
+
+  const pushChanges = useCallback(async (): Promise<void> => {
+    if (!id) return;
+    setBusyAction('push');
+    setActionStatus(null);
+    try {
+      const content = await window.cs.pushWorkspace(id);
+      const trimmed = content.trim();
+      setActionStatus({ kind: 'ok', text: trimmed && trimmed.length <= 160 ? `Pushed · ${trimmed}` : 'Pushed' });
+    } catch (error) {
+      setActionStatus({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusyAction(null);
+    }
   }, [id]);
 
   useEffect(() => {
@@ -90,6 +141,33 @@ export function ReviewPanel({ workspace }: ReviewPanelProps): JSX.Element {
             </span>
           </div>
         ))}
+      </div>
+      <div className="commit-panel">
+        <label className="commit-panel__label" htmlFor="commit-message">
+          Commit message
+        </label>
+        <textarea
+          id="commit-message"
+          value={commitMessage}
+          onChange={(event) => setCommitMessage(event.target.value)}
+          placeholder="Describe the change"
+          rows={3}
+        />
+        <div className="commit-panel__actions">
+          <button
+            type="button"
+            onClick={() => void commitChanges()}
+            disabled={files.length === 0 || commitMessage.trim().length === 0 || busyAction !== null}
+          >
+            {busyAction === 'commit' ? 'Committing…' : 'Commit all changes'}
+          </button>
+          <button type="button" onClick={() => void pushChanges()} disabled={busyAction !== null}>
+            {busyAction === 'push' ? 'Pushing…' : 'Push'}
+          </button>
+        </div>
+        {actionStatus && (
+          <div className={`commit-panel__status commit-panel__status--${actionStatus.kind}`}>{actionStatus.text}</div>
+        )}
       </div>
       {selectedFile && <DiffView text={diff} />}
     </aside>
