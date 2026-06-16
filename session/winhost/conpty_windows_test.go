@@ -104,6 +104,18 @@ func TestAgentStatus(t *testing.T) {
 	if busy, waiting := s2.agentStatus(); busy || waiting {
 		t.Fatalf("settled output should be idle, got busy=%v waiting=%v", busy, waiting)
 	}
+
+	// Content changing right after user input is the keystrokes echoing to the
+	// screen, not the agent working -> not busy.
+	s3 := newConptySession("t3", "copilot", "", 80, 24, false).(*conptySession)
+	s3.mu.Lock()
+	s3.lastInputMs = time.Now().UnixMilli()
+	s3.mu.Unlock()
+	_, _ = s3.emu.Write([]byte("a half-typed message"))
+	s3.updateStatus()
+	if busy, waiting := s3.agentStatus(); busy || waiting {
+		t.Fatalf("typing echo should not be busy, got busy=%v waiting=%v", busy, waiting)
+	}
 }
 
 // detectPrompt + the emulator + the attachedCnt gate (no child process needed):
