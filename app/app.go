@@ -82,6 +82,9 @@ type home struct {
 	instanceStarting bool
 	// startingInstance holds a reference to the instance being started in the background.
 	startingInstance *session.Instance
+	// pendingAttach holds the instance to attach to once the attach help overlay
+	// is dismissed (used by the native-Windows tea.Exec attach path).
+	pendingAttach *session.Instance
 
 	// -- UI Components --
 
@@ -301,6 +304,15 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case attachFinishedMsg:
+		// Returned after a tea.Exec-based attach (native Windows) completes.
+		// bubbletea has already released+restored the terminal (full repaint).
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+		if msg.err != nil {
+			return m, tea.Batch(m.handleError(msg.err), m.instanceChanged())
+		}
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case instanceStartedMsg:
 		// Select the instance that just started (or failed)
 		m.list.SelectInstance(msg.instance)
@@ -798,17 +810,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-			ch, err := m.list.Attach()
-			if err != nil {
-				m.handleError(err)
-				return
-			}
-			<-ch
-			m.state = stateDefault
-			m.instanceChanged()
-		})
-		return m, nil
+		return m.startAttach(selected)
 	default:
 		return m, nil
 	}
@@ -857,6 +859,10 @@ type hideErrMsg struct{}
 type previewTickMsg struct{}
 
 type instanceChangedMsg struct{}
+
+// attachFinishedMsg is delivered when a tea.Exec-based attach (native Windows)
+// returns, i.e. the user detached or the agent exited.
+type attachFinishedMsg struct{ err error }
 
 type instanceStartedMsg struct {
 	instance        *session.Instance

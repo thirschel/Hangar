@@ -168,6 +168,11 @@ func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	shouldClose := m.textOverlay.HandleKeyPress(msg)
 	if shouldClose {
 		m.state = stateDefault
+		// If an attach was queued (native-Windows path), run it now via tea.Exec
+		// so bubbletea cleanly releases and restores the terminal around it.
+		if cmd := m.consumePendingAttach(); cmd != nil {
+			return m, cmd
+		}
 		return m, tea.Sequence(
 			tea.WindowSize(),
 			func() tea.Msg {
