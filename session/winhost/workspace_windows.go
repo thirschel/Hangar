@@ -169,6 +169,16 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		program = config.LoadConfig().GetProgram()
 	}
 
+	// Validate the agent program resolves on PATH *before* creating any worktree
+	// or session. A bad/typo'd agent (e.g. a stale "test-program" default) would
+	// otherwise leave an orphan worktree plus a session that dies the instant it
+	// launches; fail fast with a clear message and create nothing instead.
+	if fields := strings.Fields(program); len(fields) == 0 {
+		return proto.Errorf(req.ID, "no agent program configured")
+	} else if _, err := exec.LookPath(fields[0]); err != nil {
+		return proto.Errorf(req.ID, "agent program %q not found on PATH (set a valid agent such as 'copilot' or 'claude'): %v", fields[0], err)
+	}
+
 	id := newWorkspaceID()
 	sessionName := "ws_" + id
 	gitName := slug(title) + "-" + id[:6] // unique branch even for duplicate titles

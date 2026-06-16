@@ -120,6 +120,7 @@ func (s *conptySession) start() error {
 // would stall on a full output pipe), so fan-out is non-blocking.
 func (s *conptySession) drain() {
 	defer close(s.drainDone)
+	defer recoverGoroutine("conpty.drain")
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.pty.Read(buf)
@@ -193,6 +194,7 @@ func (s *conptySession) unsubscribe(sub *subscriber) {
 // wait blocks until the child exits, records the exit, and closes the PTY so the
 // drain goroutine returns.
 func (s *conptySession) wait() {
+	defer recoverGoroutine("conpty.wait")
 	_ = xpty.WaitProcess(context.Background(), s.cmd)
 	s.mu.Lock()
 	s.aliveFlag = false
@@ -283,6 +285,7 @@ func (s *conptySession) setAutoYes(enabled bool) {
 // agents keep progressing even when the TUI is closed, while pausing whenever a
 // user is interactively attached.
 func (s *conptySession) autoYesLoop() {
+	defer recoverGoroutine("conpty.autoYesLoop")
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 	for {

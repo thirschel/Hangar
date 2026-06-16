@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -116,6 +117,7 @@ func (h *host) handleConn(conn net.Conn) {
 		h.lastActive = time.Now()
 		h.mu.Unlock()
 	}()
+	defer recoverGoroutine("host.handleConn")
 	for {
 		// Unbounded wait for the next request header (persistent connection)...
 		n, err := proto.ReadHeader(conn)
@@ -133,7 +135,7 @@ func (h *host) handleConn(conn net.Conn) {
 		if err != nil {
 			return
 		}
-		resp := h.dispatch(req)
+		resp := h.safeDispatch(req)
 		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 		if err := proto.WriteFrame(conn, resp); err != nil {
 			return
@@ -143,6 +145,30 @@ func (h *host) handleConn(conn net.Conn) {
 			h.logger.Printf("shutdown requested by client")
 			h.triggerShutdown()
 			return
+		}
+	}
+}
+
+// safeDispatch runs dispatch with panic recovery so a single bad request (e.g.
+// from a stale/old-protocol client) can never crash the daemon and take every
+// live session down with it. Recovered panics are logged to host.log.
+func (h *host) safeDispatch(req *proto.Request) (resp *proto.Response) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Printf("PANIC handling method %q: %v\n%s", req.Method, r, debug.Stack())
+			resp = &proto.Response{ID: req.ID, OK: false, Error: "internal host error"}
+		}
+	}()
+	return h.dispatch(req)
+}
+
+// recoverGoroutine recovers a panic in a background goroutine and logs it
+// instead of letting it crash the whole daemon process (which would kill every
+// live session). Defer it as the first statement of a goroutine body.
+func recoverGoroutine(where string) {
+	if r := recover(); r != nil {
+		if cslog.ErrorLog != nil {
+			cslog.ErrorLog.Printf("winhost: recovered panic in %s: %v\n%s", where, r, debug.Stack())
 		}
 	}
 }
@@ -321,6 +347,7 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 
 func (h *host) runAttach(sess managedSession, ln net.Listener, token string, cols, rows int) {
 	defer ln.Close()
+	defer recoverGoroutine("host.runAttach")
 
 	// Watchdog: if no client connects shortly, tear down the pipe.
 	connected := make(chan struct{})
@@ -358,6 +385,7 @@ func (h *host) runAttach(sess managedSession, ln net.Listener, token string, col
 
 	// Output: stream live bytes to the client.
 	go func() {
+		defer recoverGoroutine("host.runAttach.output")
 		for b := range sub.ch {
 			if _, err := conn.Write(b); err != nil {
 				return
