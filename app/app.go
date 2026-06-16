@@ -147,7 +147,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		// Call the finalizer immediately.
 		h.list.AddInstance(instance)()
 		if autoYes {
-			instance.AutoYes = true
+			instance.SetAutoYes(true)
 		}
 	}
 
@@ -327,7 +327,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleError(err)
 		}
 		if m.autoYes {
-			msg.instance.AutoYes = true
+			msg.instance.SetAutoYes(true)
 		}
 
 		if msg.promptAfterName {

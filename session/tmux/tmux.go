@@ -299,6 +299,11 @@ func (t *TmuxSession) TapEnter() error {
 	return nil
 }
 
+// SetAutoYes is a no-op on tmux: AutoYes auto-Enter is driven by the TUI/daemon
+// (via TapEnter) on Unix. It exists to satisfy the TerminalSession interface,
+// where the Windows host owns AutoYes itself.
+func (t *TmuxSession) SetAutoYes(enabled bool) error { return nil }
+
 // TapDAndEnter sends 'D' followed by an enter keystroke to the tmux pane.
 func (t *TmuxSession) TapDAndEnter() error {
 	_, err := t.ptmx.Write([]byte{0x44, 0x0D})
