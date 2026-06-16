@@ -65,8 +65,8 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	}
 	defer c.Close()
 
-	// Create a workspace (use a long-lived program so the session stays alive).
-	ws, err := c.CreateWorkspace(repo, "My Feature", "pause", "")
+	// Create a workspace (use a long-lived program on PATH so the session stays alive).
+	ws, err := c.CreateWorkspace(repo, "My Feature", "cmd", "")
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestWorkspaceCommit(t *testing.T) {
 	}
 	defer c.Close()
 
-	ws, err := c.CreateWorkspace(repo, "Commit Test", "agent", "")
+	ws, err := c.CreateWorkspace(repo, "Commit Test", "cmd", "")
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
@@ -163,5 +163,51 @@ func TestWorkspaceCommit(t *testing.T) {
 	}
 	if !strings.Contains(string(out), message) {
 		t.Fatalf("latest commit %q does not contain %q", out, message)
+	}
+}
+
+// TestCreateWorkspaceRejectsUnknownProgram verifies the daemon validates the
+// agent program *before* creating any worktree or session: a bogus program must
+// fail fast with a clear "not found on PATH" error and leave nothing behind (no
+// workspace entry, no orphan worktree). This guards the MVP regression where a
+// stale "test-program" default produced a half-created workspace + dead session.
+func TestCreateWorkspaceRejectsUnknownProgram(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	repo := initTempRepo(t)
+
+	pipe, cleanup := startRealHost(t)
+	defer cleanup()
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	_, err = c.CreateWorkspace(repo, "Bad Agent", "definitely-not-a-real-program-xyz", "")
+	if err == nil {
+		t.Fatalf("expected CreateWorkspace to fail for an unknown program")
+	}
+	if !strings.Contains(err.Error(), "not found on PATH") {
+		t.Fatalf("expected a 'not found on PATH' error, got: %v", err)
+	}
+
+	// No workspace should have been recorded.
+	list, err := c.ListWorkspaces()
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected no workspaces after a failed create, got %d: %+v", len(list), list)
+	}
+
+	// And no orphan worktree should have been left under ~/.claude-squad/worktrees.
+	wtRoot := filepath.Join(home, ".claude-squad", "worktrees")
+	if entries, err := os.ReadDir(wtRoot); err == nil {
+		if len(entries) != 0 {
+			t.Fatalf("expected no orphan worktrees, found %d under %s", len(entries), wtRoot)
+		}
 	}
 }
