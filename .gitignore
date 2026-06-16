@@ -6,5 +6,6 @@ cs
 
 # Windows
 *.exe
+*.exe~
 Thumbs.db
 Desktop.ini
