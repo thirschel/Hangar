@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -212,7 +213,45 @@ func TestCreateWorkspaceRejectsUnknownProgram(t *testing.T) {
 	}
 }
 
-// TestReviveSessionOnAttach covers the restart-recovery path: after a workspace's
+// TestAgentLaunchCommand covers the resume-command builder: copilot gets a
+// stable --session-id flag (so a relaunch after a daemon restart resumes the
+// same conversation), while a blank id or an unknown agent is launched as-is.
+func TestAgentLaunchCommand(t *testing.T) {
+	cases := []struct {
+		program, id, want string
+	}{
+		{"copilot", "abc-123", "copilot --session-id=abc-123"},
+		{"cmd.exe /c copilot", "abc-123", "cmd.exe /c copilot --session-id=abc-123"},
+		{"copilot", "", "copilot"},      // no id -> unchanged
+		{"bash", "abc-123", "bash"},     // unknown agent -> unchanged
+		{"claude", "abc-123", "claude"}, // not yet verified -> unchanged
+	}
+	for _, c := range cases {
+		if got := agentLaunchCommand(c.program, c.id); got != c.want {
+			t.Fatalf("agentLaunchCommand(%q, %q) = %q, want %q", c.program, c.id, got, c.want)
+		}
+	}
+
+	if !supportsResume("copilot") || !supportsResume("cmd.exe /c copilot") {
+		t.Fatal("expected copilot to support resume")
+	}
+	if supportsResume("claude") || supportsResume("cmd") {
+		t.Fatal("expected non-copilot agents to not (yet) support resume")
+	}
+}
+
+// TestNewUUID checks the session id is a well-formed v4 UUID and unique.
+func TestNewUUID(t *testing.T) {
+	re := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	a, b := newUUID(), newUUID()
+	if !re.MatchString(a) {
+		t.Fatalf("newUUID() = %q, not a v4 UUID", a)
+	}
+	if a == b {
+		t.Fatalf("newUUID() returned duplicates: %q", a)
+	}
+}
+
 // agent session is gone (as it is after a daemon restart, when only metadata is
 // reloaded), attaching to that session must transparently revive it from the
 // persisted program/worktree instead of failing with "no such session".
