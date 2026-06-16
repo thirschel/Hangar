@@ -83,3 +83,50 @@ func TestSanitizeSessionName(t *testing.T) {
 		}
 	}
 }
+
+// TestDetachSafelyKillsSession covers the native-Windows Pause semantics (P7):
+// pausing must kill the host session (it can't outlive its removed worktree),
+// and pausing an already-gone session must be a no-op.
+func TestDetachSafelyKillsSession(t *testing.T) {
+	pipe, cleanup := startRealHost(t)
+	defer cleanup()
+	useSharedClient(t, pipe)
+
+	s := NewSession("Pause Me", "pause") // `pause` blocks, so the session stays alive
+	if err := s.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !s.DoesSessionExist() {
+		t.Fatal("expected session to exist after Start")
+	}
+
+	if err := s.DetachSafely(); err != nil {
+		t.Fatalf("DetachSafely (pause): %v", err)
+	}
+	if s.DoesSessionExist() {
+		t.Fatal("expected session gone after DetachSafely (pause kills it on Windows)")
+	}
+	// Already gone -> must not error.
+	if err := s.DetachSafely(); err != nil {
+		t.Fatalf("DetachSafely on a missing session should be nil, got %v", err)
+	}
+}
+
+// TestSessionSetAutoYes verifies the AutoYes propagation RPC round-trips (P6).
+func TestSessionSetAutoYes(t *testing.T) {
+	pipe, cleanup := startRealHost(t)
+	defer cleanup()
+	useSharedClient(t, pipe)
+
+	s := NewSession("AutoYes Me", "pause")
+	if err := s.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Close()
+	if err := s.SetAutoYes(true); err != nil {
+		t.Fatalf("SetAutoYes(true): %v", err)
+	}
+	if err := s.SetAutoYes(false); err != nil {
+		t.Fatalf("SetAutoYes(false): %v", err)
+	}
+}
