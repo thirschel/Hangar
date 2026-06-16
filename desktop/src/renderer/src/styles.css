@@ -100,8 +100,145 @@ button {
   border-right: 1px solid #2d2d30;
 }
 
-.review-panel {
+.right-column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   border-left: 1px solid #2d2d30;
+}
+
+.right-column > .review-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.run-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 46%;
+  min-height: 150px;
+  border-top: 1px solid #2d2d30;
+  background: #252526;
+}
+
+.run-panel--empty {
+  padding: 14px;
+  color: #8a8a8a;
+  font-size: 12px;
+}
+
+.run-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.run-panel__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-panel__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fb950;
+  box-shadow: 0 0 6px #3fb950;
+}
+
+.run-panel__preview {
+  background: #0e639c;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.run-panel__preview:hover {
+  background: #1177bb;
+}
+
+.run-panel__controls {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 8px;
+}
+
+.run-panel__cmd {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+}
+
+.run-panel__cmd:disabled {
+  opacity: 0.6;
+}
+
+.run-panel__start,
+.run-panel__stop {
+  border: none;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #ffffff;
+}
+
+.run-panel__start {
+  background: #2ea043;
+}
+
+.run-panel__start:disabled {
+  background: #2d2d30;
+  color: #777777;
+  cursor: default;
+}
+
+.run-panel__stop {
+  background: #a72828;
+}
+
+.run-panel__error {
+  margin: 0 12px 6px;
+  padding: 5px 8px;
+  background: #3a1d1d;
+  color: #f1aeae;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-panel__output {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 12px;
+  background: #1e1e1e;
+  color: #cfcfcf;
+  font-family: Consolas, 'Cascadia Mono', monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .panel-header {
@@ -497,6 +634,62 @@ button {
   white-space: nowrap;
   font-size: 12px;
   color: #d4d4d4;
+}
+.commit-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid #2d2d30;
+}
+.commit-panel__label {
+  color: #b8b8b8;
+  font-size: 12px;
+}
+.commit-panel textarea {
+  min-height: 62px;
+  resize: vertical;
+  border: 1px solid #3c3c3c;
+  border-radius: 6px;
+  outline: none;
+  padding: 8px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+.commit-panel textarea:focus {
+  border-color: #007acc;
+}
+.commit-panel__actions {
+  display: flex;
+  gap: 8px;
+}
+.commit-panel button {
+  padding: 6px 10px;
+  border: 1px solid #3c3c3c;
+  border-radius: 4px;
+  background: #2d2d30;
+  color: #cccccc;
+  cursor: pointer;
+}
+.commit-panel button:first-child {
+  border-color: transparent;
+  background: #0e639c;
+  color: #ffffff;
+}
+.commit-panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.commit-panel__status {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.commit-panel__status--ok {
+  color: #57a64a;
+}
+.commit-panel__status--error {
+  color: #f14c4c;
 }
 .diff-view {
   --diff-background-color: #1e1e1e;

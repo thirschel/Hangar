@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync } from 'node:fs';
@@ -154,6 +154,19 @@ ipcMain.handle('cs:get-default-program', async (): Promise<string> => {
     // No config yet (or unreadable) — fall through to the built-in default.
   }
   return 'copilot';
+});
+
+// Open a detected preview URL in the user's default browser. Restricted to
+// http/https so a malicious run-output URL can't launch arbitrary schemes.
+ipcMain.handle('cs:open-external', async (_event, url: string): Promise<void> => {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      await shell.openExternal(parsed.toString());
+    }
+  } catch {
+    // Ignore malformed URLs.
+  }
 });
 
 ipcMain.on('term:input', (_event, data: string) => {

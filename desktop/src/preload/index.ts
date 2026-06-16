@@ -18,6 +18,13 @@ export type CreateWorkspaceArgs = {
   autoYes?: boolean;
 };
 
+export type RunOutput = {
+  data: string;
+  nextOffset: number;
+  running: boolean;
+  exitCode: number;
+};
+
 type Unsubscribe = () => void;
 
 const on = <T>(channel: string, callback: (payload: T) => void): Unsubscribe => {
@@ -67,6 +74,35 @@ const api = {
     const r = await rpc({ method: 'SetWorkspaceAutoYes', workspaceId: id, enabled });
     if (!r.ok) throw new Error(r.error || 'SetWorkspaceAutoYes failed');
   },
+  commitWorkspace: async (id: string, message: string): Promise<string> => {
+    const r = await rpc({ method: 'WorkspaceCommit', workspaceId: id, message });
+    if (!r.ok) throw new Error(r.error || 'WorkspaceCommit failed');
+    return r.content ?? '';
+  },
+  pushWorkspace: async (id: string): Promise<string> => {
+    const r = await rpc({ method: 'WorkspacePush', workspaceId: id });
+    if (!r.ok) throw new Error(r.error || 'WorkspacePush failed');
+    return r.content ?? '';
+  },
+  startRun: async (id: string, command: string): Promise<void> => {
+    const r = await rpc({ method: 'StartRun', workspaceId: id, command });
+    if (!r.ok) throw new Error(r.error || 'StartRun failed');
+  },
+  stopRun: async (id: string): Promise<void> => {
+    const r = await rpc({ method: 'StopRun', workspaceId: id });
+    if (!r.ok) throw new Error(r.error || 'StopRun failed');
+  },
+  workspaceRunOutput: async (id: string, sinceOffset: number): Promise<RunOutput> => {
+    const r = await rpc({ method: 'WorkspaceRunOutput', workspaceId: id, sinceOffset });
+    if (!r.ok) throw new Error(r.error || 'WorkspaceRunOutput failed');
+    const data = r.data ? Buffer.from(r.data, 'base64').toString('utf8') : '';
+    return {
+      data,
+      nextOffset: r.nextOffset ?? sinceOffset,
+      running: r.runRunning ?? false,
+      exitCode: r.exitCode ?? 0,
+    };
+  },
 
   // Terminal attach for the selected workspace.
   attachWorkspace: (sessionName: string, size?: { cols?: number; rows?: number }): Promise<Response> =>
@@ -74,6 +110,7 @@ const api = {
   detach: (): Promise<void> => ipcRenderer.invoke('cs:detach'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
 
   onData: (callback: (chunk: Uint8Array) => void): Unsubscribe => on('term:data', callback),
   onReady: (callback: (info: ReadyInfo) => void): Unsubscribe => on('term:ready', callback),

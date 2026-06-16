@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
 
-export const PROTO_VERSION = 2;
+export const PROTO_VERSION = 3;
 const MAX_FRAME = 16 << 20;
 
 export interface SessionInfo {
@@ -24,6 +24,9 @@ export interface WorkspaceInfo {
   added: number;
   removed: number;
   createdUnix: number;
+  runCommand: string;
+  running: boolean;
+  previewUrl: string;
 }
 
 export interface FileDiffInfo {
@@ -47,7 +50,12 @@ export interface Request {
     | 'GetWorkspace'
     | 'ArchiveWorkspace'
     | 'WorkspaceDiff'
+    | 'WorkspaceCommit'
+    | 'WorkspacePush'
     | 'SetWorkspaceAutoYes'
+    | 'StartRun'
+    | 'StopRun'
+    | 'WorkspaceRunOutput'
     | string;
   session?: string;
   program?: string;
@@ -56,6 +64,7 @@ export interface Request {
   rows?: number;
   autoYes?: boolean;
   enabled?: boolean;
+  message?: string;
   data?: string;
   mode?: string;
   withANSI?: boolean;
@@ -66,6 +75,9 @@ export interface Request {
   baseBranch?: string;
   workspaceId?: string;
   file?: string;
+  // Run methods (v3)
+  command?: string;
+  sinceOffset?: number;
 }
 
 export interface Response {
@@ -86,6 +98,11 @@ export interface Response {
   workspace?: WorkspaceInfo;
   files?: FileDiffInfo[];
   diff?: string;
+  // Run methods (v3). `data` is base64-encoded run output bytes on the wire.
+  data?: string;
+  nextOffset?: number;
+  runRunning?: boolean;
+  exitCode?: number;
 }
 
 type PendingCall = {
