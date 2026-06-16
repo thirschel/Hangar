@@ -83,6 +83,23 @@ func startTestHost(t *testing.T) (string, func()) {
 	return pipe, func() { h.triggerShutdown() }
 }
 
+// startRealHost starts an in-process host using the real ConPTY session factory.
+func startRealHost(t *testing.T) (string, func()) {
+	t.Helper()
+	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-rtest-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	sddl, err := currentUserSDDL()
+	if err != nil {
+		t.Fatalf("sddl: %v", err)
+	}
+	ln, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	h := newHost(io.Discard, time.Minute)
+	go h.serve(ln)
+	return pipe, func() { h.triggerShutdown() }
+}
+
 func TestHostLifecycle(t *testing.T) {
 	pipe, cleanup := startTestHost(t)
 	defer cleanup()

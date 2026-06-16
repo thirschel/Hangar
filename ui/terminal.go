@@ -74,6 +74,11 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	if !terminalTabSupported {
+		t.setFallbackState("The Terminal tab is not supported on native Windows.")
+		return nil
+	}
+
 	if instance == nil {
 		t.setFallbackState("Select an instance to open a terminal")
 		return nil
@@ -184,6 +189,9 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 
 // Attach attaches to the terminal tmux session (full-screen).
 func (t *TerminalPane) Attach() (chan struct{}, error) {
+	if !terminalTabSupported {
+		return nil, fmt.Errorf("the Terminal tab is not supported on native Windows")
+	}
 	t.mu.Lock()
 	s, ok := t.sessions[t.currentTitle]
 	if !ok || s.tmuxSession == nil {

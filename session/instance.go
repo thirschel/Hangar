@@ -3,8 +3,10 @@ package session
 import (
 	"claude-squad/log"
 	"claude-squad/session/git"
+	"claude-squad/session/winhost"
 	"path/filepath"
 
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -246,8 +248,19 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	if !firstTimeSetup {
 		// Reuse existing session
 		if err := termSession.Restore(); err != nil {
-			setupErr = fmt.Errorf("failed to restore existing session: %w", err)
-			return setupErr
+			// On the native-Windows host model the session may be gone (e.g. the
+			// host died across a reboot). In that case recreate it in the existing
+			// worktree rather than failing startup. tmux never returns
+			// ErrSessionGone, so its behaviour is unchanged.
+			if errors.Is(err, winhost.ErrSessionGone) {
+				if startErr := termSession.Start(i.gitWorktree.GetWorktreePath()); startErr != nil {
+					setupErr = fmt.Errorf("failed to recreate session: %w", startErr)
+					return setupErr
+				}
+			} else {
+				setupErr = fmt.Errorf("failed to restore existing session: %w", err)
+				return setupErr
+			}
 		}
 	} else {
 		// Setup git worktree first
