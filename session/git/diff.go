@@ -74,7 +74,48 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 	return stats
 }
 
-// parseNumstat sums the added/removed columns from `git diff --numstat` output.
+// FileDiffStat summarizes the change to a single file vs the base branch.
+type FileDiffStat struct {
+	Path    string
+	Added   int
+	Removed int
+}
+
+// ChangedFiles returns the files changed between the worktree and the base
+// branch, each with added/removed line counts (via `git diff --numstat`).
+func (g *GitWorktree) ChangedFiles() ([]FileDiffStat, error) {
+	// -N stages untracked files (intent to add) so they show up in the diff.
+	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
+		return nil, err
+	}
+	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+	if err != nil {
+		return nil, err
+	}
+	var files []FileDiffStat
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 3 {
+			continue
+		}
+		a, _ := strconv.Atoi(fields[0]) // "-" for binary -> 0
+		r, _ := strconv.Atoi(fields[1])
+		files = append(files, FileDiffStat{Path: fields[2], Added: a, Removed: r})
+	}
+	return files, nil
+}
+
+// FileDiff returns the unified diff for a single file vs the base branch.
+func (g *GitWorktree) FileDiff(path string) (string, error) {
+	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
+		return "", err
+	}
+	return g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA(), "--", path)
+}
+
 // Each line is formatted as <added>\t<removed>\t<path>. Binary files report
 // "-\t-\t<path>" and are ignored for line totals.
 func parseNumstat(out string) (added int, removed int) {
