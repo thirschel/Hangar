@@ -85,6 +85,10 @@ How the native Windows build differs from the tmux backend:
   attach (<kbd>Enter</kbd>) instead.
 - `gh` is still required for GitHub operations.
 
+> **Architecture & handoff:** see [`docs/native-windows.md`](docs/native-windows.md) for the full
+> design (session host, ConPTY + VT emulator, attach hand-off, host-side AutoYes), the alternatives
+> considered, and notes for anyone extending the Windows backend.
+
 ### Prerequisites
 
 - [tmux](https://github.com/tmux/tmux/wiki/Installing) (Unix/macOS/WSL only — not needed for the native Windows build)
