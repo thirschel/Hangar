@@ -218,6 +218,10 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.workspaces.archive(req)
 	case proto.MethodWorkspaceDiff:
 		return h.workspaces.diff(req)
+	case proto.MethodWorkspaceCommit:
+		return h.workspaces.commit(req)
+	case proto.MethodWorkspacePush:
+		return h.workspaces.push(req)
 	case proto.MethodSetWorkspaceAutoYes:
 		return h.workspaces.setAutoYes(req)
 	default:

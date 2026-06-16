@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -265,6 +267,69 @@ func (m *workspaceManager) diff(req *proto.Request) *proto.Response {
 		out = append(out, proto.FileDiffInfo{Path: f.Path, Added: f.Added, Removed: f.Removed})
 	}
 	return &proto.Response{ID: req.ID, OK: true, Files: out}
+}
+
+func runWorkspaceGit(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %s (%w)", strings.Join(args, " "), strings.TrimSpace(string(out)), err)
+	}
+	return string(out), nil
+}
+
+func (m *workspaceManager) commit(req *proto.Request) *proto.Response {
+	message := strings.TrimSpace(req.Message)
+	if message == "" {
+		return proto.Errorf(req.ID, "commit message required")
+	}
+
+	m.mu.Lock()
+	w, ok := m.wss[req.WorkspaceID]
+	m.mu.Unlock()
+	if !ok {
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+
+	status, err := runWorkspaceGit(w.WorktreePath, "status", "--porcelain")
+	if err != nil {
+		return proto.Errorf(req.ID, "check workspace status: %v", err)
+	}
+	if strings.TrimSpace(status) == "" {
+		return &proto.Response{ID: req.ID, OK: true, Content: "nothing to commit"}
+	}
+	if _, err := runWorkspaceGit(w.WorktreePath, "add", "-A", "."); err != nil {
+		return proto.Errorf(req.ID, "stage workspace changes: %v", err)
+	}
+	if _, err := runWorkspaceGit(w.WorktreePath, "commit", "-m", message, "--no-verify"); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
+			return &proto.Response{ID: req.ID, OK: true, Content: "nothing to commit"}
+		}
+		return proto.Errorf(req.ID, "commit workspace changes: %v", err)
+	}
+	head, err := runWorkspaceGit(w.WorktreePath, "rev-parse", "HEAD")
+	if err != nil {
+		return proto.Errorf(req.ID, "read committed head: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true, Content: strings.TrimSpace(head)}
+}
+
+func (m *workspaceManager) push(req *proto.Request) *proto.Response {
+	m.mu.Lock()
+	w, ok := m.wss[req.WorkspaceID]
+	m.mu.Unlock()
+	if !ok {
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+
+	if _, err := runWorkspaceGit(w.WorktreePath, "remote", "get-url", "origin"); err != nil {
+		return proto.Errorf(req.ID, "workspace push requires an origin remote")
+	}
+	out, err := runWorkspaceGit(w.WorktreePath, "push", "-u", "origin", w.Branch)
+	if err != nil {
+		return proto.Errorf(req.ID, "push workspace branch: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true, Content: out}
 }
 
 func (m *workspaceManager) setAutoYes(req *proto.Request) *proto.Response {
