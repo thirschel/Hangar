@@ -36,6 +36,7 @@ type workspace struct {
 	AutoYes        bool   `json:"autoYes"`
 	ExistingBranch bool   `json:"existingBranch"`
 	CreatedUnix    int64  `json:"createdUnix"`
+	RunCommand     string `json:"runCommand"`
 }
 
 type workspaceManager struct {
@@ -122,6 +123,7 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 	if s, ok := m.host.getSession(w.SessionName); ok {
 		alive = s.alive()
 	}
+	running, previewURL := m.host.runs.info(w.ID)
 	added, removed := 0, 0
 	if stats := w.worktreeFor().DiffNumstat(); stats != nil && stats.Error == nil {
 		added, removed = stats.Added, stats.Removed
@@ -130,6 +132,7 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		ID: w.ID, Title: w.Title, Program: w.Program, RepoPath: w.RepoPath,
 		WorktreePath: w.WorktreePath, Branch: w.Branch, SessionName: w.SessionName,
 		Alive: alive, AutoYes: w.AutoYes, Added: added, Removed: removed, CreatedUnix: w.CreatedUnix,
+		RunCommand: w.RunCommand, Running: running, PreviewURL: previewURL,
 	}
 }
 
@@ -240,6 +243,7 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	// committed/pushed work survives — like Conductor's archive). The agent's
 	// ConPTY held the worktree as its cwd; Windows can take a moment to release
 	// that directory handle after the process dies, so retry the removal.
+	m.host.runs.stop(w.ID)
 	m.host.killSession(w.SessionName)
 	wt := w.worktreeFor()
 	for i := 0; i < 10; i++ {
@@ -358,4 +362,55 @@ func (m *workspaceManager) setAutoYes(req *proto.Request) *proto.Response {
 		s.setAutoYes(req.Enabled)
 	}
 	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (m *workspaceManager) startRun(req *proto.Request) *proto.Response {
+	command := strings.TrimSpace(req.Command)
+	if command == "" {
+		return proto.Errorf(req.ID, "run command required")
+	}
+
+	m.mu.Lock()
+	w, ok := m.wss[req.WorkspaceID]
+	m.mu.Unlock()
+	if !ok {
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+
+	if err := m.host.runs.start(w.ID, w.WorktreePath, command); err != nil {
+		return proto.Errorf(req.ID, "start run: %v", err)
+	}
+
+	m.mu.Lock()
+	if current, ok := m.wss[w.ID]; ok {
+		current.RunCommand = command
+		m.saveLocked()
+	}
+	m.mu.Unlock()
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (m *workspaceManager) stopRun(req *proto.Request) *proto.Response {
+	m.mu.Lock()
+	_, ok := m.wss[req.WorkspaceID]
+	m.mu.Unlock()
+	if !ok {
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+	m.host.runs.stop(req.WorkspaceID)
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (m *workspaceManager) runOutput(req *proto.Request) *proto.Response {
+	m.mu.Lock()
+	_, ok := m.wss[req.WorkspaceID]
+	m.mu.Unlock()
+	if !ok {
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+	data, nextOffset, running, exitCode := m.host.runs.output(req.WorkspaceID, req.SinceOffset)
+	return &proto.Response{
+		ID: req.ID, OK: true, Data: data, NextOffset: nextOffset,
+		RunRunning: running, ExitCode: exitCode,
+	}
 }

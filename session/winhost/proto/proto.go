@@ -17,7 +17,8 @@ import (
 // Version is the protocol version. The client and host exchange it in the Hello
 // handshake; a mismatch means the host must be restarted (see plan §6.7).
 // v2 adds the workspace methods (the desktop "core daemon" surface).
-const Version = 2
+// v3 adds per-workspace run process control and output polling.
+const Version = 3
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
 // whole scrollback, so this is generous but still guards against abuse/OOM.
@@ -48,6 +49,9 @@ const (
 	MethodWorkspaceCommit     = "WorkspaceCommit"
 	MethodWorkspacePush       = "WorkspacePush"
 	MethodSetWorkspaceAutoYes = "SetWorkspaceAutoYes"
+	MethodStartRun            = "StartRun"
+	MethodStopRun             = "StopRun"
+	MethodWorkspaceRunOutput  = "WorkspaceRunOutput"
 )
 
 // Capture modes for MethodCapturePane.
@@ -90,6 +94,8 @@ type Request struct {
 	WorkspaceID string `json:"workspaceId,omitempty"`
 	File        string `json:"file,omitempty"`
 	Message     string `json:"message,omitempty"`
+	Command     string `json:"command,omitempty"`
+	SinceOffset int64  `json:"sinceOffset,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -114,6 +120,9 @@ type WorkspaceInfo struct {
 	Added        int    `json:"added"`
 	Removed      int    `json:"removed"`
 	CreatedUnix  int64  `json:"createdUnix"`
+	RunCommand   string `json:"runCommand"`
+	Running      bool   `json:"running"`
+	PreviewURL   string `json:"previewUrl"`
 }
 
 // FileDiffInfo is a per-file change summary in a WorkspaceDiff response.
@@ -155,6 +164,10 @@ type Response struct {
 	Workspace  *WorkspaceInfo  `json:"workspace,omitempty"`
 	Files      []FileDiffInfo  `json:"files,omitempty"`
 	Diff       string          `json:"diff,omitempty"`
+	Data       []byte          `json:"data,omitempty"`
+	NextOffset int64           `json:"nextOffset,omitempty"`
+	RunRunning bool            `json:"runRunning,omitempty"`
+	ExitCode   int             `json:"exitCode,omitempty"`
 }
 
 // Errorf builds a failed Response for the given request id.

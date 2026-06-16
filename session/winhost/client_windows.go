@@ -224,6 +224,25 @@ func (c *Client) PushWorkspace(id string) error {
 	return respErr(c.call(&proto.Request{Method: proto.MethodWorkspacePush, WorkspaceID: id}))
 }
 
+func (c *Client) StartRun(id, command string) error {
+	return respErr(c.call(&proto.Request{Method: proto.MethodStartRun, WorkspaceID: id, Command: command}))
+}
+
+func (c *Client) StopRun(id string) error {
+	return respErr(c.call(&proto.Request{Method: proto.MethodStopRun, WorkspaceID: id}))
+}
+
+func (c *Client) WorkspaceRunOutput(id string, sinceOffset int64) (data []byte, nextOffset int64, running bool, exitCode int, err error) {
+	r, e := c.call(&proto.Request{Method: proto.MethodWorkspaceRunOutput, WorkspaceID: id, SinceOffset: sinceOffset})
+	if e != nil {
+		return nil, 0, false, 0, e
+	}
+	if !r.OK {
+		return nil, 0, false, 0, errors.New(r.Error)
+	}
+	return r.Data, r.NextOffset, r.RunRunning, r.ExitCode, nil
+}
+
 // connectAndHello dials the pipe and validates the protocol version.
 func connectAndHello(pipe string, timeout time.Duration) (*Client, error) {
 	c, err := dialClient(pipe, timeout)

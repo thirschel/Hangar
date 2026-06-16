@@ -59,6 +59,7 @@ type host struct {
 	attachSeq    atomic.Uint64
 
 	workspaces *workspaceManager
+	runs       *runManager
 }
 
 func newHost(logw io.Writer, idle time.Duration) *host {
@@ -72,6 +73,7 @@ func newHost(logw io.Writer, idle time.Duration) *host {
 		logger:      log.New(logw, "[host] ", log.LstdFlags|log.Lmicroseconds),
 		shutdownCh:  make(chan struct{}),
 	}
+	h.runs = newRunManager()
 	h.workspaces = newWorkspaceManager(h)
 	return h
 }
@@ -250,6 +252,12 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.workspaces.push(req)
 	case proto.MethodSetWorkspaceAutoYes:
 		return h.workspaces.setAutoYes(req)
+	case proto.MethodStartRun:
+		return h.workspaces.startRun(req)
+	case proto.MethodStopRun:
+		return h.workspaces.stopRun(req)
+	case proto.MethodWorkspaceRunOutput:
+		return h.workspaces.runOutput(req)
 	default:
 		return proto.Errorf(req.ID, "unknown method %q", req.Method)
 	}
@@ -439,6 +447,9 @@ func (h *host) triggerShutdown() {
 		h.mu.Unlock()
 		for _, s := range sessions {
 			_ = s.close()
+		}
+		if h.runs != nil {
+			h.runs.stopAll()
 		}
 		close(h.shutdownCh)
 		if h.ln != nil {
