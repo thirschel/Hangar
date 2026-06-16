@@ -34,6 +34,46 @@ export function AgentTerminal({ sessionName }: AgentTerminalProps): JSX.Element 
     term.loadAddon(fit);
     term.open(containerRef.current);
 
+    const copySelection = (): boolean => {
+      const sel = term.getSelection();
+      if (!sel) return false;
+      void navigator.clipboard.writeText(sel);
+      return true;
+    };
+    const paste = (): void => {
+      void navigator.clipboard.readText().then((text) => {
+        if (text) window.cs.sendInput(text);
+      });
+    };
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true;
+      const key = e.key.toLowerCase();
+      if (e.ctrlKey && e.shiftKey && key === 'c') {
+        copySelection();
+        return false;
+      }
+      if (e.ctrlKey && e.shiftKey && key === 'v') {
+        paste();
+        return false;
+      }
+      // Ctrl+C copies when there's a selection (Windows-Terminal convention);
+      // with no selection it falls through to the agent as an interrupt.
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'c') {
+        if (copySelection()) {
+          term.clearSelection();
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const el = containerRef.current;
+    const onContextMenu = (ev: MouseEvent): void => {
+      ev.preventDefault();
+      paste();
+    };
+    el.addEventListener('contextmenu', onContextMenu);
+
     const resize = (): void => {
       try {
         fit.fit();
@@ -64,6 +104,7 @@ export function AgentTerminal({ sessionName }: AgentTerminalProps): JSX.Element 
     setTimeout(resize, 0);
 
     return () => {
+      el.removeEventListener('contextmenu', onContextMenu);
       observer.disconnect();
       inputDisposable.dispose();
       unsubData();

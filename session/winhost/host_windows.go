@@ -332,7 +332,19 @@ func (h *host) killSession(name string) {
 func (h *host) attachSession(req *proto.Request) *proto.Response {
 	sess, ok := h.getSession(req.Session)
 	if !ok {
-		return proto.Errorf(req.ID, "no such session: %s", req.Session)
+		// The session may belong to a workspace whose agent isn't running yet
+		// (e.g. after a daemon restart). Revive it from persisted metadata, then
+		// re-check, before giving up.
+		revived, rerr := h.workspaces.reviveBySession(req.Session, req.Cols, req.Rows)
+		if rerr != nil {
+			return proto.Errorf(req.ID, "revive workspace session: %v", rerr)
+		}
+		if revived {
+			sess, ok = h.getSession(req.Session)
+		}
+		if !ok {
+			return proto.Errorf(req.ID, "no such session: %s", req.Session)
+		}
 	}
 	sid, err := currentUserSID()
 	if err != nil {

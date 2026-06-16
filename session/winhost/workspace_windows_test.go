@@ -211,3 +211,64 @@ func TestCreateWorkspaceRejectsUnknownProgram(t *testing.T) {
 		}
 	}
 }
+
+// TestReviveSessionOnAttach covers the restart-recovery path: after a workspace's
+// agent session is gone (as it is after a daemon restart, when only metadata is
+// reloaded), attaching to that session must transparently revive it from the
+// persisted program/worktree instead of failing with "no such session".
+func TestReviveSessionOnAttach(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	repo := initTempRepo(t)
+
+	pipe, cleanup := startRealHost(t)
+	defer cleanup()
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	ws, err := c.CreateWorkspace(repo, "Revive Me", "cmd", "")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	// Simulate the post-restart state: the agent session is gone, the workspace
+	// metadata remains.
+	if err := c.Kill(ws.SessionName); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if exists, _, _ := c.HasSession(ws.SessionName); exists {
+		t.Fatalf("expected session %s to be gone after Kill", ws.SessionName)
+	}
+
+	// Attaching must revive the session rather than error.
+	p, tok, err := c.Attach(ws.SessionName, 120, 30)
+	if err != nil {
+		t.Fatalf("Attach should revive the workspace session, got: %v", err)
+	}
+	if p == "" || tok == "" {
+		t.Fatalf("revive attach returned empty pipe/token: pipe=%q token=%q", p, tok)
+	}
+
+	// The workspace should report alive again.
+	list, err := c.ListWorkspaces()
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+	found := false
+	for _, w := range list {
+		if w.ID == ws.ID {
+			found = true
+			if !w.Alive {
+				t.Fatalf("expected revived workspace to be alive")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("workspace %s missing from list after revive", ws.ID)
+	}
+}
