@@ -1,10 +1,11 @@
 module claude-squad
 
-go 1.23.0
+go 1.25.0
 
-toolchain go1.24.1
+toolchain go1.25.11
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/UserExistsError/conpty v0.1.4
 	github.com/atotto/clipboard v0.1.4
 	github.com/charmbracelet/bubbles v0.20.0

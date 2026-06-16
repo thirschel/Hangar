@@ -8,6 +8,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"claude-squad/session/winhost"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -143,6 +144,17 @@ var (
 			fmt.Printf("https://github.com/smtg-ai/claude-squad/releases/tag/v%s\n", version)
 		},
 	}
+
+	// sessionHostCmd runs the native Windows session-host daemon. It is hidden
+	// and only meant to be launched internally (detached) by the TUI on Windows.
+	sessionHostCmd = &cobra.Command{
+		Use:    winhost.SessionHostCmd,
+		Hidden: true,
+		Short:  "[internal] Run the native Windows session host",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return winhost.RunHost()
+		},
+	}
 )
 
 func init() {
@@ -162,6 +174,7 @@ func init() {
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(sessionHostCmd)
 }
 
 func main() {
