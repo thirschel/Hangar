@@ -169,6 +169,7 @@ func CleanupWorktrees() error {
 
 	// Get a list of all branches associated with worktrees
 	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	hideConsole(cmd)
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to list worktrees: %w", err)
@@ -200,6 +201,7 @@ func CleanupWorktrees() error {
 				if strings.Contains(path, entry.Name()) {
 					// Delete the branch
 					deleteCmd := exec.Command("git", "branch", "-D", branch)
+					hideConsole(deleteCmd)
 					if err := deleteCmd.Run(); err != nil {
 						// Log the error but continue with other worktrees
 						log.ErrorLog.Printf("failed to delete branch %s: %v", branch, err)
@@ -215,6 +217,7 @@ func CleanupWorktrees() error {
 
 	// You have to prune the cleaned up worktrees.
 	cmd = exec.Command("git", "worktree", "prune")
+	hideConsole(cmd)
 	_, err = cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to prune worktrees: %w", err)

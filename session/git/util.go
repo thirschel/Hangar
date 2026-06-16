@@ -41,6 +41,7 @@ func checkGHCLI() error {
 
 	// Check if gh is authenticated
 	cmd := exec.Command("gh", "auth", "status")
+	hideConsole(cmd)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
@@ -51,11 +52,13 @@ func checkGHCLI() error {
 // IsGitRepo checks if the given path is within a git repository
 func IsGitRepo(path string) bool {
 	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	hideConsole(cmd)
 	return cmd.Run() == nil
 }
 
 func findGitRepoRoot(path string) (string, error) {
 	cmd := exec.Command("git", "-C", path, "rev-parse", "--show-toplevel")
+	hideConsole(cmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to find Git repository root from path: %s", path)
