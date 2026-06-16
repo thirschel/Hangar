@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -22,6 +23,19 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode)
 }
 
+// writeMockClaude creates a mock "claude" executable in dir that GetClaudeCommand
+// can discover. On Windows, where/LookPath only resolve names that carry a
+// PATHEXT extension, so the mock is named claude.bat there.
+func writeMockClaude(t *testing.T, dir string) {
+	t.Helper()
+	name := "claude"
+	if runtime.GOOS == "windows" {
+		name = "claude.bat"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name),
+		[]byte("#!/bin/bash\necho 'mock claude'"), 0755))
+}
+
 func TestGetClaudeCommand(t *testing.T) {
 	originalShell := os.Getenv("SHELL")
 	originalPath := os.Getenv("PATH")
@@ -33,14 +47,11 @@ func TestGetClaudeCommand(t *testing.T) {
 	t.Run("finds claude in PATH", func(t *testing.T) {
 		// Create a temporary directory with a mock claude executable
 		tempDir := t.TempDir()
-		claudePath := filepath.Join(tempDir, "claude")
+		writeMockClaude(t, tempDir)
 
-		// Create a mock executable
-		err := os.WriteFile(claudePath, []byte("#!/bin/bash\necho 'mock claude'"), 0755)
-		require.NoError(t, err)
-
-		// Set PATH to include our temp directory
-		os.Setenv("PATH", tempDir+":"+originalPath)
+		// Set PATH to include our temp directory (OS path separator so this
+		// works on Windows, where it is ';' not ':').
+		os.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
 		os.Setenv("SHELL", "/bin/bash")
 
 		result, err := GetClaudeCommand()
@@ -65,14 +76,10 @@ func TestGetClaudeCommand(t *testing.T) {
 	t.Run("handles empty SHELL environment", func(t *testing.T) {
 		// Create a temporary directory with a mock claude executable
 		tempDir := t.TempDir()
-		claudePath := filepath.Join(tempDir, "claude")
-
-		// Create a mock executable
-		err := os.WriteFile(claudePath, []byte("#!/bin/bash\necho 'mock claude'"), 0755)
-		require.NoError(t, err)
+		writeMockClaude(t, tempDir)
 
 		// Set PATH and unset SHELL
-		os.Setenv("PATH", tempDir+":"+originalPath)
+		os.Setenv("PATH", tempDir+string(os.PathListSeparator)+originalPath)
 		os.Unsetenv("SHELL")
 
 		result, err := GetClaudeCommand()
@@ -125,13 +132,22 @@ func TestGetConfigDir(t *testing.T) {
 	})
 }
 
+// setTestHome points the user's home directory at dir for the duration of the
+// test, on every platform. config.GetConfigDir uses os.UserHomeDir, which reads
+// HOME on Unix and USERPROFILE on Windows, so both must be overridden for the
+// config tests to be hermetic (otherwise Windows reads the real ~/.claude-squad).
+// t.Setenv restores the originals automatically when the test ends.
+func setTestHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 func TestLoadConfig(t *testing.T) {
 	t.Run("returns default config when file doesn't exist", func(t *testing.T) {
 		// Use a temporary home directory to avoid interfering with real config
-		originalHome := os.Getenv("HOME")
 		tempHome := t.TempDir()
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		setTestHome(t, tempHome)
 
 		config := LoadConfig()
 
@@ -160,10 +176,7 @@ func TestLoadConfig(t *testing.T) {
 		err = os.WriteFile(configPath, []byte(configContent), 0644)
 		require.NoError(t, err)
 
-		// Override HOME environment
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		setTestHome(t, tempHome)
 
 		config := LoadConfig()
 
@@ -187,10 +200,7 @@ func TestLoadConfig(t *testing.T) {
 		err = os.WriteFile(configPath, []byte(invalidContent), 0644)
 		require.NoError(t, err)
 
-		// Override HOME environment
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		setTestHome(t, tempHome)
 
 		config := LoadConfig()
 
@@ -273,10 +283,7 @@ func TestSaveConfig(t *testing.T) {
 		// Create a temporary config directory
 		tempHome := t.TempDir()
 
-		// Override HOME environment
-		originalHome := os.Getenv("HOME")
-		os.Setenv("HOME", tempHome)
-		defer os.Setenv("HOME", originalHome)
+		setTestHome(t, tempHome)
 
 		// Create a test config
 		testConfig := &Config{
