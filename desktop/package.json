@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Electron + TypeScript + React desktop app for claude-squad (Windows core-daemon thin client).",
+  "author": "claude-squad",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -10,11 +11,15 @@
     "build": "npm run typecheck && electron-vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "make-icons": "node scripts/make-icons.js",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
+    "electron-updater": "^6.3.9",
     "react": "^18.3.1",
     "react-diff-view": "^3.3.3",
     "react-dom": "^18.3.1"
@@ -26,6 +31,7 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",

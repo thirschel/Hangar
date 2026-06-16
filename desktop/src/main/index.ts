@@ -16,6 +16,7 @@ import { getSettings, applySettings, type Settings } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { log } from './logger';
+import { initAutoUpdate } from './updater';
 
 const CS_EXE =
   process.env.CS_EXE ||
@@ -31,6 +32,9 @@ let attachSocket: net.Socket | null = null;
 let activeSession: string | null = null;
 let setupPromise: Promise<ControlClient> | null = null;
 let isQuitting = false;
+
+process.on('uncaughtException', (err) => log.error('uncaughtException', err));
+process.on('unhandledRejection', (reason) => log.error('unhandledRejection', reason));
 
 async function getControlClient(): Promise<ControlClient> {
   if (control) {
@@ -227,6 +231,7 @@ ipcMain.on('term:resize', (_event, { cols, rows }: { cols: number; rows: number 
 app.whenReady().then(() => {
   createWindow();
   createTray(() => mainWindow);
+  initAutoUpdate();
   // Global hotkey: summon/focus the app window from anywhere.
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (!mainWindow) return;
