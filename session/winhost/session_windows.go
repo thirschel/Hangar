@@ -186,11 +186,6 @@ func (s *Session) SendKeys(keys string) error {
 	return withClient(func(c *Client) error { return c.SendKeys(s.name, []byte(keys)) })
 }
 
-// Attach is implemented in P5 (interactive attach over a dedicated stream pipe).
-func (s *Session) Attach() (chan struct{}, error) {
-	return nil, errors.New("attach is not yet implemented on native Windows")
-}
-
 func (s *Session) SetDetachedSize(width, height int) error {
 	s.mu.Lock()
 	s.cols, s.rows = width, height

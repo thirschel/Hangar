@@ -22,6 +22,11 @@ import (
 // repaint source; the authoritative attach repaint is the emulator snapshot.
 const rawRingMax = 256 * 1024
 
+// subscriber receives live raw output from a session while a client is attached.
+type subscriber struct {
+	ch chan []byte
+}
+
 // conptySession runs an interactive program in a Windows ConPTY and continuously
 // renders its output through a VT emulator so the screen can be captured at any
 // time (the tmux-capture-pane equivalent).
@@ -36,10 +41,18 @@ type conptySession struct {
 
 	writeMu sync.Mutex // serializes writes to the child's input
 
+	// subMu guards subs AND makes {emu.Write + fan-out} atomic w.r.t. subscribe's
+	// snapshot, so an attaching client gets a clean snapshot then a gap-free,
+	// non-duplicated live stream.
+	subMu sync.Mutex
+	subs  map[*subscriber]struct{}
+
 	mu        sync.Mutex
 	autoYes   bool
 	cols      int
 	rows      int
+	detCols   int // detached/preview size to restore when a client detaches
+	detRows   int
 	rawRing   []byte
 	aliveFlag bool
 	exitCode  int
@@ -56,8 +69,11 @@ func newConptySession(name, program, workDir string, cols, rows int, autoYes boo
 		workDir: workDir,
 		cols:    cols,
 		rows:    rows,
+		detCols: cols,
+		detRows: rows,
 		autoYes: autoYes,
 		emu:     vt.NewSafeEmulator(cols, rows),
+		subs:    make(map[*subscriber]struct{}),
 	}
 }
 
@@ -92,9 +108,9 @@ func (s *conptySession) start() error {
 	return nil
 }
 
-// drain continuously reads ConPTY output and feeds the emulator + raw ring. It
-// must never block on anything slow (e.g. attach subscribers, added in P5) so
-// the child never stalls on a full output pipe.
+// drain continuously reads ConPTY output and feeds the emulator + raw ring +
+// any attached subscribers. It must never block on a slow subscriber (the child
+// would stall on a full output pipe), so fan-out is non-blocking.
 func (s *conptySession) drain() {
 	defer close(s.drainDone)
 	buf := make([]byte, 4096)
@@ -102,16 +118,63 @@ func (s *conptySession) drain() {
 		n, err := s.pty.Read(buf)
 		if n > 0 {
 			data := buf[:n]
+			s.subMu.Lock()
 			_, _ = s.emu.Write(data) // SafeEmulator is internally locked
 			s.mu.Lock()
 			s.rawRing = appendRing(s.rawRing, data, rawRingMax)
 			s.mu.Unlock()
-			// P5: non-blocking fan-out to attach subscribers goes here.
+			if len(s.subs) > 0 {
+				cp := append([]byte(nil), data...)
+				for sub := range s.subs {
+					select {
+					case sub.ch <- cp:
+					default:
+						// Subscriber too slow; drop this chunk rather than stall
+						// the child. The emulator stays authoritative for capture.
+					}
+				}
+			}
+			s.subMu.Unlock()
 		}
 		if err != nil {
+			s.subMu.Lock()
+			for sub := range s.subs {
+				close(sub.ch)
+				delete(s.subs, sub)
+			}
+			s.subMu.Unlock()
 			return
 		}
 	}
+}
+
+// subscribe resizes to the attaching client's console size, then atomically
+// snapshots the rendered screen and registers a subscriber for the live stream.
+func (s *conptySession) subscribe(cols, rows int) ([]byte, *subscriber) {
+	if cols > 0 && rows > 0 {
+		_ = s.applyResize(cols, rows)
+	}
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	// Clear+home, then the rendered screen, so the client repaints cleanly.
+	snap := append([]byte("\x1b[2J\x1b[H"), []byte(s.emu.Render())...)
+	sub := &subscriber{ch: make(chan []byte, 1024)}
+	s.subs[sub] = struct{}{}
+	return snap, sub
+}
+
+// unsubscribe removes a subscriber and resizes back to the detached/preview size.
+func (s *conptySession) unsubscribe(sub *subscriber) {
+	s.subMu.Lock()
+	if _, ok := s.subs[sub]; ok {
+		delete(s.subs, sub)
+		close(sub.ch)
+	}
+	s.subMu.Unlock()
+	s.mu.Lock()
+	dc, dr := s.detCols, s.detRows
+	s.mu.Unlock()
+	_ = s.applyResize(dc, dr)
 }
 
 // wait blocks until the child exits, records the exit, and closes the PTY so the
@@ -138,6 +201,18 @@ func (s *conptySession) sendKeys(b []byte) error {
 }
 
 func (s *conptySession) resize(cols, rows int) error {
+	if cols <= 0 || rows <= 0 {
+		return nil
+	}
+	s.mu.Lock()
+	s.detCols, s.detRows = cols, rows
+	s.mu.Unlock()
+	return s.applyResize(cols, rows)
+}
+
+// applyResize resizes the ConPTY and emulator to the given size without changing
+// the remembered detached/preview size.
+func (s *conptySession) applyResize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return nil
 	}
