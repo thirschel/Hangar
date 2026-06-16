@@ -27,6 +27,8 @@ export interface WorkspaceInfo {
   runCommand: string;
   running: boolean;
   previewUrl: string;
+  busy: boolean;
+  waiting: boolean;
 }
 
 export interface FileDiffInfo {

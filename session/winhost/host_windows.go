@@ -36,6 +36,7 @@ type managedSession interface {
 	sendKeys(b []byte) error
 	resize(cols, rows int) error
 	hasUpdated() (updated, hasPrompt bool)
+	agentStatus() (busy, waiting bool)
 	setAutoYes(enabled bool)
 	info() proto.SessionInfo
 	alive() bool

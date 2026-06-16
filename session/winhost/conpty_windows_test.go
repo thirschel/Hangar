@@ -2,7 +2,10 @@
 
 package winhost
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDetectPromptCopilot(t *testing.T) {
 	cases := []struct {
@@ -75,7 +78,34 @@ func TestAutoYesEdgeSequence(t *testing.T) {
 	}
 }
 
-// TestMaybeAutoYesPausesWhileAttached exercises the real integration of
+// TestAgentStatus exercises the per-session status indicator: a prompt on screen
+// reads as waiting; changing output reads as busy; settled output reads as idle.
+func TestAgentStatus(t *testing.T) {
+	// Prompt on screen -> waiting (not busy).
+	s := newConptySession("t", "copilot", "", 80, 24, false).(*conptySession)
+	_, _ = s.emu.Write([]byte("Do you want to run this command?\r\n" +
+		"  3. No, and tell Copilot what to do differently (Esc to stop)"))
+	s.updateStatus()
+	if busy, waiting := s.agentStatus(); !waiting || busy {
+		t.Fatalf("prompt should be waiting (not busy), got busy=%v waiting=%v", busy, waiting)
+	}
+
+	// Changing output, no prompt -> busy.
+	s2 := newConptySession("t2", "copilot", "", 80, 24, false).(*conptySession)
+	_, _ = s2.emu.Write([]byte("thinking...\r\nwriting code\r\n"))
+	s2.updateStatus()
+	if busy, waiting := s2.agentStatus(); !busy || waiting {
+		t.Fatalf("changing output should be busy, got busy=%v waiting=%v", busy, waiting)
+	}
+
+	// Settled (no further change) past the busy window -> idle.
+	time.Sleep(1600 * time.Millisecond)
+	s2.updateStatus()
+	if busy, waiting := s2.agentStatus(); busy || waiting {
+		t.Fatalf("settled output should be idle, got busy=%v waiting=%v", busy, waiting)
+	}
+}
+
 // detectPrompt + the emulator + the attachedCnt gate (no child process needed):
 // with a copilot approval prompt on screen, AutoYes fires (disarms) when not
 // attached and is paused (stays armed) while a client is attached.
