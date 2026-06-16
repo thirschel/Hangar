@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AgentTerminal } from './components/AgentTerminal';
 import { CenterPane } from './components/CenterPane';
 import { Composer } from './components/Composer';
 import { ReviewPanel } from './components/ReviewPanel';
@@ -146,6 +145,7 @@ export function App(): JSX.Element {
   const onArchive = useCallback(
     async (id: string): Promise<void> => {
       await window.cs.archiveWorkspace(id);
+      void window.cs.closeShell(id);
       setSelectedId((cur) => (cur === id ? null : cur));
       await refresh();
     },
@@ -161,7 +161,12 @@ export function App(): JSX.Element {
     [selected, refresh],
   );
 
-  const sendInput = useCallback((data: string) => window.cs.sendInput(data), []);
+  const sendInput = useCallback(
+    (data: string) => {
+      if (selected) window.cs.sendInput(selected.sessionName, data);
+    },
+    [selected],
+  );
 
   return (
     <div className="app-shell">
@@ -204,7 +209,6 @@ export function App(): JSX.Element {
         <CenterPane
           workspace={selected}
           onToggleAutoYes={toggleAutoYes}
-          terminal={<AgentTerminal key={selected?.sessionName ?? 'none'} sessionName={selected?.sessionName ?? null} />}
           composer={<Composer disabled={!selected} onSend={sendInput} />}
         />
         <div className="right-column">

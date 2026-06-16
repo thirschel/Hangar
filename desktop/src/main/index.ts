@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import type net from 'node:net';
 import {
   ControlClient,
@@ -11,6 +11,8 @@ import {
   connectAttachStream,
   connectPipe,
   ensureHost,
+  type DirEntry,
+  type FileContents,
 } from './host-client';
 import { getSettings, applySettings, type Settings } from './settings';
 import { createTray, destroyTray } from './tray';
@@ -28,8 +30,13 @@ const DEFAULT_ROWS = 30;
 
 let mainWindow: BrowserWindow | null = null;
 let control: ControlClient | null = null;
-let attachSocket: net.Socket | null = null;
-let activeSession: string | null = null;
+// Live attach streams keyed by session name, so the agent and an in-worktree
+// shell terminal can stream concurrently. Bounded in practice to the selected
+// workspace's agent (+ its shell), which are swapped when the selection changes.
+const attachments = new Map<string, net.Socket>();
+// Shell sessions (sh_<workspaceId>) this app run created, for cleanup on archive
+// and quit so no orphan PowerShell is left in the daemon.
+const shellSessions = new Set<string>();
 let setupPromise: Promise<ControlClient> | null = null;
 let isQuitting = false;
 
@@ -64,39 +71,49 @@ async function getControlClient(): Promise<ControlClient> {
   return setupPromise;
 }
 
-// attachWorkspace attaches the renderer's terminal to a workspace's agent
-// session (by session name). Only one workspace is attached at a time; switching
-// detaches the previous one. Detaching never kills the session — workspaces live
-// in the daemon and persist across UI restarts.
-async function attachWorkspace(
+// attachSession opens a live stream to a daemon session (agent or shell) by name.
+// Streams are keyed by session so multiple can run at once; data/close/error are
+// reported to the renderer tagged with the session name. Re-attaching an already
+// open session is a no-op.
+async function attachSession(
   sessionName: string,
   cols = DEFAULT_COLS,
   rows = DEFAULT_ROWS,
 ): Promise<Response> {
   const client = await getControlClient();
-  detachWorkspace();
+  if (attachments.has(sessionName)) {
+    return { id: 0, ok: true };
+  }
 
   const attached = await client.call({ method: 'Attach', session: sessionName, cols, rows });
   if (!attached.ok || !attached.attachPipe || !attached.attachToken) {
     throw new Error(`Attach: ${attached.error || 'missing attach pipe/token'}`);
   }
 
-  activeSession = sessionName;
-  attachSocket = await connectAttachStream(attached.attachPipe, attached.attachToken);
-  attachSocket.on('data', (chunk) => sendToRenderer('term:data', new Uint8Array(chunk)));
-  attachSocket.on('close', () => sendToRenderer('term:closed'));
-  attachSocket.on('error', (error) => sendToRenderer('term:error', error.message));
+  const socket = await connectAttachStream(attached.attachPipe, attached.attachToken);
+  attachments.set(sessionName, socket);
+  socket.on('data', (chunk) => sendToRenderer('term:data', { session: sessionName, chunk: new Uint8Array(chunk) }));
+  socket.on('close', () => {
+    attachments.delete(sessionName);
+    sendToRenderer('term:closed', { session: sessionName });
+  });
+  socket.on('error', (error) => sendToRenderer('term:error', { session: sessionName, message: error.message }));
 
   sendToRenderer('term:ready', { session: sessionName });
   return attached;
 }
 
-function detachWorkspace(): void {
-  if (attachSocket) {
-    attachSocket.destroy();
-    attachSocket = null;
+function detachSession(sessionName: string): void {
+  const socket = attachments.get(sessionName);
+  if (socket) {
+    socket.destroy();
+    attachments.delete(sessionName);
   }
-  activeSession = null;
+}
+
+function detachAll(): void {
+  for (const socket of attachments.values()) socket.destroy();
+  attachments.clear();
 }
 
 function createWindow(): void {
@@ -157,14 +174,84 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
 });
 
 ipcMain.handle(
-  'cs:attach-workspace',
+  'cs:attach-session',
   async (_event, args: { sessionName: string; cols?: number; rows?: number }) => {
-    return attachWorkspace(args.sessionName, args.cols ?? DEFAULT_COLS, args.rows ?? DEFAULT_ROWS);
+    return attachSession(args.sessionName, args.cols ?? DEFAULT_COLS, args.rows ?? DEFAULT_ROWS);
   },
 );
 
-ipcMain.handle('cs:detach', async () => {
-  detachWorkspace();
+ipcMain.handle('cs:detach-session', async (_event, sessionName: string) => {
+  detachSession(sessionName);
+});
+
+// Ensure a PowerShell session running in the workspace's worktree exists, and
+// return its session name. Lazily created on first Terminal-tab open; kept alive
+// in the daemon so re-opening re-attaches the same shell (cwd/history preserved).
+ipcMain.handle(
+  'cs:ensure-shell',
+  async (_event, args: { workspaceId: string; worktreePath: string; cols?: number; rows?: number }): Promise<string> => {
+    const session = `sh_${args.workspaceId}`;
+    const client = await getControlClient();
+    const has = await client.call({ method: 'HasSession', session });
+    if (!has.ok || !has.exists) {
+      const created = await client.call({
+        method: 'CreateSession',
+        session,
+        program: 'powershell.exe -NoLogo',
+        workDir: args.worktreePath,
+        cols: args.cols ?? DEFAULT_COLS,
+        rows: args.rows ?? DEFAULT_ROWS,
+      });
+      if (!created.ok) throw new Error(created.error || 'failed to start shell');
+    }
+    shellSessions.add(session);
+    return session;
+  },
+);
+
+// Kill a workspace's shell session (on archive). Detaches first.
+ipcMain.handle('cs:close-shell', async (_event, workspaceId: string): Promise<void> => {
+  const session = `sh_${workspaceId}`;
+  detachSession(session);
+  shellSessions.delete(session);
+  try {
+    const client = await getControlClient();
+    await client.call({ method: 'KillSession', session });
+  } catch {
+    // Daemon may be gone already; nothing to clean up.
+  }
+});
+
+// Files tab: resolve a path strictly inside the worktree (reject traversal).
+function resolveInWorktree(worktreePath: string, rel: string): string {
+  const root = path.resolve(worktreePath);
+  const target = path.resolve(root, rel || '.');
+  if (target !== root && !target.startsWith(root + path.sep)) {
+    throw new Error('path is outside the worktree');
+  }
+  return target;
+}
+
+ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir: string }): Promise<DirEntry[]> => {
+  const dir = resolveInWorktree(args.worktreePath, args.relDir);
+  const entries = readdirSync(dir, { withFileTypes: true });
+  return entries
+    .filter((e) => e.name !== '.git')
+    .map((e) => ({ name: e.name, dir: e.isDirectory() }))
+    .sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1));
+});
+
+ipcMain.handle('cs:fs-read', async (_event, args: { worktreePath: string; relFile: string }): Promise<FileContents> => {
+  try {
+    const file = resolveInWorktree(args.worktreePath, args.relFile);
+    const st = statSync(file);
+    if (st.size > 1_000_000) return { kind: 'tooLarge', size: st.size };
+    const buf = readFileSync(file);
+    if (buf.subarray(0, 8192).includes(0)) return { kind: 'binary' };
+    return { kind: 'text', text: buf.toString('utf8') };
+  } catch (e) {
+    return { kind: 'error', message: e instanceof Error ? e.message : String(e) };
+  }
 });
 
 ipcMain.handle('cs:pick-folder', async (): Promise<string | null> => {
@@ -230,15 +317,16 @@ ipcMain.handle(
   },
 );
 
-ipcMain.on('term:input', (_event, data: string) => {
-  if (attachSocket) {
-    attachSocket.write(Buffer.from(data, 'utf8'));
+ipcMain.on('term:input', (_event, args: { session: string; data: string }) => {
+  const socket = attachments.get(args.session);
+  if (socket) {
+    socket.write(Buffer.from(args.data, 'utf8'));
   }
 });
 
-ipcMain.on('term:resize', (_event, { cols, rows }: { cols: number; rows: number }) => {
-  if (control && activeSession && Number.isFinite(cols) && Number.isFinite(rows)) {
-    control.call({ method: 'Resize', session: activeSession, cols, rows }).catch(() => {});
+ipcMain.on('term:resize', (_event, args: { session: string; cols: number; rows: number }) => {
+  if (control && args.session && Number.isFinite(args.cols) && Number.isFinite(args.rows)) {
+    control.call({ method: 'Resize', session: args.session, cols: args.cols, rows: args.rows }).catch(() => {});
   }
 });
 
@@ -259,12 +347,18 @@ app.on('before-quit', () => {
   isQuitting = true;
   globalShortcut.unregisterAll();
   destroyTray();
-  detachWorkspace();
+  // Best-effort: kill scratch shell sessions so no orphan PowerShell lingers.
+  if (control && !control.isClosed()) {
+    for (const session of shellSessions) {
+      control.call({ method: 'KillSession', session }).catch(() => {});
+    }
+  }
+  detachAll();
 });
 
 app.on('window-all-closed', () => {
   // Detach only — workspaces live in the daemon and persist across UI restarts.
-  detachWorkspace();
+  detachAll();
   if (control) {
     control.close();
     control = null;

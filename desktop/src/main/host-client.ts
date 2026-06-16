@@ -37,6 +37,18 @@ export interface FileDiffInfo {
   removed: number;
 }
 
+// Files tab (read-only worktree browser) — shared between main and preload.
+export type DirEntry = {
+  name: string;
+  dir: boolean;
+};
+
+export type FileContents =
+  | { kind: 'text'; text: string }
+  | { kind: 'binary' }
+  | { kind: 'tooLarge'; size: number }
+  | { kind: 'error'; message: string };
+
 export interface Request {
   id?: number;
   method:
