@@ -14,15 +14,6 @@ import (
 	"github.com/Microsoft/go-winio"
 )
 
-// VersionMismatch is returned by EnsureHost when a running host speaks a
-// different protocol version. The caller (TUI) decides whether to restart it,
-// since a restart destroys live sessions.
-type VersionMismatch struct{ HostVersion, ClientVersion int }
-
-func (e *VersionMismatch) Error() string {
-	return fmt.Sprintf("session-host protocol mismatch: host=%d client=%d", e.HostVersion, e.ClientVersion)
-}
-
 // Client is a control-plane connection to the session host. It serializes
 // request/response on a single connection.
 type Client struct {

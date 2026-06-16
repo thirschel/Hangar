@@ -6,6 +6,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"claude-squad/session/winhost"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
@@ -138,6 +139,15 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// Load saved instances
 	instances, err := storage.LoadInstances()
 	if err != nil {
+		if vm, ok := winhost.AsVersionMismatch(err); ok {
+			fmt.Printf("A session-host from a different cs version is running "+
+				"(host protocol v%d, this cs v%d).\n", vm.HostVersion, vm.ClientVersion)
+			fmt.Println("This usually means cs was upgraded while an old session-host " +
+				"(with running sessions) is still alive.")
+			fmt.Println("Run `cs reset` to stop the old host (this ends any running " +
+				"sessions), then start cs again.")
+			os.Exit(1)
+		}
 		fmt.Printf("Failed to load instances: %v\n", err)
 		os.Exit(1)
 	}

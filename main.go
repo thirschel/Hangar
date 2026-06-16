@@ -132,6 +132,12 @@ var (
 			fmt.Printf("Config: %s\n%s\n", filepath.Join(configDir, config.ConfigFileName), configJson)
 			fmt.Printf("Log file: %s\n", log.LogFileName())
 
+			if info, err := winhost.HostInfo(); err != nil {
+				fmt.Printf("Session host: error reading host info: %v\n", err)
+			} else {
+				fmt.Print(info)
+			}
+
 			return nil
 		},
 	}

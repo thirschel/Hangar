@@ -10,3 +10,8 @@ import "errors"
 func RunHost() error {
 	return errors.New("the native session host is only supported on Windows; use tmux on this platform")
 }
+
+// HostInfo is Windows-only; on other platforms there is no native session host.
+func HostInfo() (string, error) {
+	return "Session host: not applicable on this platform (sessions use tmux).", nil
+}

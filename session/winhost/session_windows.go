@@ -3,7 +3,10 @@
 package winhost
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -76,6 +79,55 @@ func Shutdown() error {
 	_ = c.Shutdown()
 	resetClient()
 	return nil
+}
+
+// HostInfo returns a human-readable summary of the native session host for
+// `cs debug`: its pipe, PID, protocol version, and live sessions. It is robust
+// to a stopped or version-skewed host (it reports status rather than failing).
+func HostInfo() (string, error) {
+	infoPath, err := hostInfoPath()
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString("Session host (native Windows):\n")
+	fmt.Fprintf(&b, "  state file:  %s\n", infoPath)
+	fmt.Fprintf(&b, "  client ver:  %d\n", proto.Version)
+
+	data, err := os.ReadFile(infoPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			b.WriteString("  status:      not running (no state file)\n")
+			return b.String(), nil
+		}
+		return "", err
+	}
+	var hi hostInfo
+	if err := json.Unmarshal(data, &hi); err != nil {
+		return "", fmt.Errorf("parse %s: %w", infoPath, err)
+	}
+	fmt.Fprintf(&b, "  pipe:        %s\n", hi.PipeName)
+	fmt.Fprintf(&b, "  pid:         %d\n", hi.PID)
+	fmt.Fprintf(&b, "  host ver:    %d\n", hi.Version)
+	fmt.Fprintf(&b, "  created:     %s\n", time.Unix(hi.CreatedUnix, 0).Format(time.RFC3339))
+
+	c, err := dialClient(hi.PipeName, 800*time.Millisecond)
+	if err != nil {
+		fmt.Fprintf(&b, "  status:      state file present but host not reachable (%v)\n", err)
+		return b.String(), nil
+	}
+	defer c.Close()
+	sessions, err := c.ListSessions()
+	if err != nil {
+		fmt.Fprintf(&b, "  status:      reachable; ListSessions failed: %v\n", err)
+		return b.String(), nil
+	}
+	fmt.Fprintf(&b, "  status:      reachable\n")
+	fmt.Fprintf(&b, "  sessions:    %d\n", len(sessions))
+	for _, s := range sessions {
+		fmt.Fprintf(&b, "    - %-24s program=%s alive=%v exit=%d\n", s.Name, s.Program, s.Alive, s.ExitCode)
+	}
+	return b.String(), nil
 }
 
 var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]+`)
@@ -210,10 +262,20 @@ func (s *Session) DoesSessionExist() bool {
 	return exists
 }
 
-// DetachSafely is a no-op for the host model: the session lives in the host
-// independent of any attach, so "detaching" (e.g. during Pause) leaves it
-// running. Closing only the optional attach stream happens in P5.
-func (s *Session) DetachSafely() error { return nil }
+// DetachSafely defines what "pause" means on the native-Windows host model.
+// Unlike tmux (where a paused session keeps running in the background and is
+// re-attached on resume), a ConPTY session is bound to its worktree directory,
+// which Pause removes. Leaving it alive would orphan a process in a deleted
+// directory, so on Windows we kill the host session here; Resume then starts a
+// fresh session in the recreated worktree (DoesSessionExist reports false).
+func (s *Session) DetachSafely() error {
+	err := withClient(func(c *Client) error { return c.Kill(s.name) })
+	// A session that is already gone is fine — the goal is "not running".
+	if err != nil && strings.Contains(err.Error(), "no such session") {
+		return nil
+	}
+	return err
+}
 
 // CheckAndHandleTrustPrompt dismisses the one-time trust/confirmation prompt for
 // supported agents. It uses SendKeys (not TapEnter, which is a host-owned no-op
