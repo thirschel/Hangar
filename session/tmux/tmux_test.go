@@ -29,6 +29,11 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
 	if err == nil {
 		pt.cmds = append(pt.cmds, cmd)
 		pt.files = append(pt.files, f)
+		// Close the handle on test cleanup so Windows (which can't delete an open
+		// file) can remove the t.TempDir created above. Cleanups run LIFO, so
+		// this runs before that directory's RemoveAll. In-test assertions about
+		// the handle being open are unaffected (cleanups run after the test).
+		pt.t.Cleanup(func() { _ = f.Close() })
 	}
 	return f, err
 }
