@@ -38,6 +38,7 @@ type workspace struct {
 	ExistingBranch bool   `json:"existingBranch"`
 	CreatedUnix    int64  `json:"createdUnix"`
 	RunCommand     string `json:"runCommand"`
+	AgentSessionID string `json:"agentSessionId"` // stable agent session UUID for resume (copilot)
 }
 
 type workspaceManager struct {
@@ -111,6 +112,37 @@ func newWorkspaceID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// newUUID returns a random RFC-4122 v4 UUID, used as a stable agent session id.
+func newUUID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// supportsResume reports whether we know how to give this agent a stable,
+// resumable session id. Currently only copilot (its --session-id flag both sets
+// the UUID for a new session and resumes an existing one) is verified.
+func supportsResume(program string) bool {
+	return strings.Contains(strings.ToLower(program), "copilot")
+}
+
+// agentLaunchCommand returns the command used to launch (or resume) the agent.
+// For agents that support a stable session UUID it appends the resume flag, so a
+// relaunch after a daemon restart continues the same conversation. When no
+// session id is known (unknown agent, or a workspace created before this
+// feature) the program is launched unchanged.
+func agentLaunchCommand(program, sessionID string) string {
+	if sessionID == "" {
+		return program
+	}
+	if strings.Contains(strings.ToLower(program), "copilot") {
+		return program + " --session-id=" + sessionID
+	}
+	return program
 }
 
 // worktreeFor reconstructs a GitWorktree handle from stored metadata so we can
@@ -200,7 +232,7 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 		m.host.killSession(sessionName)
 	}
 	cols, rows = sizeOr(cols, 120), sizeOr(rows, 30)
-	if err := m.host.startManagedSession(w.SessionName, w.Program, w.WorktreePath, cols, rows, w.AutoYes); err != nil {
+	if err := m.host.startManagedSession(w.SessionName, agentLaunchCommand(w.Program, w.AgentSessionID), w.WorktreePath, cols, rows, w.AutoYes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -233,6 +265,13 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	sessionName := "ws_" + id
 	gitName := slug(title) + "-" + id[:6] // unique branch even for duplicate titles
 
+	// Give resumable agents (copilot) a stable session UUID so a relaunch after a
+	// daemon restart continues the same conversation instead of starting fresh.
+	agentSessionID := ""
+	if supportsResume(program) {
+		agentSessionID = newUUID()
+	}
+
 	var (
 		wt     *git.GitWorktree
 		branch string
@@ -252,7 +291,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSession(sessionName, program, wt.GetWorktreePath(), cols, rows, req.AutoYes); err != nil {
+	if err := m.host.startManagedSession(sessionName, agentLaunchCommand(program, agentSessionID), wt.GetWorktreePath(), cols, rows, req.AutoYes); err != nil {
 		// Roll back the worktree so a failed create leaves no orphan.
 		_ = wt.Remove()
 		_ = wt.Prune()
@@ -263,7 +302,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		ID: id, Title: title, Program: program, RepoPath: wt.GetRepoPath(),
 		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
 		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: req.BaseBranch != "",
-		CreatedUnix: time.Now().Unix(),
+		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID,
 	}
 	m.mu.Lock()
 	m.wss[id] = w
