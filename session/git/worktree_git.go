@@ -72,10 +72,6 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 
 // PushChanges commits and pushes changes in the worktree to the remote branch
 func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
-	if err := checkGHCLI(); err != nil {
-		return err
-	}
-
 	// Check if there are any changes to commit
 	isDirty, err := g.IsDirty()
 	if err != nil {
@@ -96,28 +92,12 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 		}
 	}
 
-	// First push the branch to remote to ensure it exists
-	pushCmd := exec.Command("gh", "repo", "sync", "--source", "-b", g.branchName)
+	pushCmd := exec.Command("git", "push", "-u", "origin", g.branchName)
 	pushCmd.Dir = g.worktreePath
 	hideConsole(pushCmd)
-	if err := pushCmd.Run(); err != nil {
-		// If sync fails, try creating the branch on remote first
-		gitPushCmd := exec.Command("git", "push", "-u", "origin", g.branchName)
-		gitPushCmd.Dir = g.worktreePath
-		hideConsole(gitPushCmd)
-		if pushOutput, pushErr := gitPushCmd.CombinedOutput(); pushErr != nil {
-			log.ErrorLog.Print(pushErr)
-			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
-		}
-	}
-
-	// Now sync with remote
-	syncCmd := exec.Command("gh", "repo", "sync", "-b", g.branchName)
-	syncCmd.Dir = g.worktreePath
-	hideConsole(syncCmd)
-	if output, err := syncCmd.CombinedOutput(); err != nil {
+	if output, err := pushCmd.CombinedOutput(); err != nil {
 		log.ErrorLog.Print(err)
-		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
+		return fmt.Errorf("failed to push branch: %s (%w)", output, err)
 	}
 
 	// Open the branch in the browser

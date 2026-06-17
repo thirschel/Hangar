@@ -138,3 +138,32 @@ func TestSessionBrowserPreviewLoadsSnippet(t *testing.T) {
 	require.Contains(t, out, "Implement", "preview should load the first user message snippet")
 	require.NotContains(t, out, "No cached snippet loaded", "snippet must be populated, not the fallback")
 }
+
+func TestSessionBrowserSanitizesUntrustedMetadata(t *testing.T) {
+	dir := t.TempDir()
+	events := "{\"type\":\"user.message\",\"data\":{\"content\":\"\\u001b]52;c;Zm9v\\u0007copy me \\u001b[32mgreen\\u001b[0m\"}}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(events), 0o644))
+
+	b := NewSessionBrowser()
+	b.SetSize(160, 24)
+	b.SetSessions([]copilot.Session{{
+		ID:         "escape-test",
+		Dir:        dir,
+		Name:       "\x1b]0;PWNED\x07Visible Name",
+		Repository: "owner/\x1b[31mrepo\x1b[0m",
+		Branch:     "\x1bP$qm\x1b\\feature/main",
+		OriginRoot: "C:\\src\\\x1b[35mrepo\x1b[0m",
+		UpdatedAt:  time.Now(),
+		HasEvents:  true,
+	}})
+
+	out := b.String()
+	require.Contains(t, out, "Visible Name")
+	require.Contains(t, out, "owner/repo")
+	require.Contains(t, out, "feature/main")
+	require.Contains(t, out, "C:\\src\\repo")
+	require.Contains(t, out, "copy me green")
+	require.NotContains(t, out, "\x1b")
+	require.NotContains(t, out, "PWNED")
+	require.NotContains(t, out, "Zm9v")
+}

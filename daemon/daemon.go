@@ -48,7 +48,7 @@ func RunDaemon(cfg *config.Config) error {
 				// We only store started instances, but check anyway.
 				if instance.Started() && !instance.Paused() {
 					if _, hasPrompt := instance.HasUpdated(); hasPrompt {
-						instance.TapEnter()
+						instance.TryAutoApprove()
 						if err := instance.UpdateDiffStats(); err != nil {
 							if everyN.ShouldLog() {
 								log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
@@ -117,7 +117,7 @@ func LaunchDaemon() error {
 	}
 
 	pidFile := filepath.Join(pidDir, "daemon.pid")
-	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(fmt.Sprintf("%d", cmd.Process.Pid)), 0600); err != nil {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 
@@ -150,6 +150,20 @@ func StopDaemon() error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("failed to find daemon process: %w", err)
+	}
+
+	// Verify the process at this PID is actually a Hangar daemon binary before
+	// killing it. PIDs can be recycled; a stale daemon.pid could otherwise cause
+	// an unrelated same-user process to be killed (F-31).
+	ok, verifyErr := isDaemonProcess(pid)
+	if verifyErr != nil {
+		log.WarningLog.Printf("could not verify daemon PID %d: %v; skipping kill", pid, verifyErr)
+		return nil
+	}
+	if !ok {
+		log.WarningLog.Printf("PID %d is not a Hangar daemon process; daemon.pid stale — removing", pid)
+		_ = os.Remove(pidFile)
+		return nil
 	}
 
 	if err := proc.Kill(); err != nil {

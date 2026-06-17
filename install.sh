@@ -59,7 +59,7 @@ detect_platform_and_arch() {
 
 get_latest_version() {
     # Get latest version from GitHub API, including prereleases
-    API_RESPONSE=$(curl -sS "https://api.github.com/repos/smtg-ai/claude-squad/releases")
+    API_RESPONSE=$(curl -sS "https://api.github.com/repos/thirschel/Hangar/releases")
     if [ $? -ne 0 ]; then
         echo "Failed to connect to GitHub API"
         exit 1
@@ -110,6 +110,82 @@ download_release() {
     fi
 }
 
+# Hard-coded Hangar release signing public key.
+# The matching private key is stored as the MINISIGN_KEY GitHub Actions secret.
+# Also committed (public key only) to keys/hangar-release.pub in this repository.
+# REPLACE this placeholder with the real key after running:
+#   minisign -G -p keys/hangar-release.pub -s hangar-release.key
+HANGAR_PUBKEY="RWSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=="
+
+download_and_verify_release() {
+    local version=$1
+    local archive_name=$2
+    local tmp_dir=$3
+    local release_base=$4
+    local skip_sig=${5:-false}
+
+    local sums_file="checksums.txt"
+    local sig_file="checksums.txt.minisig"
+
+    echo "Downloading ${archive_name} ..."
+    if ! curl -fsSL -o "${tmp_dir}/${archive_name}" "${release_base}/${archive_name}"; then
+        echo "Error: Failed to download release asset: ${release_base}/${archive_name}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    echo "Downloading checksums ..."
+    if ! curl -fsSL -o "${tmp_dir}/${sums_file}" "${release_base}/${sums_file}"; then
+        err "FATAL: Failed to download ${sums_file}. Aborting."
+    fi
+    if ! curl -fsSL -o "${tmp_dir}/${sig_file}" "${release_base}/${sig_file}"; then
+        err "FATAL: Failed to download ${sig_file}. Aborting."
+    fi
+
+    # Step 1: Verify minisign signature over checksums.txt (fails closed by default).
+    if [ "${skip_sig}" = "true" ]; then
+        echo "" >&2
+        echo "WARNING: --skip-signature-check specified. Minisign verification SKIPPED." >&2
+        echo "         Integrity is HTTPS-only. Use only for testing/debugging." >&2
+        echo "" >&2
+    elif command -v minisign &>/dev/null; then
+        minisign -Vm "${tmp_dir}/${sums_file}" \
+                 -P "${HANGAR_PUBKEY}" \
+                 -x "${tmp_dir}/${sig_file}" \
+          || err "FATAL: Checksum file signature verification FAILED. Aborting."
+        echo "✓ Minisign signature verified."
+    else
+        err "FATAL: minisign is not installed and signature check cannot be skipped.
+Install minisign from https://jedisct1.github.io/minisign/
+or pass --skip-signature-check to bypass (HTTPS-only integrity, not recommended)."
+    fi
+
+    # Step 2: Verify SHA256 of archive against the (now-verified) checksums.txt.
+    local expected_hash
+    expected_hash=$(grep "${archive_name}" "${tmp_dir}/${sums_file}" | awk '{print $1}')
+    if [ -z "${expected_hash}" ]; then
+        err "FATAL: Archive '${archive_name}' not found in checksums.txt. Aborting."
+    fi
+
+    local actual_hash
+    if command -v sha256sum &>/dev/null; then
+        actual_hash=$(sha256sum "${tmp_dir}/${archive_name}" | awk '{print $1}')
+    elif command -v shasum &>/dev/null; then
+        actual_hash=$(shasum -a 256 "${tmp_dir}/${archive_name}" | awk '{print $1}')
+    else
+        err "FATAL: sha256sum or shasum is required for checksum verification but was not found."
+    fi
+
+    if [ "${actual_hash}" != "${expected_hash}" ]; then
+        err "FATAL: SHA256 mismatch for ${archive_name}!
+  Expected: ${expected_hash}
+  Got:      ${actual_hash}
+Aborting — do not proceed with a tampered archive."
+    fi
+
+    echo "✓ SHA256 checksum verified."
+}
+
 extract_and_install() {
     local tmp_dir=$1
     local archive_name=$2
@@ -143,7 +219,7 @@ extract_and_install() {
     fi
 
     # Install binary with desired name
-    mv "${tmp_dir}/claude-squad${extension}" "$bin_dir/$INSTALL_NAME${extension}"
+    mv "${tmp_dir}/hangar${extension}" "$bin_dir/$INSTALL_NAME${extension}"
     rm -rf "$tmp_dir"
 
     if [ ! -f "$bin_dir/$INSTALL_NAME${extension}" ]; then
@@ -269,6 +345,7 @@ main() {
     # Parse command line arguments
     INSTALL_NAME="cs"
     UPGRADE_MODE=false
+    SKIP_SIG_CHECK=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -276,9 +353,13 @@ main() {
                 INSTALL_NAME="$2"
                 shift 2
                 ;;
+            --skip-signature-check)
+                SKIP_SIG_CHECK=true
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
-                echo "Usage: install.sh [--name <n>]"
+                echo "Usage: install.sh [--name <name>] [--skip-signature-check]"
                 exit 1
                 ;;
         esac
@@ -296,12 +377,11 @@ main() {
         VERSION=$(get_latest_version)
     fi
 
-    RELEASE_URL="https://github.com/smtg-ai/claude-squad/releases/download/v${VERSION}"
-    ARCHIVE_NAME="claude-squad_${VERSION}_${PLATFORM}_${ARCHITECTURE}${ARCHIVE_EXT}"
-    BINARY_URL="${RELEASE_URL}/${ARCHIVE_NAME}"
+    RELEASE_BASE="https://github.com/thirschel/Hangar/releases/download/v${VERSION}"
+    ARCHIVE_NAME="hangar_${VERSION}_${PLATFORM}_${ARCHITECTURE}${ARCHIVE_EXT}"
     TMP_DIR=$(mktemp -d)
     
-    download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR"
+    download_and_verify_release "$VERSION" "$ARCHIVE_NAME" "$TMP_DIR" "$RELEASE_BASE" "$SKIP_SIG_CHECK"
     extract_and_install "$TMP_DIR" "$ARCHIVE_NAME" "$BIN_DIR" "$EXTENSION"
 }
 

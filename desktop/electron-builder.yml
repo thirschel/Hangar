@@ -26,19 +26,32 @@ win:
   target:
     - nsis
   icon: build/icon.png
-  # No code-signing configured here — see PACKAGING.md. Set CSC_LINK / CSC_KEY_PASSWORD
-  # (or an Azure Trusted Signing config) to produce a signed installer.
+  signingHashAlgorithms:
+    - sha256
+  # Code signing is configured via CI environment variables — do NOT commit keys here.
+  #
+  # Option A — Standard OV/EV certificate (electron-builder signs when CSC_LINK is set):
+  #   CSC_LINK          base64-encoded .pfx file  (GitHub secret: WIN_CERTIFICATE)
+  #   CSC_KEY_PASSWORD  pfx password              (GitHub secret: WIN_CERT_PASSWORD)
+  #
+  # Option B — Azure Trusted Signing (no EV cert required):
+  #   AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+  #   AZURE_CODE_SIGNING_ACCOUNT_NAME, AZURE_CERT_PROFILE_NAME, AZURE_ENDPOINT
+  #
+  # Without these env vars the build is unsigned (acceptable for local dev builds).
 
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
-  artifactName: ${productName}-Setup-${version}.${ext}
-  shortcutName: claude-squad
+  artifactName: hangar-Setup-${version}.${ext}
+  shortcutName: Hangar
 
-# Auto-update source. Update owner/repo to the fork that publishes releases; the
-# updater only runs in packaged builds and logs (does not crash) if no release exists.
+# Auto-update source. Must match the GitHub repo that publishes signed releases.
+# electron-updater constructs:
+#   https://api.github.com/repos/<owner>/<repo>/releases
+#   https://github.com/<owner>/<repo>/releases/download/<tag>/<file>
 publish:
   provider: github
-  owner: thirschel-microsoft
-  repo: claude-squad
+  owner: thirschel
+  repo: Hangar

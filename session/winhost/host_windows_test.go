@@ -25,7 +25,7 @@ type fakeSession struct {
 	buf           []byte
 	changed       bool
 	autoYes       bool
-	forceApprove  bool
+	trustApproval bool
 	aliveFlag     bool
 	busy          bool
 	waiting       bool
@@ -34,10 +34,53 @@ type fakeSession struct {
 	startErr      error
 }
 
-func newFake(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
+func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
 	return &fakeSession{
 		name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true,
 		buf: []byte(fmt.Sprintf("[echo session %q running %q]\n", name, program)),
+	}
+}
+
+// conptyFunctional probes once whether real ConPTY sessions actually produce
+// output in this environment. Headless/CI runners cannot drive a real console,
+// where ConPTY reads block indefinitely, so real-console tests are skipped there
+// instead of hanging. The probe is bounded and cached for the whole package run.
+var conptyFunctional = sync.OnceValue(func() bool {
+	done := make(chan bool, 1)
+	go func() {
+		sess, ok := newConptySession("conpty-probe", `cmd.exe /c echo HANGAR_CONPTY_PROBE`, "", "cmd", 80, 24, false).(*conptySession)
+		if !ok {
+			done <- false
+			return
+		}
+		if err := sess.start(); err != nil {
+			done <- false
+			return
+		}
+		defer sess.close()
+		for i := 0; i < 40; i++ {
+			if strings.Contains(sess.capture(true, false), "HANGAR_CONPTY_PROBE") {
+				done <- true
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		done <- false
+	}()
+	select {
+	case ok := <-done:
+		return ok
+	case <-time.After(8 * time.Second):
+		return false
+	}
+})
+
+// requireConPTY skips a test that depends on a real, functional ConPTY console
+// (process I/O) when none is available, e.g. a headless CI runner.
+func requireConPTY(t *testing.T) {
+	t.Helper()
+	if !conptyFunctional() {
+		t.Skip("ConPTY not functional in this environment (headless); skipping real-console test")
 	}
 }
 
@@ -80,9 +123,14 @@ func (f *fakeSession) agentStatus() (bool, bool) {
 	return f.busy, f.waiting
 }
 func (f *fakeSession) setAutoYes(e bool) { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
-func (f *fakeSession) setForceApprove(e bool) {
+func (f *fakeSession) armTrustApproval(reason string, expiresAt time.Time) {
 	f.mu.Lock()
-	f.forceApprove = e
+	f.trustApproval = true
+	f.mu.Unlock()
+}
+func (f *fakeSession) clearTrustApproval() {
+	f.mu.Lock()
+	f.trustApproval = false
 	f.mu.Unlock()
 }
 func (f *fakeSession) info() proto.SessionInfo {
@@ -118,6 +166,17 @@ func startTestHostWithHandle(t *testing.T) (string, *host, func()) {
 		t.Fatalf("listen: %v", err)
 	}
 	h := newHost(io.Discard, time.Minute)
+	nonce, err := randomNonceHex(32)
+	if err != nil {
+		t.Fatalf("nonce: %v", err)
+	}
+	h.identity = &hostIdentity{
+		PipeName:    pipe,
+		PID:         os.Getpid(),
+		CreatedUnix: time.Now().Unix(),
+		Nonce:       nonce,
+		Version:     proto.Version,
+	}
 	h.newSession = newFake
 	h.workspaces.bootFloor = 0   // no boot floor in tests
 	h.workspaces.submitDelay = 0 // no submit settle delay in tests
@@ -138,8 +197,27 @@ func startRealHost(t *testing.T) (string, func()) {
 		t.Fatalf("listen: %v", err)
 	}
 	h := newHost(io.Discard, time.Minute)
+	nonce, err := randomNonceHex(32)
+	if err != nil {
+		t.Fatalf("nonce: %v", err)
+	}
+	h.identity = &hostIdentity{
+		PipeName:    pipe,
+		PID:         os.Getpid(),
+		CreatedUnix: time.Now().Unix(),
+		Nonce:       nonce,
+		Version:     proto.Version,
+	}
 	go h.serve(ln)
 	return pipe, func() { h.triggerShutdown() }
+}
+
+func authClient(t *testing.T, c *Client) {
+	t.Helper()
+	r, err := c.Hello()
+	if err != nil || !r.OK || r.HostVersion != proto.Version {
+		t.Fatalf("hello: resp=%+v err=%v", r, err)
+	}
 }
 
 func TestHostLifecycle(t *testing.T) {
@@ -152,10 +230,7 @@ func TestHostLifecycle(t *testing.T) {
 	}
 	defer c.Close()
 
-	r, err := c.Hello()
-	if err != nil || !r.OK || r.HostVersion != proto.Version {
-		t.Fatalf("hello: resp=%+v err=%v", r, err)
-	}
+	authClient(t, c)
 
 	if err := c.CreateSession("s1", "copilot", `C:\tmp`, 80, 24, false); err != nil {
 		t.Fatalf("create: %v", err)
@@ -217,6 +292,7 @@ func TestHostShutdownStopsServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
+	authClient(t, c)
 	if err := c.Shutdown(); err != nil {
 		t.Fatalf("shutdown: %v", err)
 	}
@@ -238,11 +314,13 @@ func TestConcurrentClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c1.Close()
+	authClient(t, c1)
 	c2, err := dialClient(pipe, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c2.Close()
+	authClient(t, c2)
 
 	if err := c1.CreateSession("a", "copilot", "", 80, 24, false); err != nil {
 		t.Fatal(err)
@@ -260,7 +338,8 @@ func TestConcurrentClients(t *testing.T) {
 // short-lived command, verifying the rendered screen captures the program's
 // output and the exit is recorded.
 func TestConptySessionRealEcho(t *testing.T) {
-	s := newConptySession("t", "echo P2_CONPTY_OK", "", "cmd", 80, 24, false).(*conptySession)
+	requireConPTY(t)
+	s := newConptySession("t", `cmd.exe /c echo P2_CONPTY_OK`, "", "cmd", 80, 24, false).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -292,7 +371,8 @@ func TestConptySessionRealEcho(t *testing.T) {
 // TestConptySessionResizeAndAnsi verifies resize and that ANSI capture preserves
 // styling while plain capture does not leak escape sequences.
 func TestConptySessionResizeAndAnsi(t *testing.T) {
-	s := newConptySession("t2", "echo done", "", "cmd", 40, 10, false).(*conptySession)
+	requireConPTY(t)
+	s := newConptySession("t2", `cmd.exe /c echo done`, "", "cmd", 40, 10, false).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -316,6 +396,7 @@ func TestHostAttachPlumbing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.CreateSession("att", "copilot", "", 80, 24, false); err != nil {
 		t.Fatal(err)
 	}
@@ -376,6 +457,7 @@ func TestHostAttachRejectsBadToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.CreateSession("att", "copilot", "", 80, 24, false); err != nil {
 		t.Fatal(err)
 	}

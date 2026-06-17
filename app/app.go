@@ -335,7 +335,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				r.instance.SetStatus(session.Running)
 				r.instance.NoteActivity(batchNow)
 			} else if r.hasPrompt {
-				r.instance.TapEnter()
+				r.instance.TryAutoApprove()
 			} else {
 				r.instance.SetStatus(session.Ready)
 			}
@@ -1421,14 +1421,14 @@ func (m *home) handleSessionRestart(sel *copilot.Session) (tea.Model, tea.Cmd) {
 		m.state = stateDefault
 		m.menu.SetState(ui.StateDefault)
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(),
-			m.handleError(fmt.Errorf("session %q is already open in this session", sel.DisplayName())))
+			m.handleError(fmt.Errorf("session %q is already open in this session", ui.SafeDisplay(sel.DisplayName()))))
 	}
 
 	// Guard: a session that is actively in use must not be resumed — two writers
 	// would corrupt events.jsonl. Re-check the lock live, since the discovery-time
 	// flag may be stale by now.
 	if sel.InUse || copilot.IsInUse(sel.Dir) {
-		return m, m.handleError(fmt.Errorf("session %q is currently in use; close it before resuming", sel.DisplayName()))
+		return m, m.handleError(fmt.Errorf("session %q is currently in use; close it before resuming", ui.SafeDisplay(sel.DisplayName())))
 	}
 
 	// Resolve the target repo from the FROZEN origin, falling back to the current repo
@@ -1452,7 +1452,7 @@ func (m *home) handleSessionRestart(sel *copilot.Session) (tea.Model, tea.Cmd) {
 	crossRepo := !originMissing && !strings.EqualFold(filepath.Clean(absTarget), filepath.Clean(absCurrent))
 
 	if crossRepo {
-		message := fmt.Sprintf("Resume in %s? A new worktree/branch will be created there.", filepath.Base(absTarget))
+		message := fmt.Sprintf("Resume in %q? A new worktree/branch will be created there.", ui.SafeDisplay(absTarget))
 		// The confirmation callback runs synchronously and discards returned cmds, so
 		// performResume starts the instance synchronously on confirm.
 		return m, m.confirmAction(message, func() tea.Msg {
@@ -1463,7 +1463,7 @@ func (m *home) handleSessionRestart(sel *copilot.Session) (tea.Model, tea.Cmd) {
 
 	warn := ""
 	if originMissing && sel.OriginRoot != "" {
-		warn = fmt.Sprintf("origin repo %q not found; resuming in the current repo (file context may not match)", sel.OriginRoot)
+		warn = fmt.Sprintf("origin repo %q not found; resuming in the current repo (file context may not match)", ui.SafeDisplay(sel.OriginRoot))
 	}
 	return m.performResume(sel, targetRepo, true, warn)
 }
@@ -1476,7 +1476,7 @@ func (m *home) buildResumeInstance(sel *copilot.Session, targetRepo string) (*se
 	if len(idSuffix) > 6 {
 		idSuffix = idSuffix[:6]
 	}
-	name := sel.DisplayName()
+	name := ui.SafeDisplay(sel.DisplayName())
 	if r := []rune(name); len(r) > 20 {
 		name = strings.TrimSpace(string(r[:20]))
 	}

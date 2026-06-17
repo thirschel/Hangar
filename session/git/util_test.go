@@ -31,9 +31,9 @@ func TestSanitizeBranchName(t *testing.T) {
 			expected: "feature",
 		},
 		{
-			name:     "string with allowed special characters",
+			name:     "slashes and dots are stripped (F-14)",
 			input:    "feature/sub_branch.v1",
-			expected: "feature/sub_branch.v1",
+			expected: "featuresub_branchv1",
 		},
 		{
 			name:     "string with multiple dashes",
@@ -46,19 +46,34 @@ func TestSanitizeBranchName(t *testing.T) {
 			expected: "feature-branch",
 		},
 		{
-			name:     "string with leading and trailing slashes",
+			name:     "slashes stripped entirely (F-14)",
 			input:    "/feature/branch/",
-			expected: "feature/branch",
+			expected: "featurebranch",
 		},
 		{
-			name:     "empty string",
+			name:     "empty string falls back to session",
 			input:    "",
-			expected: "",
+			expected: "session",
+		},
+		{
+			name:     "traversal sequence cannot escape (F-14)",
+			input:    "../../etc",
+			expected: "etc",
+		},
+		{
+			name:     "windows traversal sequence cannot escape (F-14)",
+			input:    "..\\..\\Windows",
+			expected: "windows",
+		},
+		{
+			name:     "all-traversal title falls back to session (F-14)",
+			input:    "../../",
+			expected: "session",
 		},
 		{
 			name:     "complex mixed case with special chars",
 			input:    "USER/Feature Branch!@#$%^&*()/v1.0",
-			expected: "user/feature-branch/v1.0",
+			expected: "userfeature-branchv10",
 		},
 	}
 

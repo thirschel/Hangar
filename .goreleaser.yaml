@@ -1,7 +1,7 @@
 version: 2.9
 
 builds:
-  - binary: claude-squad
+  - binary: hangar
     goos:
       - darwin
       - linux
@@ -15,7 +15,7 @@ builds:
 archives:
   - format: tar.gz
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      hangar_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
         format: zip
@@ -27,6 +27,33 @@ release:
 
 checksum:
   name_template: 'checksums.txt'
+  algorithm: sha256
+
+# Sign the checksums manifest with minisign so install scripts can perform
+# offline-capable cryptographic integrity verification before extracting any archive.
+#
+# CI prerequisite (add to .github/workflows/release.yml before goreleaser runs):
+#   - name: Decrypt minisign key
+#     run: |
+#       echo "$MINISIGN_KEY" | base64 -d > hangar-release.key
+#       echo "MINISIGN_KEY_FILE=$PWD/hangar-release.key" >> $GITHUB_ENV
+#     env:
+#       MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+#       MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+#
+# This produces checksums.txt.minisig alongside checksums.txt in every release.
+# The matching public key is committed to keys/hangar-release.pub.
+signs:
+  - cmd: minisign
+    args:
+      - -Sm
+      - ${artifact}
+      - -s
+      - ${env.MINISIGN_KEY_FILE}
+    env:
+      - MINISIGN_PASSWORD=${env.MINISIGN_PASSWORD}
+    artifacts: checksum
+    signature: "${artifact}.minisig"
 
 changelog:
   use: github

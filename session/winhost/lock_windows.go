@@ -3,14 +3,11 @@
 package winhost
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -48,12 +45,6 @@ func controlPipeName() (string, error) {
 	return `\\.\pipe\claudesquad-host-` + sid, nil
 }
 
-func randomNonce() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
 // acquireLock opens (creating if needed) the lock file and takes an exclusive,
 // non-blocking lock for the lifetime of the returned file. The host owns this
 // lock for its whole run; a second host fails here and exits, guaranteeing a
@@ -83,19 +74,12 @@ func releaseLock(f *os.File) {
 	_ = f.Close()
 }
 
-func writeHostInfo(pipe string) error {
+func writeHostInfo(identity *hostIdentity) error {
 	p, err := hostInfoPath()
 	if err != nil {
 		return err
 	}
-	info := hostInfo{
-		PipeName:    pipe,
-		PID:         os.Getpid(),
-		CreatedUnix: time.Now().Unix(),
-		Nonce:       randomNonce(),
-		Version:     hostProtocolVersion(),
-	}
-	b, err := json.MarshalIndent(info, "", "  ")
+	b, err := json.MarshalIndent(identity.hostInfo(), "", "  ")
 	if err != nil {
 		return err
 	}
