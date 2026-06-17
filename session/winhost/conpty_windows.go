@@ -97,10 +97,12 @@ func (s *conptySession) start() error {
 	if err != nil {
 		return fmt.Errorf("create conpty: %w", err)
 	}
-	// Run via cmd.exe /c so PATH lookup and .cmd/.bat shims (e.g. npm-installed
-	// copilot) resolve like they do in a normal shell.
-	args := append([]string{"/c"}, fields...)
-	cmd := exec.Command("cmd.exe", args...)
+	// Run via powershell.exe so PATH lookup, .cmd/.bat shims, AND PowerShell
+	// functions/aliases from the user's $PROFILE all resolve. The profile is
+	// loaded (no -NoProfile) so functions like `cpa` defined in $PROFILE work
+	// as the agent program.
+	args := append([]string{"-Command"}, fields...)
+	cmd := exec.Command("powershell.exe", args...)
 	if s.workDir != "" {
 		cmd.Dir = s.workDir
 	}
