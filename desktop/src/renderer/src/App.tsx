@@ -75,6 +75,7 @@ export function App(): JSX.Element {
   const aliveRef = useRef<Map<string, boolean>>(new Map());
   const sessionNameRef = useRef<Map<string, string>>(new Map());
   const regeneratingRef = useRef<Map<string, boolean>>(new Map());
+  const waitingRef = useRef<Map<string, boolean>>(new Map());
   const connectionRef = useRef<ConnectionState>('connecting');
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,14 +99,32 @@ export function App(): JSX.Element {
       const nextAlive = new Map<string, boolean>();
       const nextSessionName = new Map<string, string>();
       const nextRegenerating = new Map<string, boolean>();
+      const nextWaiting = new Map<string, boolean>();
       for (const w of list) {
         nextAlive.set(w.id, w.alive);
         nextSessionName.set(w.id, w.sessionName);
         nextRegenerating.set(w.id, w.regenerating);
+        nextWaiting.set(w.id, w.waiting);
       }
+
+      // Notify when a workspace transitions to "waiting for input".
+      const prevWaiting = waitingRef.current;
+      if (prevWaiting.size > 0) {
+        for (const w of list) {
+          if (w.waiting && !prevWaiting.get(w.id)) {
+            void window.cs.notify({ title: 'Agent needs input', body: w.title, workspaceId: w.id });
+          }
+        }
+      }
+
+      // Update taskbar badge with total waiting count.
+      const waitingCount = list.filter((w) => w.waiting).length;
+      void window.cs.setBadge(waitingCount);
+
       aliveRef.current = nextAlive;
       sessionNameRef.current = nextSessionName;
       regeneratingRef.current = nextRegenerating;
+      waitingRef.current = nextWaiting;
       setWorkspaces(list);
       // Recover the status banner if a previous poll had errored (e.g. the daemon
       // restarted and the control pipe reconnected).
