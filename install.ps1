@@ -4,25 +4,8 @@
 param(
     [string]$Name = "cs",
     [string]$Version = "latest",
-    [string]$BinDir = "$env:LOCALAPPDATA\bin",
-    [switch]$SkipSignatureCheck
+    [string]$BinDir = "$env:LOCALAPPDATA\bin"
 )
-
-# Hard-coded Hangar release signing public key.
-# The matching private key is stored as the MINISIGN_KEY GitHub Actions secret.
-# Also committed (public key only) to keys/hangar-release.pub in this repository.
-# REPLACE this placeholder with the real key after running:
-#   minisign -G -p keys/hangar-release.pub -s hangar-release.key
-$HANGAR_PUBKEY = "RWSxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx=="
-
-$FORK_OWNER = "thirschel"
-$FORK_REPO  = "Hangar"
-
-# Pinned minisign version for Windows bootstrap (used only when minisign is not on PATH).
-# DO NOT change MINISIGN_PINNED_VERSION without also updating MINISIGN_BOOTSTRAP_SHA256.
-# Obtain the correct SHA256 from: https://github.com/jedisct1/minisign/releases
-$MINISIGN_PINNED_VERSION    = "0.11"
-$MINISIGN_BOOTSTRAP_SHA256  = "0000000000000000000000000000000000000000000000000000000000000000"  # PLACEHOLDER
 
 function Write-Status {
     param([string]$Message, [string]$Type = "Info")
@@ -115,7 +98,7 @@ function Test-Dependencies {
 
 function Get-LatestVersion {
     try {
-        $apiUrl = "https://api.github.com/repos/$FORK_OWNER/$FORK_REPO/releases"
+        $apiUrl = "https://api.github.com/repos/smtg-ai/claude-squad/releases"
         $releases = Invoke-RestMethod -Uri $apiUrl -Method Get
 
         if ($releases -and $releases.Count -gt 0) {
@@ -141,102 +124,31 @@ function Get-Architecture {
     }
 }
 
-function Install-Minisign {
-    param([string]$TempDir)
-
-    # Bootstrap minisign.exe from a pinned release, verifying its SHA256 before use.
-    # This is a single-level bootstrap: we trust the pinned hash hard-coded above.
-    # Update MINISIGN_PINNED_VERSION and MINISIGN_BOOTSTRAP_SHA256 when rotating.
-    $zipName    = "minisign-win64.zip"
-    $zipUrl     = "https://github.com/jedisct1/minisign/releases/download/$MINISIGN_PINNED_VERSION/$zipName"
-    $zipPath    = Join-Path $TempDir $zipName
-    $extractDir = Join-Path $TempDir "minisign-bootstrap"
-
-    Write-Status "Downloading minisign $MINISIGN_PINNED_VERSION for bootstrapping..." "Info"
-    try {
-        Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    }
-    catch {
-        throw "Failed to download minisign for bootstrap: $($_.Exception.Message)"
-    }
-
-    $actualHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLower()
-    if ($actualHash -ne $MINISIGN_BOOTSTRAP_SHA256.ToLower()) {
-        throw "FATAL: minisign bootstrap SHA256 mismatch!`n  Expected: $MINISIGN_BOOTSTRAP_SHA256`n  Got:      $actualHash`nAborting — update MINISIGN_BOOTSTRAP_SHA256 if you intentionally changed the pinned version."
-    }
-
-    Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-    $exe = Get-ChildItem -Recurse -Filter "minisign.exe" $extractDir | Select-Object -First 1
-    if (-not $exe) { throw "minisign.exe not found in bootstrap archive." }
-
-    Write-Status "minisign bootstrap verified (SHA256 OK)" "Success"
-    return $exe.FullName
-}
-
-function Download-And-Verify-Release {
+function Download-Release {
     param(
         [string]$Version,
         [string]$Architecture,
-        [string]$TempDir,
-        [bool]$SkipSig = $false
+        [string]$TempDir
     )
 
-    $releaseBase  = "https://github.com/$FORK_OWNER/$FORK_REPO/releases/download/v$Version"
-    $archiveName  = "hangar_${Version}_windows_${Architecture}.zip"
-    $sumsFile     = "checksums.txt"
-    $sigFile      = "checksums.txt.minisig"
-    $archivePath  = Join-Path $TempDir $archiveName
-    $sumsPath     = Join-Path $TempDir $sumsFile
-    $sigPath      = Join-Path $TempDir $sigFile
+    $platform = "windows"
+    $archiveExt = ".zip"
 
-    # Step 1: Download archive, checksums, and signature.
-    Write-Status "Downloading $archiveName ..." "Info"
+    $archiveName = "claude-squad_${Version}_${platform}_${Architecture}${archiveExt}"
+    $downloadUrl = "https://github.com/smtg-ai/claude-squad/releases/download/v${Version}/${archiveName}"
+    $downloadPath = Join-Path $TempDir $archiveName
+
+    Write-Status "Downloading from: $downloadUrl" "Info"
+
     try {
-        Invoke-WebRequest -Uri "$releaseBase/$archiveName" -OutFile $archivePath -UseBasicParsing
-        Invoke-WebRequest -Uri "$releaseBase/$sumsFile"    -OutFile $sumsPath    -UseBasicParsing
-        Invoke-WebRequest -Uri "$releaseBase/$sigFile"     -OutFile $sigPath     -UseBasicParsing
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadPath -UseBasicParsing
+        Write-Status "Download completed" "Success"
+        return $downloadPath
     }
     catch {
         Write-Status "Download failed: $($_.Exception.Message)" "Error"
         throw
     }
-    Write-Status "Download completed" "Success"
-
-    # Step 2: Verify minisign signature over checksums.txt (fails closed by default).
-    if ($SkipSig) {
-        Write-Status "" "Warning"
-        Write-Status "WARNING: -SkipSignatureCheck specified. Minisign verification SKIPPED." "Warning"
-        Write-Status "         Integrity is HTTPS-only. Use only for testing/debugging." "Warning"
-        Write-Status "" "Warning"
-    }
-    else {
-        $minisignExe = (Get-Command minisign -ErrorAction SilentlyContinue)?.Source
-        if (-not $minisignExe) {
-            Write-Status "minisign not found on PATH — bootstrapping from pinned release..." "Info"
-            $minisignExe = Install-Minisign -TempDir $TempDir
-        }
-
-        & $minisignExe -Vm $sumsPath -P $HANGAR_PUBKEY -x $sigPath
-        if ($LASTEXITCODE -ne 0) {
-            throw "FATAL: Checksum file signature verification FAILED. Aborting."
-        }
-        Write-Status "✓ Minisign signature verified." "Success"
-    }
-
-    # Step 3: Verify SHA256 of archive against the (now-verified) checksums.txt.
-    $expectedLine = (Get-Content $sumsPath | Where-Object { $_ -match [regex]::Escape($archiveName) })
-    if (-not $expectedLine) {
-        throw "FATAL: Archive '$archiveName' not found in checksums.txt. Aborting."
-    }
-    $expectedHash = ($expectedLine -split '\s+')[0].ToLower()
-    $actualHash   = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLower()
-
-    if ($actualHash -ne $expectedHash) {
-        throw "FATAL: SHA256 mismatch for ${archiveName}!`n  Expected: $expectedHash`n  Got:      $actualHash`nAborting — do not proceed with a tampered archive."
-    }
-    Write-Status "✓ SHA256 checksum verified." "Success"
-
-    return $archivePath
 }
 
 function Extract-Archive {
@@ -263,7 +175,7 @@ function Install-Binary {
         [string]$InstallName
     )
 
-    $sourcePath = Join-Path $ExtractDir "hangar.exe"
+    $sourcePath = Join-Path $ExtractDir "claude-squad.exe"
     $targetPath = Join-Path $BinDir "$InstallName.exe"
 
     # Create bin directory if it doesn't exist
@@ -331,8 +243,8 @@ function Test-Installation {
 
 # Main installation process
 function Main {
-    Write-Status "Hangar Windows Installer" "Info"
-    Write-Status "=========================" "Info"
+    Write-Status "Claude Squad Windows Installer" "Info"
+    Write-Status "================================" "Info"
 
     # Check dependencies
     if (-not (Test-Dependencies)) {
@@ -357,15 +269,15 @@ function Main {
     Write-Status "Detected architecture: $architecture" "Info"
 
     # Create temporary directory
-    $tempDir = Join-Path $env:TEMP "hangar-install"
+    $tempDir = Join-Path $env:TEMP "claude-squad-install"
     if (Test-Path $tempDir) {
         Remove-Item $tempDir -Recurse -Force
     }
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
     try {
-        # Download and verify release
-        $archivePath = Download-And-Verify-Release -Version $Version -Architecture $architecture -TempDir $tempDir -SkipSig $SkipSignatureCheck.IsPresent
+        # Download release
+        $archivePath = Download-Release -Version $Version -Architecture $architecture -TempDir $tempDir
 
         # Extract archive
         $extractDir = Join-Path $tempDir "extract"
