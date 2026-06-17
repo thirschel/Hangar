@@ -43,6 +43,7 @@ type workspace struct {
 	CreatedUnix    int64  `json:"createdUnix"`
 	RunCommand     string `json:"runCommand"`
 	AgentSessionID string `json:"agentSessionId"` // stable agent session UUID for resume (copilot)
+	Shell          string `json:"shell,omitempty"` // "cmd", "powershell", "pwsh"; empty = config default
 }
 
 type workspaceManager struct {
@@ -445,7 +446,11 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 		m.host.killSession(sessionName)
 	}
 	cols, rows = sizeOr(cols, 120), sizeOr(rows, 30)
-	if err := m.host.startManagedSession(w.SessionName, agentcmd.ResumeCommand(w.Program, w.AgentSessionID), w.WorktreePath, cols, rows, w.AutoYes); err != nil {
+	shell := w.Shell
+	if shell == "" {
+		shell = "cmd"
+	}
+	if err := m.host.startManagedSessionWithShell(w.SessionName, agentcmd.ResumeCommand(w.Program, w.AgentSessionID), w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -794,7 +799,7 @@ func (m *workspaceManager) logScreenTail(id, label string) {
 }
 
 func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
-	var oldName, newName, program, worktree, agentSessionID string
+	var oldName, newName, program, worktree, agentSessionID, shell string
 	var autoYes bool
 	m.mu.Lock()
 	w := m.wss[id]
@@ -809,7 +814,10 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 	} else {
 		w.AgentSessionID = ""
 	}
-	newName, program, worktree, agentSessionID, autoYes = w.SessionName, w.Program, w.WorktreePath, w.AgentSessionID, w.AutoYes
+	newName, program, worktree, agentSessionID, autoYes, shell = w.SessionName, w.Program, w.WorktreePath, w.AgentSessionID, w.AutoYes, w.Shell
+	if shell == "" {
+		shell = "cmd"
+	}
 	m.saveLocked()
 	m.mu.Unlock()
 
@@ -824,7 +832,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 
 	var lastErr error
 	for attempt := 0; attempt < 8; attempt++ {
-		err := m.host.startManagedSession(newName, agentcmd.SeedNewCommand(program, agentSessionID), worktree, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+		err := m.host.startManagedSessionWithShell(newName, agentcmd.SeedNewCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
 		if err == nil {
 			return nil
 		}
@@ -854,27 +862,37 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	if title == "" {
 		title = defaultTitle(req.RepoPath)
 	}
+	cfg := config.LoadConfig()
 	program := req.Program
 	if program == "" {
-		program = config.LoadConfig().GetProgram()
+		program = cfg.GetProgram()
+	}
+	shell := req.Shell
+	if shell == "" {
+		shell = cfg.DefaultShell
+	}
+	if shell == "" {
+		shell = "cmd"
 	}
 
-	// Validate the agent program resolves on PATH *before* creating any worktree
-	// or session. A bad/typo'd agent (e.g. a stale "test-program" default) would
-	// otherwise leave an orphan worktree plus a session that dies the instant it
-	// launches; fail fast with a clear message and create nothing instead.
-	//
-	// If the program isn't found as an executable, also check whether it exists as
-	// a PowerShell command (function, alias, cmdlet) since the ConPTY session
-	// launches via powershell.exe.
+	// Validate the agent program resolves *before* creating any worktree or
+	// session. For cmd, check PATH; for powershell/pwsh, also probe Get-Command.
 	if fields := strings.Fields(program); len(fields) == 0 {
 		return proto.Errorf(req.ID, "no agent program configured")
 	} else if _, err := exec.LookPath(fields[0]); err != nil {
-		// Check if it's a valid PowerShell command (function/alias/cmdlet).
-		probe := exec.Command("powershell.exe", "-NoProfile", "-Command",
-			fmt.Sprintf("if (Get-Command '%s' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }", fields[0]))
-		if probeErr := probe.Run(); probeErr != nil {
-			return proto.Errorf(req.ID, "agent program %q not found on PATH or as a PowerShell command (set a valid agent such as 'copilot' or 'claude'): %v", fields[0], err)
+		if shell == "powershell" || shell == "pwsh" {
+			psExe := "powershell.exe"
+			if shell == "pwsh" {
+				psExe = "pwsh.exe"
+			}
+			probe := exec.Command(psExe, "-NoProfile", "-Command",
+				fmt.Sprintf("if (Get-Command '%s' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }", fields[0]))
+			hideConsole(probe)
+			if probeErr := probe.Run(); probeErr != nil {
+				return proto.Errorf(req.ID, "agent program %q not found on PATH or as a PowerShell command (set a valid agent such as 'copilot' or 'claude'): %v", fields[0], err)
+			}
+		} else {
+			return proto.Errorf(req.ID, "agent program %q not found on PATH (set a valid agent such as 'copilot' or 'claude'): %v", fields[0], err)
 		}
 	}
 
@@ -908,7 +926,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSession(sessionName, agentcmd.SeedNewCommand(program, agentSessionID), wt.GetWorktreePath(), cols, rows, req.AutoYes); err != nil {
+	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedNewCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
 		// Roll back the worktree so a failed create leaves no orphan.
 		_ = wt.Remove()
 		_ = wt.Prune()
@@ -919,7 +937,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		ID: id, Title: title, Program: program, RepoPath: wt.GetRepoPath(),
 		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
 		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: req.BaseBranch != "",
-		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID,
+		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID, Shell: shell,
 	}
 	m.mu.Lock()
 	m.wss[id] = w

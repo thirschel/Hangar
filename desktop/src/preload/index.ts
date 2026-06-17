@@ -38,6 +38,7 @@ export type CreateWorkspaceArgs = {
   program?: string;
   baseBranch?: string;
   autoYes?: boolean;
+  shell?: string;
 };
 
 export type RunOutput = {
@@ -75,6 +76,7 @@ const api = {
       program: args.program,
       baseBranch: args.baseBranch,
       autoYes: args.autoYes,
+      shell: args.shell,
     });
     if (!r.ok || !r.workspace) throw new Error(r.error || 'CreateWorkspace failed');
     return r.workspace;

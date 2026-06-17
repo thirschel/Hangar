@@ -46,6 +46,9 @@ type Config struct {
 	// WorktreeDir is the base directory under which per-workspace git worktrees are
 	// created. When empty, worktrees are created under <configDir>/worktrees.
 	WorktreeDir string `json:"worktree_dir,omitempty"`
+	// DefaultShell is the shell used to launch agent programs in ConPTY sessions.
+	// Supported values: "cmd", "powershell", "pwsh". Default is "cmd".
+	DefaultShell string `json:"default_shell,omitempty"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
 	// DisableSidebarMotion disables the sidebar row animations (pulse/crossfade).
