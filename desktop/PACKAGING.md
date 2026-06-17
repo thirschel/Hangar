@@ -13,11 +13,11 @@ installer that bundles the Go core-daemon (`cs.exe`).
    go build -o dist\cs.exe .
    ```
 
-2. (Re)generate the icons if you change `scripts/make-icons.js`:
-
-   ```pwsh
-   npm run make-icons   # writes build/icon.png (256) and build/tray.png (32)
-   ```
+2. The app icons are committed in `build/`: **`icon.ico`** (installer/exe, multi-size
+   16/32/48/64/128/256 — used by `electron-builder.yml` → `win.icon`), **`icon.png`** (256,
+   the window + notification icon), and **`tray.png`** (32) + **`tray@2x.png`** (64) for the
+   system tray. To rebrand, replace those files. `npm run make-icons` only writes a no-dep
+   **placeholder** and **no-ops when `build/icon.ico` exists**, so it won't clobber the real icons.
 
 ## Build the app
 

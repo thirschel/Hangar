@@ -25,7 +25,7 @@ extraResources:
 win:
   target:
     - nsis
-  icon: build/icon.png
+  icon: build/icon.ico
   # No code-signing configured here — see PACKAGING.md. Set CSC_LINK / CSC_KEY_PASSWORD
   # (or an Azure Trusted Signing config) to produce a signed installer.
 
