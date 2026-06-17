@@ -18,7 +18,7 @@ type ConnectionState = 'connecting' | 'connected' | 'error';
 const SIDE_MIN = 320;
 const SIDE_DEFAULT = 420;
 const SIDE_KEY = 'cs.sideWidth';
-const SIDEBAR_W = 240;
+const SIDEBAR_W = 280;
 const CENTER_MIN = 360;
 const GUTTER_W = 6;
 
