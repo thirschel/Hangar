@@ -10,6 +10,7 @@ export type DaemonConfig = {
   daemon_poll_interval?: number;
   branch_prefix?: string;
   worktree_dir?: string;
+  default_shell?: string;
   [key: string]: unknown;
 };
 
@@ -24,6 +25,7 @@ export type AppSettings = {
 // The merged, flat view the renderer's Settings UI works with.
 export type Settings = {
   defaultProgram: string;
+  defaultShell: string;
   autoYes: boolean;
   branchPrefix: string;
   workspaceDir: string;
@@ -71,6 +73,7 @@ export function getSettings(): Settings {
   const app = readAppSettings();
   return {
     defaultProgram: (cfg.default_program as string) || 'copilot',
+    defaultShell: (cfg.default_shell as string) || 'cmd',
     autoYes: Boolean(cfg.auto_yes),
     branchPrefix: (cfg.branch_prefix as string) || '',
     workspaceDir: (cfg.worktree_dir as string) || '',
@@ -88,6 +91,8 @@ export function applySettings(patch: Partial<Settings>): Settings {
   const cfg = readDaemonConfig();
   if (patch.defaultProgram !== undefined)
     cfg.default_program = patch.defaultProgram.trim() || 'copilot';
+  if (patch.defaultShell !== undefined)
+    cfg.default_shell = patch.defaultShell || 'cmd';
   if (patch.autoYes !== undefined) cfg.auto_yes = patch.autoYes;
   if (patch.branchPrefix !== undefined) cfg.branch_prefix = patch.branchPrefix;
   if (patch.workspaceDir !== undefined) {

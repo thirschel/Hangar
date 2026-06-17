@@ -35,6 +35,7 @@ type conptySession struct {
 	name    string
 	program string
 	workDir string
+	shell   string // "cmd", "powershell", "pwsh"
 
 	pty xpty.Pty
 	cmd *exec.Cmd
@@ -71,11 +72,12 @@ type conptySession struct {
 	closeOnce   sync.Once
 }
 
-func newConptySession(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
+func newConptySession(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
 	return &conptySession{
 		name:         name,
 		program:      program,
 		workDir:      workDir,
+		shell:        shell,
 		cols:         cols,
 		rows:         rows,
 		detCols:      cols,
@@ -97,12 +99,16 @@ func (s *conptySession) start() error {
 	if err != nil {
 		return fmt.Errorf("create conpty: %w", err)
 	}
-	// Run via powershell.exe so PATH lookup, .cmd/.bat shims, AND PowerShell
-	// functions/aliases from the user's $PROFILE all resolve. The profile is
-	// loaded (no -NoProfile) so functions like `cpa` defined in $PROFILE work
-	// as the agent program.
-	args := append([]string{"-Command"}, fields...)
-	cmd := exec.Command("powershell.exe", args...)
+
+	var cmd *exec.Cmd
+	switch s.shell {
+	case "powershell":
+		cmd = exec.Command("powershell.exe", append([]string{"-Command"}, fields...)...)
+	case "pwsh":
+		cmd = exec.Command("pwsh.exe", append([]string{"-Command"}, fields...)...)
+	default: // "cmd" or empty
+		cmd = exec.Command("cmd.exe", append([]string{"/c"}, fields...)...)
+	}
 	if s.workDir != "" {
 		cmd.Dir = s.workDir
 	}

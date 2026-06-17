@@ -102,6 +102,8 @@ export interface Request {
   sinceOffset?: number;
   // Regenerate (v5)
   handoff?: boolean;
+  // Shell selection
+  shell?: string;
 }
 
 export interface Response {

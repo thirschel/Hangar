@@ -1220,7 +1220,8 @@ body.is-col-resizing .side-panel {
 .field > span {
   color: var(--text-muted);
 }
-.field input {
+.field input,
+.field select {
   background: var(--bg-base);
   color: var(--text);
   border: 1px solid var(--border-strong);
@@ -1232,9 +1233,18 @@ body.is-col-resizing .side-panel {
     border-color var(--dur-fast) var(--ease),
     box-shadow var(--dur-fast) var(--ease);
 }
-.field input:focus {
+.field input:focus,
+.field select:focus {
   border-color: var(--accent);
   box-shadow: var(--shadow-focus);
+}
+.create-form select {
+  background: var(--bg-base);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  font-size: var(--fs-md);
 }
 .field--row {
   flex-direction: row;

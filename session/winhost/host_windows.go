@@ -68,7 +68,7 @@ func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
 		newSession: func(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
-			return newConptySession(name, program, workDir, cols, rows, autoYes)
+				return newConptySession(name, program, workDir, "cmd", cols, rows, autoYes)
 		},
 		lastActive:  time.Now(),
 		idleTimeout: idle,
@@ -289,18 +289,24 @@ func (h *host) createSession(req *proto.Request) *proto.Response {
 // shared path used by both the CreateSession RPC and the workspace manager (so
 // workspaces own their agent terminal directly, not via an RPC-to-self).
 func (h *host) startManagedSession(name, program, workDir string, cols, rows int, autoYes bool) error {
+	return h.startManagedSessionWithShell(name, program, workDir, "cmd", cols, rows, autoYes)
+}
+
+// startManagedSessionWithShell is like startManagedSession but accepts a shell
+// parameter ("cmd", "powershell", "pwsh") controlling how the program is launched.
+func (h *host) startManagedSessionWithShell(name, program, workDir, shell string, cols, rows int, autoYes bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.sessions[name]; exists {
 		return fmt.Errorf("session already exists: %s", name)
 	}
-	s := h.newSession(name, program, workDir, cols, rows, autoYes)
+	s := newConptySession(name, program, workDir, shell, cols, rows, autoYes)
 	if err := s.start(); err != nil {
 		return fmt.Errorf("start session: %w", err)
 	}
 	h.sessions[name] = s
 	h.lastActive = time.Now()
-	h.logger.Printf("created session %q (program=%q cols=%d rows=%d)", name, program, cols, rows)
+	h.logger.Printf("created session %q (program=%q shell=%q cols=%d rows=%d)", name, program, shell, cols, rows)
 	return nil
 }
 
