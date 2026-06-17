@@ -876,7 +876,8 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 
 	// Validate the agent program resolves *before* creating any worktree or
-	// session. For cmd, check PATH; for powershell/pwsh, also probe Get-Command.
+	// session. For cmd, check PATH; for powershell/pwsh, also probe Get-Command
+	// (with profile loaded so functions like `cpa` are visible).
 	if fields := strings.Fields(program); len(fields) == 0 {
 		return proto.Errorf(req.ID, "no agent program configured")
 	} else if _, err := exec.LookPath(fields[0]); err != nil {
@@ -885,7 +886,9 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 			if shell == "pwsh" {
 				psExe = "pwsh.exe"
 			}
-			probe := exec.Command(psExe, "-NoProfile", "-Command",
+			// -WindowStyle Hidden prevents the blue PowerShell window flash.
+			// No -NoProfile so $PROFILE functions are visible to Get-Command.
+			probe := exec.Command(psExe, "-WindowStyle", "Hidden", "-Command",
 				fmt.Sprintf("if (Get-Command '%s' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }", fields[0]))
 			hideConsole(probe)
 			if probeErr := probe.Run(); probeErr != nil {
