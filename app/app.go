@@ -5,6 +5,8 @@ import (
 	"claude-squad/keys"
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/session/agentcmd"
+	"claude-squad/session/copilot"
 	"claude-squad/session/git"
 	"claude-squad/session/winhost"
 	"claude-squad/ui"
@@ -12,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +52,8 @@ const (
 	stateConfirm
 	// stateSearch is the state when the sidebar search/filter input is open.
 	stateSearch
+	// stateBrowse is the state when the Copilot session browser is displayed.
+	stateBrowse
 )
 
 type home struct {
@@ -125,6 +130,12 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// sessionBrowser displays discovered Copilot sessions
+	sessionBrowser *ui.SessionBrowser
+	// resumedSessionIDs tracks Copilot sessions already resumed into workspaces
+	resumedSessionIDs map[string]bool
+	// copilotIndex is the lazily-built content search index backing the browser
+	copilotIndex *copilot.Index
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -142,17 +153,19 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	}
 
 	h := &home{
-		ctx:          ctx,
-		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
-		errBox:       ui.NewErrBox(),
-		storage:      storage,
-		appConfig:    appConfig,
-		program:      program,
-		autoYes:      autoYes,
-		state:        stateDefault,
-		appState:     appState,
+		ctx:               ctx,
+		spinner:           spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		menu:              ui.NewMenu(),
+		tabbedWindow:      ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		errBox:            ui.NewErrBox(),
+		storage:           storage,
+		appConfig:         appConfig,
+		program:           program,
+		autoYes:           autoYes,
+		state:             stateDefault,
+		appState:          appState,
+		sessionBrowser:    ui.NewSessionBrowser(),
+		resumedSessionIDs: make(map[string]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 	// Restore the persisted sidebar mode (unknown values fall back to Manual).
@@ -183,6 +196,11 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		if autoYes {
 			instance.SetAutoYes(true)
 		}
+		// Re-seed the resumed-session guard so a session resumed before a restart is
+		// recognized as already open (selecting it) instead of colliding on its branch.
+		if instance.AgentSessionID != "" {
+			h.resumedSessionIDs[instance.AgentSessionID] = true
+		}
 	}
 	// Don't flash the initial paint: baseline the animator to the loaded layout.
 	h.list.ResetMotion()
@@ -204,6 +222,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
+	m.sessionBrowser.SetSize(msg.Width, contentHeight)
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -278,6 +297,31 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+	case sessionsLoadedMsg:
+		if msg.err != nil {
+			return m, m.handleError(msg.err)
+		}
+		m.sessionBrowser.SetSessions(msg.sessions)
+		m.sessionBrowser.SetSkipped(msg.skipped)
+		m.sessionBrowser.SetIndexing(true)
+		// Build/refresh the content index off the UI thread. Until it is ready the
+		// browser filters on metadata only.
+		return m, buildCopilotIndexCmd(msg.sessions)
+	case indexReadyMsg:
+		m.sessionBrowser.SetIndexing(false)
+		if msg.err != nil {
+			log.WarningLog.Printf("copilot index: %v", msg.err)
+		}
+		if msg.index != nil {
+			m.copilotIndex = msg.index
+			idx := msg.index
+			m.sessionBrowser.SetFilterFunc(func(sessions []copilot.Session, query string) []copilot.Session {
+				return idx.Search(context.Background(), sessions, query)
+			})
+			// Re-apply the current query so results reflect the content index.
+			m.sessionBrowser.SetQuery(m.sessionBrowser.Query())
+		}
+		return m, nil
 	case metadataUpdateDoneMsg:
 		// One timestamp for the whole batch so instances updated in the same tick
 		// compare equal in "recent activity" ordering (anti-thrash, R2).
@@ -383,6 +427,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list.SelectInstance(msg.instance)
 
 		if msg.err != nil {
+			// If a resumed session failed to start, drop it from the resumed set so the
+			// user can try again.
+			if msg.instance != nil && msg.instance.AgentSessionID != "" {
+				delete(m.resumedSessionIDs, msg.instance.AgentSessionID)
+			}
 			// Remove the exact instance that failed to start and restore any filter.
 			m.list.RemoveInstance(msg.instance)
 			m.untrackNewInstance(msg.instance, true)
@@ -439,7 +488,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateSearch {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm || m.state == stateSearch || m.state == stateBrowse {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -668,6 +717,32 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	if m.state == stateBrowse {
+		if msg.String() == "ctrl+c" {
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, tea.WindowSize()
+		}
+		if msg.String() == "ctrl+r" {
+			// Force a full re-scan and index rebuild (ignore the cached index).
+			if path, err := copilot.IndexPath(); err == nil {
+				_ = os.Remove(path)
+			}
+			return m, m.loadCopilotSessionsCmd()
+		}
+		action, cmd := m.sessionBrowser.HandleKeyPress(msg)
+		switch action {
+		case ui.BrowserActionClose:
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			return m, tea.Batch(tea.WindowSize(), cmd)
+		case ui.BrowserActionRestart:
+			return m.handleSessionRestart(m.sessionBrowser.GetSelected())
+		default:
+			return m, cmd
+		}
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -704,6 +779,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeySearch:
 		return m.enterSearch()
+	case keys.KeyBrowse:
+		m.state = stateBrowse
+		m.menu.SetState(ui.StateBrowse)
+		m.sessionBrowser.SetQuery("")
+		return m, tea.Batch(tea.WindowSize(), m.loadCopilotSessionsCmd())
 	case keys.KeyPrompt:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
@@ -1084,6 +1164,41 @@ func (m *home) instanceChanged() tea.Cmd {
 
 type keyupMsg struct{}
 
+type sessionsLoadedMsg struct {
+	sessions []copilot.Session
+	skipped  int
+	err      error
+}
+
+func (m *home) loadCopilotSessionsCmd() tea.Cmd {
+	return func() tea.Msg {
+		sessions, skipped, err := copilot.DiscoverWithStats()
+		return sessionsLoadedMsg{sessions: sessions, skipped: skipped, err: err}
+	}
+}
+
+// indexReadyMsg is delivered when the Copilot content index finishes building.
+type indexReadyMsg struct {
+	index *copilot.Index
+	err   error
+}
+
+// buildCopilotIndexCmd opens and refreshes the on-disk content index off the UI
+// thread (discovery + content scan are the expensive part; the resulting in-memory
+// index makes per-keystroke search trivially fast).
+func buildCopilotIndexCmd(sessions []copilot.Session) tea.Cmd {
+	return func() tea.Msg {
+		idx, err := copilot.OpenIndex()
+		if err != nil {
+			return indexReadyMsg{err: err}
+		}
+		if buildErr := idx.Build(context.Background(), sessions); buildErr != nil {
+			return indexReadyMsg{index: idx, err: buildErr}
+		}
+		return indexReadyMsg{index: idx}
+	}
+}
+
 // keydownCallback clears the menu option highlighting after 500ms.
 func (m *home) keydownCallback(name keys.KeyName) tea.Cmd {
 	m.menu.Keydown(name)
@@ -1279,6 +1394,159 @@ func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
 	return overlay.NewTextInputOverlayWithBranchPicker("Enter prompt", "", m.appConfig.GetProfiles())
 }
 
+// handleSessionRestart resumes the selected Copilot session as a new, isolated
+// claude-squad workspace launched with `copilot --resume=<id>`. The new worktree is
+// created in the session's FROZEN origin repo on a new, uniquely-named branch based on
+// the session's recorded HEAD; the session's original branch is never reused, checked
+// out, or deleted. Resuming a session that is in use, or already resumed in this TUI,
+// is blocked; resuming into a different repo asks for confirmation first.
+func (m *home) handleSessionRestart(sel *copilot.Session) (tea.Model, tea.Cmd) {
+	if sel == nil {
+		return m, nil
+	}
+
+	if m.list.NumInstances() >= GlobalInstanceLimit {
+		return m, m.handleError(fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+	}
+
+	// Guard: already resumed in this TUI — select the existing workspace rather than
+	// opening a second writer to the same session folder.
+	if m.resumedSessionIDs[sel.ID] {
+		for _, inst := range m.list.GetInstances() {
+			if inst.AgentSessionID == sel.ID {
+				m.list.SelectInstance(inst)
+				break
+			}
+		}
+		m.state = stateDefault
+		m.menu.SetState(ui.StateDefault)
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged(),
+			m.handleError(fmt.Errorf("session %q is already open in this session", sel.DisplayName())))
+	}
+
+	// Guard: a session that is actively in use must not be resumed — two writers
+	// would corrupt events.jsonl. Re-check the lock live, since the discovery-time
+	// flag may be stale by now.
+	if sel.InUse || copilot.IsInUse(sel.Dir) {
+		return m, m.handleError(fmt.Errorf("session %q is currently in use; close it before resuming", sel.DisplayName()))
+	}
+
+	// Resolve the target repo from the FROZEN origin, falling back to the current repo
+	// (never the likely-deleted cwd) when the origin repo is missing on disk.
+	targetRepo := sel.OriginRoot
+	originMissing := false
+	if targetRepo == "" {
+		originMissing = true
+	} else if info, err := os.Stat(targetRepo); err != nil || !info.IsDir() {
+		originMissing = true
+	}
+	if originMissing {
+		targetRepo = "."
+	}
+
+	// Compare against the current repo (best-effort path comparison) so we can confirm
+	// before creating a worktree in a different repository.
+	absTarget, _ := filepath.Abs(targetRepo)
+	currentDir, _ := os.Getwd()
+	absCurrent, _ := filepath.Abs(currentDir)
+	crossRepo := !originMissing && !strings.EqualFold(filepath.Clean(absTarget), filepath.Clean(absCurrent))
+
+	if crossRepo {
+		message := fmt.Sprintf("Resume in %s? A new worktree/branch will be created there.", filepath.Base(absTarget))
+		// The confirmation callback runs synchronously and discards returned cmds, so
+		// performResume starts the instance synchronously on confirm.
+		return m, m.confirmAction(message, func() tea.Msg {
+			m.performResume(sel, targetRepo, false, "")
+			return nil
+		})
+	}
+
+	warn := ""
+	if originMissing && sel.OriginRoot != "" {
+		warn = fmt.Sprintf("origin repo %q not found; resuming in the current repo (file context may not match)", sel.OriginRoot)
+	}
+	return m.performResume(sel, targetRepo, true, warn)
+}
+
+// buildResumeInstance constructs (but does not start) the Instance that resumes sel.
+// The title carries a short id suffix so resuming distinct sessions — or the same
+// session after a restart — never collides on the host session name or branch.
+func (m *home) buildResumeInstance(sel *copilot.Session, targetRepo string) (*session.Instance, error) {
+	idSuffix := sel.ID
+	if len(idSuffix) > 6 {
+		idSuffix = idSuffix[:6]
+	}
+	name := sel.DisplayName()
+	if r := []rune(name); len(r) > 20 {
+		name = strings.TrimSpace(string(r[:20]))
+	}
+	title := fmt.Sprintf("%s (resume %s)", name, idSuffix)
+
+	// Resuming a Copilot session requires a copilot launch command. If the configured
+	// agent isn't copilot, fall back to plain "copilot" so --resume is honored.
+	program := m.program
+	if !agentcmd.SupportsResume(program) {
+		program = "copilot"
+	}
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title:   title,
+		Path:    targetRepo,
+		Program: program,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Marks this instance as a RESUME (-> launch with --resume=<id>) and bases the new
+	// branch on the session's recorded origin HEAD.
+	inst.AgentSessionID = sel.ID
+	inst.BaseCommit = sel.OriginHead
+	return inst, nil
+}
+
+// performResume registers the resumed instance in the list and starts it. When async
+// is true (same-repo path) the start runs in the background and completion is delivered
+// via instanceStartedMsg; when false (the confirmed cross-repo path, whose returned cmd
+// is discarded by the confirmation overlay) the start runs synchronously and is
+// persisted here.
+func (m *home) performResume(sel *copilot.Session, targetRepo string, async bool, warn string) (tea.Model, tea.Cmd) {
+	inst, err := m.buildResumeInstance(sel, targetRepo)
+	if err != nil {
+		return m, m.handleError(err)
+	}
+
+	finalize := m.list.AddInstance(inst)
+	m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+	inst.SetStatus(session.Loading)
+	finalize()
+	m.resumedSessionIDs[sel.ID] = true
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+
+	if !async {
+		if startErr := inst.Start(true); startErr != nil {
+			m.list.RemoveInstance(inst)
+			delete(m.resumedSessionIDs, sel.ID)
+			return m, m.handleError(startErr)
+		}
+		m.list.SelectInstance(inst)
+		if saveErr := m.storage.SaveInstances(m.list.GetInstances()); saveErr != nil {
+			return m, m.handleError(saveErr)
+		}
+		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+	}
+
+	startCmd := func() tea.Msg {
+		startErr := inst.Start(true)
+		return instanceStartedMsg{instance: inst, err: startErr}
+	}
+	cmds := []tea.Cmd{tea.WindowSize(), m.instanceChanged(), startCmd}
+	if warn != "" {
+		cmds = append(cmds, m.handleError(fmt.Errorf("%s", warn)))
+	}
+	return m, tea.Batch(cmds...)
+}
+
 // cancelPromptOverlay cancels the prompt overlay, cleaning up the unstarted
 // new instance (if any) by identity and restoring any suspended filter.
 func (m *home) cancelPromptOverlay() tea.Cmd {
@@ -1346,6 +1614,9 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+	} else if m.state == stateBrowse {
+		browserView := lipgloss.NewStyle().PaddingTop(1).Render(m.sessionBrowser.String())
+		return lipgloss.JoinVertical(lipgloss.Center, browserView, m.menu.String(), m.errBox.String())
 	}
 
 	return mainView
