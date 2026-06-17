@@ -101,6 +101,24 @@ const api = {
     const r = await rpc({ method: 'SetWorkspaceAutoYes', workspaceId: id, enabled });
     if (!r.ok) throw new Error(r.error || 'SetWorkspaceAutoYes failed');
   },
+  regenerateAgent: async (
+    id: string,
+    handoff: boolean,
+    size?: { cols?: number; rows?: number },
+  ): Promise<void> => {
+    const r = await rpc({
+      method: 'RegenerateAgent',
+      workspaceId: id,
+      handoff,
+      cols: size?.cols,
+      rows: size?.rows,
+    });
+    if (!r.ok) throw new Error(r.error || 'RegenerateAgent failed');
+  },
+  forceRegenerate: async (id: string): Promise<void> => {
+    const r = await rpc({ method: 'ForceRegenerate', workspaceId: id });
+    if (!r.ok) throw new Error(r.error || 'ForceRegenerate failed');
+  },
   commitWorkspace: async (id: string, message: string): Promise<string> => {
     const r = await rpc({ method: 'WorkspaceCommit', workspaceId: id, message });
     if (!r.ok) throw new Error(r.error || 'WorkspaceCommit failed');
