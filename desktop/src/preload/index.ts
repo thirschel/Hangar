@@ -83,8 +83,12 @@ const api = {
     const r = await rpc({ method: 'GenerateWorkspaceTitle', workspaceId, message });
     if (!r.ok) throw new Error(r.error || 'GenerateWorkspaceTitle failed');
   },
-  archiveWorkspace: async (id: string): Promise<void> => {
-    const r = await rpc({ method: 'ArchiveWorkspace', workspaceId: id });
+  archiveWorkspace: async (id: string, options?: { deleteWorktree?: boolean }): Promise<void> => {
+    const r = await rpc({ 
+      method: 'ArchiveWorkspace', 
+      workspaceId: id,
+      deleteWorktree: options?.deleteWorktree ?? false,
+    });
     if (!r.ok) throw new Error(r.error || 'ArchiveWorkspace failed');
   },
   workspaceFiles: async (id: string): Promise<FileDiffInfo[]> => {

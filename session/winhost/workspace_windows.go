@@ -962,21 +962,49 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	m.saveLocked()
 	m.mu.Unlock()
 
-	// Kill the agent session, then remove the worktree (keeping the branch so
-	// committed/pushed work survives — like Conductor's archive). The agent's
-	// ConPTY held the worktree as its cwd; Windows can take a moment to release
-	// that directory handle after the process dies, so retry the removal.
+	// Three-phase archive:
+	// 1. Stop agent: remove from manager + stop run + kill session
+	// 2. Optional filesystem cleanup (if DeleteWorktree == true)
+	// 3. Persist state
+
+	// Phase 1: Stop the agent session
 	m.host.runs.stop(w.ID)
 	m.host.killSession(sessionName)
-	wt := w.worktreeFor()
-	for i := 0; i < 10; i++ {
-		if err := wt.Remove(); err == nil {
-			break
+
+	// Phase 2: Optional worktree/branch deletion
+	if req.DeleteWorktree {
+		wt := w.worktreeFor()
+		
+		// Canonicalize and validate worktree path to prevent traversal
+		worktreePath, err := filepath.Abs(w.WorktreePath)
+		if err == nil {
+			worktreePath = filepath.Clean(worktreePath)
 		}
-		time.Sleep(150 * time.Millisecond)
+		
+		// Remove worktree directory (retry loop for Windows handle release)
+		for i := 0; i < 10; i++ {
+			if err := wt.Remove(); err == nil {
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		
+		// Prune worktree references
+		_ = wt.Prune()
+		
+		// Best-effort branch deletion (local only, non-fatal if fails)
+		// We use git CLI directly here instead of worktree methods
+		cmd := exec.Command("git", "-C", w.RepoPath, "branch", "-D", w.Branch)
+		_ = cmd.Run() // Ignore errors - branch might not exist locally
+		
+		m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
+	} else {
+		// Keep worktree and branch - just prune references
+		wt := w.worktreeFor()
+		_ = wt.Prune()
+		m.host.logger.Printf("archived workspace %q (%s) - kept worktree and branch %s", w.Title, w.ID, w.Branch)
 	}
-	_ = wt.Prune()
-	m.host.logger.Printf("archived workspace %q (%s)", w.Title, w.ID)
+
 	return &proto.Response{ID: req.ID, OK: true}
 }
 

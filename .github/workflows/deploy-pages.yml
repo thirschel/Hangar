@@ -36,13 +36,14 @@ jobs:
       - name: Install dependencies
         run: cd web && npm ci
 
-      - name: Update Next.js config for static export
-        run: |
-          cd web
-          # Add output: 'export' to next.config.ts
+      - name: Lint
+        run: cd web && npm run lint
 
       - name: Build website
         run: cd web && npm run build
+
+      - name: Verify static export
+        run: cd web && npm run verify
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

@@ -112,6 +112,10 @@ type Request struct {
 	// Regenerate (v5): when true the regenerate first asks the live agent to write
 	// HANDOFF.md and seeds the fresh agent with it. Reuses Cols/Rows for the PTY.
 	Handoff bool `json:"handoff,omitempty"`
+
+	// ArchiveWorkspace: when true, also delete the worktree directory and
+	// its branch; when false (default), keep the worktree and branch on disk.
+	DeleteWorktree bool `json:"deleteWorktree,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
