@@ -43,9 +43,11 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 - **Attach streams** (one pipe per attached session): after an `Attach` RPC the daemon returns a
   per-session pipe + one-time token; the app streams raw VT bytes both ways. The app keeps a
   `Map<sessionName, socket>` so the **agent and an in-worktree shell stream concurrently**.
-- **Protocol is v3** (`session/winhost/proto/proto.go`, `Version = 3`). The app sends its version in
-  `Hello`; it requires daemon **≥ v3**. Adding fields to `WorkspaceInfo` is additive and does **not**
-  bump the version; new **methods** do.
+- **Protocol is v5** (`session/winhost/proto/proto.go`, `Version = 5`). The app sends its version in
+  `Hello`; it requires daemon **≥ v5**. Adding fields to `WorkspaceInfo` is additive and does **not**
+  bump the version; new **methods** do. (v4 = agent-generated titles; v5 = Regenerate/ForceRegenerate.)
+  The renderer reads `PROTO_VERSION` from the node-free `desktop/src/shared/proto-version.ts` (mirrored
+  in `main/host-client.ts`), so the value lives in one place across main + renderer.
 
 ---
 
@@ -66,6 +68,11 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 - `2961cdb` / `975aad1` — per-workspace **status** sampling (`busy`/`waiting`), ignoring user input-echo.
 - `2322039` — broaden **`detectWaiting`** (status-only) beyond approval prompts.
 - `b56761d` — **resume the agent conversation** across daemon restarts via copilot `--session-id=<uuid>`.
+- *(v5, pending commit)* **Regenerate Agent** — `RegenerateAgent`/`ForceRegenerate` RPCs: kill the current
+  agent and start a fresh one (rotated `SessionName` + `AgentSessionID`) in the same worktree, optionally
+  first asking the live agent to write `HANDOFF.md` and seeding the new agent with it. Inactivity/hard-cap
+  completion via the pure `handoffReady`, deterministic transcript fallback, archive-safe (tombstone +
+  wait-on-done), revivable-on-attach. See `desktop/features/regenerate-agent.md`.
 
 **Desktop app (`desktop/src/`):**
 - `4c085a4` **M0** — migrated the Electron app into the monorepo as `desktop/`.
@@ -78,6 +85,9 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 - `2322039` — **auto-reconnect** the control pipe when the daemon restarts.
 - `152dcc7` — **Files tab** (read-only worktree browser) + **Terminal tab** (PowerShell in the worktree,
   concurrent with the agent) + the session-scoped stream refactor (`TermView`).
+- *(v5, pending commit)* **Regenerate Agent UI** — `↻ Regenerate` button beside AutoYes, `RegenerateModal`
+  (handoff checkbox + live phase progress + **Kill now**), composer disabled while regenerating, and
+  broadened "Agent finished" suppression so a regenerate never fires a false finished toast.
 
 ---
 
@@ -158,6 +168,21 @@ npm run dev          # electron-vite dev (spawns the daemon via ensureHost)
 npm run lint ; npm run typecheck ; npm run build
 npm run dist         # NSIS installer -> desktop/release/ (see PACKAGING.md)
 ```
+
+**Testing a worktree (the singleton-daemon trap).** The daemon is a per-user singleton: the app
+connects to whichever `cs.exe` already owns the pipe, so a stale daemon/app from another checkout gets
+reused and you test the *wrong* code (e.g. `daemon is v4 — the app needs v5`). Use the helper to make
+the current worktree authoritative — it rebuilds this worktree's `dist\cs.exe`, stops the running
+app + daemon (freeing the pipe), and launches `npm run dev` with `CS_EXE` pinned:
+```pwsh
+.\desktop\scripts\dev-worktree.ps1            # rebuild + relaunch from this worktree
+.\desktop\scripts\dev-worktree.ps1 -SkipBuild # just re-pin app/daemon, no Go rebuild
+.\desktop\scripts\dev-worktree.ps1 -NoApp     # rebuild daemon + free pipe only
+```
+Run it from an **external** terminal, not an agent terminal: it restarts the daemon (interrupting live
+agent sessions, which auto-revive) and refuses if it detects it's running inside a daemon ConPTY
+(override `-Force`). Verify: status bar reads `Protocol v5`. State (`~/.claude-squad/`) is global per
+user, not per worktree.
 
 ---
 

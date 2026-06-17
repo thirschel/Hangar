@@ -38,6 +38,7 @@ type managedSession interface {
 	hasUpdated() (updated, hasPrompt bool)
 	agentStatus() (busy, waiting bool)
 	setAutoYes(enabled bool)
+	setForceApprove(enabled bool)
 	info() proto.SessionInfo
 	alive() bool
 	close() error
@@ -261,6 +262,10 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.workspaces.runOutput(req)
 	case proto.MethodGenerateWorkspaceTitle:
 		return h.workspaces.generateTitle(req)
+	case proto.MethodRegenerateAgent:
+		return h.workspaces.regenerate(req)
+	case proto.MethodForceRegenerate:
+		return h.workspaces.forceRegenerate(req)
 	default:
 		return proto.Errorf(req.ID, "unknown method %q", req.Method)
 	}
