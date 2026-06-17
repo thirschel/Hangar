@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	cslog "claude-squad/log"
-	"claude-squad/session/agentcmd"
+	cslog "hangar/log"
+	"hangar/session/agentcmd"
 )
 
 // TestMain initializes the global logger so tests that drive config/git (e.g.
@@ -50,7 +50,7 @@ func initTempRepo(t *testing.T) string {
 // TestWorkspaceLifecycle covers the core-daemon workspace RPC (E1): create a
 // workspace (worktree+branch+agent session), see it listed with diff stats,
 // fetch the changed-file diff, and archive it (cleaning up worktree + session).
-// Runs against an isolated config dir so it never touches real ~/.claude-squad.
+// Runs against an isolated config dir so it never touches real ~/.hangar.
 func TestWorkspaceLifecycle(t *testing.T) {
 	// Isolate config/worktrees/workspaces.json (Windows uses USERPROFILE).
 	home := t.TempDir()
@@ -205,8 +205,8 @@ func TestCreateWorkspaceRejectsUnknownProgram(t *testing.T) {
 		t.Fatalf("expected no workspaces after a failed create, got %d: %+v", len(list), list)
 	}
 
-	// And no orphan worktree should have been left under ~/.claude-squad/worktrees.
-	wtRoot := filepath.Join(home, ".claude-squad", "worktrees")
+	// And no orphan worktree should have been left under ~/.hangar/worktrees.
+	wtRoot := filepath.Join(home, ".hangar", "worktrees")
 	if entries, err := os.ReadDir(wtRoot); err == nil {
 		if len(entries) != 0 {
 			t.Fatalf("expected no orphan worktrees, found %d under %s", len(entries), wtRoot)
@@ -429,10 +429,10 @@ func TestDeriveTitle(t *testing.T) {
 
 func TestDefaultTitle(t *testing.T) {
 	cases := map[string]string{
-		`C:\dev\claude-squad`:  "claude-squad",
-		`C:\dev\claude-squad\`: "claude-squad",
-		`D:\repos\my-app\`:     "my-app",
-		"":                     "workspace",
+		`C:\dev\hangar`:    "hangar",
+		`C:\dev\hangar\`:   "hangar",
+		`D:\repos\my-app\`: "my-app",
+		"":                 "workspace",
 	}
 	for in, want := range cases {
 		if got := defaultTitle(in); got != want {

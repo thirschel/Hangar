@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/config"
-	cslog "claude-squad/log"
+	"hangar/config"
+	cslog "hangar/log"
 )
 
 const indexSchemaVersion = 1

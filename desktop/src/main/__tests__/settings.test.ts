@@ -38,8 +38,8 @@ vi.mock('node:os', () => ({
 
 import { applySettings, getSettings } from '../settings';
 
-const configPath = path.join(osMock.homedir, '.claude-squad', 'config.json');
-const appSettingsPath = path.join(osMock.homedir, '.claude-squad', 'desktop.json');
+const configPath = path.join(osMock.homedir, '.hangar', 'config.json');
+const appSettingsPath = path.join(osMock.homedir, '.hangar', 'desktop.json');
 
 function readWrittenJson(file: string): Record<string, unknown> {
   return JSON.parse(fsMock.files.get(file) ?? '{}') as Record<string, unknown>;
@@ -85,7 +85,7 @@ describe('settings', () => {
       uiRefreshMs: 2500,
     });
 
-    expect(fsMock.mkdirSync).toHaveBeenCalledWith(path.join(osMock.homedir, '.claude-squad'), {
+    expect(fsMock.mkdirSync).toHaveBeenCalledWith(path.join(osMock.homedir, '.hangar'), {
       recursive: true,
     });
     expect(readWrittenJson(configPath)).toEqual({

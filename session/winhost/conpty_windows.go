@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session/winhost/proto"
+	"hangar/session/winhost/proto"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"

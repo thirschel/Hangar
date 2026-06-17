@@ -34,7 +34,7 @@ test('launches the app window with expected title and minimum size', async () =>
   const window = await app!.firstWindow();
   await window.waitForLoadState('domcontentloaded');
 
-  await expect(window).toHaveTitle(/claude-squad/i);
+  await expect(window).toHaveTitle(/Hangar/i);
 
   const browserWindow = await app!.browserWindow(window);
   const { minWidth, minHeight } = await browserWindow.evaluate((win) => {

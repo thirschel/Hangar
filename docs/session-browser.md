@@ -2,7 +2,7 @@
 
 > Status: Draft v2 — revised after multi-model review (GPT-5.5, Gemini 3.1 Pro, Claude Opus 4.7)
 > Area: new `session/copilot/` (cross-platform), new `ui/sessionBrowser.go`, `app/app.go`, `keys/keys.go`, `ui/menu.go`, `session/instance.go`, `session/storage.go`, new `session/agentcmd.go`, `session/winhost/`
-> Related current behavior: claude-squad creates each workspace as a git **worktree** running an agent (`copilot`, `claude`, …). **Two parallel launch paths exist:** the **TUI `Instance` path** (`n`/`N` → `NewInstance` → `Start` → `NewTerminalSession(title, program)`) launches the program **raw** — no `--session-id`, so Copilot assigns a random id and there is no resume continuity across TUI restarts; the **daemon `workspaceManager` path** (`session/winhost/workspace_windows.go`) is the only one that today seeds a stable `--session-id`. Either way, every Copilot run is discoverable under `~/.copilot/session-state`, but there is currently **no way to browse, search, or resume past Copilot sessions** from the TUI. (Implementing §7.5 gives the TUI path resume-on-restart as a side benefit.)
+> Related current behavior: Hangar creates each workspace as a git **worktree** running an agent (`copilot`, `claude`, …). **Two parallel launch paths exist:** the **TUI `Instance` path** (`n`/`N` → `NewInstance` → `Start` → `NewTerminalSession(title, program)`) launches the program **raw** — no `--session-id`, so Copilot assigns a random id and there is no resume continuity across TUI restarts; the **daemon `workspaceManager` path** (`session/winhost/workspace_windows.go`) is the only one that today seeds a stable `--session-id`. Either way, every Copilot run is discoverable under `~/.copilot/session-state`, but there is currently **no way to browse, search, or resume past Copilot sessions** from the TUI. (Implementing §7.5 gives the TUI path resume-on-restart as a side benefit.)
 
 ## 0. Revision history & review resolutions
 
@@ -18,7 +18,7 @@
 
 ## 1. Summary
 
-Add a full-screen **Session Browser** to the TUI that lets users **search/filter their existing GitHub Copilot CLI sessions** by keyword and **"restart"** (resume) any one of them as a new, isolated claude-squad workspace.
+Add a full-screen **Session Browser** to the TUI that lets users **search/filter their existing GitHub Copilot CLI sessions** by keyword and **"restart"** (resume) any one of them as a new, isolated Hangar workspace.
 
 Copilot persists every session as a folder under `~/.copilot/session-state/<uuid>/` (445 such folders on the reference machine). Each holds machine-readable metadata (`workspace.yaml`) and the full conversation transcript (`events.jsonl`). The browser:
 
@@ -27,7 +27,7 @@ Copilot persists every session as a folder under `~/.copilot/session-state/<uuid
 3. **Previews** the selected session (title, repo, branch, last activity, a matching snippet).
 4. **Restarts** the selected session: creates a fresh git worktree in **that session's original repository** and launches `copilot --resume=<session-id>`, continuing the **same** conversation with full history.
 
-This turns a pile of opaque UUID folders into a searchable, resumable history, with claude-squad's worktree isolation applied automatically.
+This turns a pile of opaque UUID folders into a searchable, resumable history, with Hangar's worktree isolation applied automatically.
 
 ## 2. Background & current state
 
@@ -40,9 +40,9 @@ Relevant files (per-session):
 - **`workspace.yaml`** — present in **100%** of sessions. Flat YAML. Example:
   ```yaml
   id: 2331de89-df3c-43cf-8ac0-2c8f0886b9a4
-  cwd: D:\dev\claude-squad
-  git_root: D:\dev\claude-squad
-  repository: thirschel/claude-squad
+  cwd: D:\dev\Hanger
+  git_root: D:\dev\Hanger
+  repository: thirschel/Hangar
   host_type: github
   branch: desktop-core-daemon
   client_name: github/cli
@@ -69,7 +69,7 @@ Relevant files (per-session):
 
 - Other artifacts (ignored by the browser): `checkpoints/`, `files/`, `research/`, `rewind-snapshots/`, `vscode.metadata.json`, and `inuse.<pid>.lock` (present while a session is actively open — relevant for the "already in use" edge case).
 
-Sessions span **multiple repositories** (e.g. on the reference machine: `thirschel/Nestworthly` ×309, `thirschel/FiCharts` ×78, `thirschel/claude-squad` ×11, plus others).
+Sessions span **multiple repositories** (e.g. on the reference machine: `thirschel/Nestworthly` ×309, `thirschel/FiCharts` ×78, `thirschel/Hangar` ×11, plus others).
 
 ### 2.2 Copilot resume mechanism (verified via `copilot --help`)
 
@@ -81,7 +81,7 @@ The browser uses **`copilot --resume=<session-id>`** for resume, always passing 
 
 > **Data-integrity note:** `--resume` continues the **same** session id and writes back into the **same** `~/.copilot/session-state/<id>/` folder (this is the intended "continue the conversation" behavior). It does **not** fork into a new id. Two processes resuming the same id concurrently would both write that folder — see the in-use hard-block in §7.4 / §10.
 
-### 2.3 claude-squad architecture relevant to this feature (verified)
+### 2.3 Hangar architecture relevant to this feature (verified)
 
 - **TUI model** — `app/app.go`, a Bubble Tea `home` struct with a `state` enum (`stateDefault`, `stateNew`, `statePrompt`, `stateHelp`, `stateConfirm`). Overlays are drawn over the main view via `overlay.PlaceOverlay(...)` in `View()`. Adding a new screen = new `state` value + a component + key routing + render branch.
 - **Keys** — `keys/keys.go` (`KeyName` enum, `GlobalKeyStringsMap`, `GlobalkeyBindings`). Menu entries in `ui/menu.go` (`MenuState` + `updateOptions()`). The keys `b` and `S` are currently unbound.
@@ -100,7 +100,7 @@ The browser uses **`copilot --resume=<session-id>`** for resume, always passing 
 - A full-screen browser, opened by a single key from the default view, listing **all** local Copilot sessions regardless of repo.
 - **Keyword search/filter** over metadata **and** conversation content, responsive over 100s of sessions.
 - A readable **preview** of the highlighted session, with a robust display-name fallback.
-- **Restart** = create a new claude-squad workspace that resumes the chosen session via `copilot --resume=<id>`, with the worktree created in the **session's original repo** (`git_root`).
+- **Restart** = create a new Hangar workspace that resumes the chosen session via `copilot --resume=<id>`, with the worktree created in the **session's original repo** (`git_root`).
 - Discovery/parsing/search implemented in a **cross-platform** package; Windows is the first wired-up target.
 
 ### Non-goals (initial)
@@ -165,7 +165,7 @@ type Session struct {
     ID         string    // workspace.yaml id (== folder name)
     Dir        string    // absolute path to the session folder
     Name       string    // workspace.yaml name (may be empty)
-    Repository string    // e.g. "thirschel/claude-squad"
+    Repository string    // e.g. "thirschel/Hangar"
     OriginRoot string    // FROZEN origin repo path — from earliest session.start.context.gitRoot
     OriginHead string    // FROZEN base commit — from session.start.context.headCommit
     OriginRef  string    // FROZEN original branch name — from session.start.context.branch
@@ -181,7 +181,7 @@ func (s Session) DisplayName() string // name → first-user-msg snippet → "re
 
 > **§4-note — origin freeze (why `OriginRoot` ≠ `workspace.yaml.git_root`):** resuming a session launches Copilot in the *new* worktree, and Copilot is expected to rewrite `workspace.yaml`'s `cwd`/`git_root` to that worktree path. If we re-read `git_root` from YAML on every browse, a session's "origin" would silently drift to a throwaway worktree after the first restart (and a second restart would target a deleted directory). We therefore snapshot the origin from the **immutable** `session.start` event the first time we index a session and persist it; YAML `git_root` is used only when no `session.start` exists.
 
-Search index (cached on disk under `~/.claude-squad/copilot-index.json`, guarded by a lockfile; cleared by `cs reset`):
+Search index (cached on disk under `~/.hangar/copilot-index.json`, guarded by a lockfile; cleared by `cs reset`):
 
 ```go
 const indexSchemaVersion = 1  // bump to force a full rebuild on format/cap changes
@@ -204,9 +204,9 @@ Persistence (`session/storage.go` `InstanceData`): add `AgentSessionID string` s
 
 ### 7.1 New package `session/copilot/` (cross-platform — no build tags)
 - `Root() string` — resolve session-state root: `%USERPROFILE%\.copilot\session-state` on Windows, `$HOME/.copilot/session-state` elsewhere (overridable via env, e.g. `CS_COPILOT_SESSION_DIR`, for tests).
-- `Discover() ([]Session, error)` — list child dirs, parse each `workspace.yaml` (use `gopkg.in/yaml.v3` — already an indirect dep, see §11; or hand-parse the flat file), detect `events.jsonl`/fresh `inuse.*.lock`, and read the **frozen origin** (`OriginRoot/Head/Ref`) from the first `session.start` event (one short streamed read; falls back to YAML `git_root` only when absent). Fast: small reads only. Resilient: a bad YAML file yields a minimal `Session{ID: dirname}` rather than failing the whole scan. Parallelized across `runtime.NumCPU()` workers; per-session errors are logged via `claude-squad/log` and counted (surfaced as a footer "N skipped"), never fatal.
+- `Discover() ([]Session, error)` — list child dirs, parse each `workspace.yaml` (use `gopkg.in/yaml.v3` — already an indirect dep, see §11; or hand-parse the flat file), detect `events.jsonl`/fresh `inuse.*.lock`, and read the **frozen origin** (`OriginRoot/Head/Ref`) from the first `session.start` event (one short streamed read; falls back to YAML `git_root` only when absent). Fast: small reads only. Resilient: a bad YAML file yields a minimal `Session{ID: dirname}` rather than failing the whole scan. Parallelized across `runtime.NumCPU()` workers; per-session errors are logged via `hangar/log` and counted (surfaced as a footer "N skipped"), never fatal.
 - `FirstUserMessage(s Session) (string, error)` — stream `events.jsonl`, return the first `user.message` `data.content`; stops at the first hit; never loads the whole file. Used for the display-name fallback and the preview snippet (so list navigation never blocks on a synchronous full read).
-- **Index** — `BuildIndex(ctx, sessions)` builds/refreshes `~/.claude-squad/copilot-index.json` under a lockfile; `Search(ctx, query) []Session` ranks results.
+- **Index** — `BuildIndex(ctx, sessions)` builds/refreshes `~/.hangar/copilot-index.json` under a lockfile; `Search(ctx, query) []Session` ranks results.
   - **Cap:** index up to **32 KB** of concatenated `user.message`/`assistant.message` text per session (configurable). This bounds memory (~445 × 32 KB ≈ 14 MB) and time. **Indexing uses `data.content`** (the human-authored text); `transformedContent` is excluded to avoid indexing injected boilerplate.
   - **Capped-search caveat (resolves an AC conflict):** because content is capped, a term that appears *only* beyond 32 KB of a very long transcript can be missed. AC §8 is written against the *indexed* haystack. A `Ctrl+f` "deep search" affordance MAY stream the full `events.jsonl` for the *currently filtered* subset as a fallback (bounded, cancellable) — optional, Phase 3.
   - **Invalidation:** re-index a session when its `events.jsonl` **size or mtime** changed, or when `SchemaVer != indexSchemaVersion`. (mtime alone is unreliable; size+mtime+schema-version is cheap and robust.)
@@ -229,7 +229,7 @@ Persistence (`session/storage.go` `InstanceData`): add `AgentSessionID string` s
 On `Enter` over a selected `copilot.Session s`:
 
 1. **Pre-flight guards (hard, not warnings):**
-   - **Already resumed:** if `s.ID` is in the `home` model's in-process `resumedSessionIDs` set (a session already resumed in this TUI), refuse with a message ("already open as workspace <title>") and select that workspace instead. Prevents two claude-squad workspaces writing the same session folder.
+   - **Already resumed:** if `s.ID` is in the `home` model's in-process `resumedSessionIDs` set (a session already resumed in this TUI), refuse with a message ("already open as workspace <title>") and select that workspace instead. Prevents two Hangar workspaces writing the same session folder.
    - **In-use elsewhere:** re-check for a **fresh** `inuse.*.lock` *immediately* before launch (not just at browse time). If present, **block** and explain (resuming a live session risks corrupting `events.jsonl`); offer to open read-only preview only.
    - **Origin repo missing:** resolve target repo = `s.OriginRoot`. If it's empty, `os.Stat`-fails, or isn't a git repo, fall back to the **current** repo `cs` was launched in (with a clear warning that file context won't match), rather than erroring out. (Never fall back to `s.Cwd`, which is usually a deleted worktree path.)
 2. If the resolved repo ≠ current repo, show a `stateConfirm` confirmation ("Resume in <repo>? A new worktree/branch will be created there.").
@@ -303,7 +303,7 @@ The TUI Instance path launches `i.Program` **raw** today. Introduce a shared, cr
 2. Each row shows a non-empty **display name** even when `workspace.yaml` has no `name` (fallback to first user message, then `repo@branch`, then short id), plus repo, branch, and relative updated time.
 3. Typing a query filters the list **live** (debounced) and matches against **both** metadata **and** indexed conversation text; multi-term queries use AND semantics; matching is case-insensitive; the count updates.
 4. Search remains responsive (no perceptible input lag, target <50 ms p99 on a warm index) with at least **445** sessions present; discovery, indexing, and search run off the UI thread and a new keystroke cancels the previous search.
-5. Selecting a session and pressing `Enter` creates a **new claude-squad workspace** whose agent is launched with `copilot --resume=<that session's id>` (full UUID), and the resumed agent shows the **prior conversation history**. A brand-new Copilot session created via `n`/`N` is launched with `--session-id=<new-uuid>` (seed) — the two intents never use the same flag.
+5. Selecting a session and pressing `Enter` creates a **new Hangar workspace** whose agent is launched with `copilot --resume=<that session's id>` (full UUID), and the resumed agent shows the **prior conversation history**. A brand-new Copilot session created via `n`/`N` is launched with `--session-id=<new-uuid>` (seed) — the two intents never use the same flag.
 6. The new workspace's git worktree is created in the session's **frozen origin repo** (`OriginRoot`, snapshotted from `session.start`), on a **new uniquely-named branch** based on the session's recorded `OriginHead`; when the origin repo differs from the current repo, the user confirms first; when the origin repo is missing on disk, it falls back to the current repo with a warning (never to a deleted `cwd`).
 7. The restart **never reuses, checks out, or deletes the session's original branch**; resuming the **same** session **twice** produces two distinct workspaces (distinct titles/branches) without a host-session-name or `git worktree add` collision.
 8. The created workspace appears in the normal list, is selected, and **continues to resume the same Copilot session after a TUI restart** — including when it was **paused** before the restart (the paused-reconstruction path applies the resume flag).
@@ -383,7 +383,7 @@ Follow the repo's table/unit style (`testify/require`; see `ui/list_test.go`, `s
 1. **Capped-search recall** — 32 KB/session cap can miss terms deep in very long transcripts. Acceptable for v1? Add the optional `Ctrl+f` full-stream "deep search" in Phase 3, or raise/lift the cap (memory cost)?
 2. **`events.jsonl` format stability** — undocumented; may change across Copilot versions. Parser must degrade to metadata-only on unexpected shapes. Pin a tested Copilot version range in docs.
 3. **Base-commit policy** — base the new branch on the session's `OriginHead` (matches original files but may be old) vs. current `HEAD` (fresh but mismatched). Doc proposes `OriginHead` with `HEAD` fallback; confirm.
-4. **Index privacy** — conversation text is cached under `~/.claude-squad/`. Local-only, but document it; consider an opt-out / no-content-index mode.
+4. **Index privacy** — conversation text is cached under `~/.hangar/`. Local-only, but document it; consider an opt-out / no-content-index mode.
 5. **Keybinding** — confirm `b` (vs. `S`) and the in-browser map (e.g. `Ctrl+r` reindex, `Ctrl+f` deep search) don't surprise users.
 6. **Preview fidelity** — render raw text, or strip ANSI / render markdown? Pick for §5.1.
 

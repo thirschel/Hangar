@@ -1,6 +1,6 @@
 package ui
 
-import "claude-squad/session"
+import "hangar/session"
 
 // pulseFrames is how many animation frames a row's highlight pulse lasts.
 const pulseFrames = 5

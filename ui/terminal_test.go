@@ -3,11 +3,11 @@
 package ui
 
 import (
-	"claude-squad/cmd/cmd_test"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/tmux"
 	"fmt"
+	"hangar/cmd/cmd_test"
+	"hangar/log"
+	"hangar/session"
+	"hangar/session/tmux"
 	"os/exec"
 	"strings"
 	"testing"
