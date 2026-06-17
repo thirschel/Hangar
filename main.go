@@ -1,15 +1,15 @@
 package main
 
 import (
-	"claude-squad/app"
-	cmd2 "claude-squad/cmd"
-	"claude-squad/config"
-	"claude-squad/daemon"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/copilot"
-	"claude-squad/session/git"
-	"claude-squad/session/winhost"
+	"hangar/app"
+	cmd2 "hangar/cmd"
+	"hangar/config"
+	"hangar/daemon"
+	"hangar/log"
+	"hangar/session"
+	"hangar/session/copilot"
+	"hangar/session/git"
+	"hangar/session/winhost"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,7 +26,7 @@ var (
 	daemonFlag  bool
 	binName     string
 	rootCmd     = &cobra.Command{
-		Use:   "claude-squad",
+		Use:   "hangar",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
@@ -155,7 +155,7 @@ var (
 		Short: "Print the version number",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("%s version %s\n", binName, version)
-			fmt.Printf("https://github.com/smtg-ai/claude-squad/releases/tag/v%s\n", version)
+			fmt.Printf("https://github.com/thirschel/Hangar/releases/tag/v%s\n", version)
 		},
 	}
 

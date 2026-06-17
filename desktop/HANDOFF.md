@@ -29,12 +29,12 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 ```
   Electron app (desktop/, Windows)                     core daemon = cs.exe (Go session-host)
   ┌───────────────────────────────┐                    ┌──────────────────────────────────────────┐
-  │ renderer (React + xterm.js)   │  preload  ipcMain  │ control pipe  \\.\pipe\claudesquad-host-<SID>
+  │ renderer (React + xterm.js)   │  preload  ipcMain  │ control pipe  \\.\pipe\hangar-host-<SID>
   │  Sidebar / CenterPane(tabs)   │◄────────►│ host-   │   length-prefixed JSON RPC (proto v3)      │
   │  Review / Run panels          │          │ client  │ ── workspaces: worktree+branch+session     │
   └───────────────────────────────┘          │ (TS)    │ ── ConPTY sessions + x/vt emulator         │
             ▲  per-session attach streams ─────────────│ ── git diff/commit/push, run processes     │
-            └───────── \\.\pipe\claudesquad-att-… ──────│ ── AutoYes, persistence, status sampling   │
+            └───────── \\.\pipe\hangar-att-… ──────│ ── AutoYes, persistence, status sampling   │
                                                         └──────────────────────────────────────────┘
 ```
 
@@ -104,7 +104,7 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 | `attach_windows.go` | Client-side console hand-off for the TUI's `cs attach` (Ctrl-Q detaches). |
 | `client_windows.go` | Go `Client` (used by tests + the TUI). |
 | `noconsole_windows.go` | `hideConsole(cmd)` — `CREATE_NO_WINDOW`. **Use on every console child.** |
-| `lock_windows.go` / `paths.go` | Singleton host lock; `~/.claude-squad` path helpers; host.json discovery. |
+| `lock_windows.go` / `paths.go` | Singleton host lock; `~/.hangar` path helpers; host.json discovery. |
 
 **Desktop main process (`desktop/src/main/`):**
 | File | Responsibility |
@@ -181,7 +181,7 @@ app + daemon (freeing the pipe), and launches `npm run dev` with `CS_EXE` pinned
 ```
 Run it from an **external** terminal, not an agent terminal: it restarts the daemon (interrupting live
 agent sessions, which auto-revive) and refuses if it detects it's running inside a daemon ConPTY
-(override `-Force`). Verify: status bar reads `Protocol v5`. State (`~/.claude-squad/`) is global per
+(override `-Force`). Verify: status bar reads `Protocol v5`. State (`~/.hangar/`) is global per
 user, not per worktree.
 
 ---
@@ -206,7 +206,7 @@ user, not per worktree.
   **auto-reconnects** when the pipe drops (`ControlClient.isClosed()` + `cs:call` retry), so killing the
   daemon no longer strands the UI — but the **terminal** still needs a workspace re-click to re-attach.
 - **Tests must isolate `HOME` AND `USERPROFILE`.** Windows `os.UserHomeDir()` reads `USERPROFILE`, not
-  `HOME`. Early config tests set only `HOME` and **overwrote the real `~/.claude-squad/config.json`**
+  `HOME`. Early config tests set only `HOME` and **overwrote the real `~/.hangar/config.json`**
   (corrupting `default_program`). Fixed in `5171152`; any test touching config/worktrees must
   `t.Setenv` **both**.
 - **Never `git worktree prune` from Windows.** The user has a WSL worktree whose path isn't visible to
@@ -224,16 +224,16 @@ user, not per worktree.
   kept alive while the app runs (re-open re-attaches the same shell), and killed on **archive + app quit**.
   They are **not** persisted/revived across a daemon restart (only the agent conversation resumes).
 - **Invisible panics → logs.** The detached daemon's stderr is discarded; panics were silent. Recovered
-  panics now go to **`~/.claude-squad/host.log`**; the app logs to **`~/.claude-squad/desktop.log`**
+  panics now go to **`~/.hangar/host.log`**; the app logs to **`~/.hangar/desktop.log`**
   (incl. uncaught exceptions and updater activity). Check these first when debugging.
 - **npm-audit advisories.** `react-diff-view` (runtime, dev-flagged) and `electron-builder` (build-time)
   add advisories. Review before any public release; they are not shipped in the app runtime path.
-- **One host per user.** SID-named singleton pipe `\\.\pipe\claudesquad-host-<SID>`; the TUI and the app
+- **One host per user.** SID-named singleton pipe `\\.\pipe\hangar-host-<SID>`; the TUI and the app
   share it. `host.lock` is an OS lock released on process exit (a stale lock doesn't block relaunch).
 
 ---
 
-## 6. On-disk state (`~/.claude-squad/`, i.e. `%USERPROFILE%\.claude-squad`)
+## 6. On-disk state (`~/.hangar/`, i.e. `%USERPROFILE%\.hangar`)
 
 | Path | Owner | Contents |
 |---|---|---|

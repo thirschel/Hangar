@@ -56,7 +56,7 @@ over time. See the electron-builder code-signing docs for details.
 
 ## Logs
 
-The main process writes to `~/.claude-squad/desktop.log` (`src/main/logger.ts`),
+The main process writes to `~/.hangar/desktop.log` (`src/main/logger.ts`),
 including auto-updater activity and any uncaught exceptions.
 
 [electron-builder]: https://www.electron.build/

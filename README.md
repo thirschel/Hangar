@@ -132,7 +132,7 @@ The packaged installer is written to `desktop\release\Hangar-Setup-<version>.exe
 
 #### Unix/macOS/WSL upstream installs
 
-The commands below install the **upstream claude-squad binary**. Use them when you want the upstream Unix/macOS/WSL package rather than the native-Windows Hangar desktop app or fork build.
+The commands below install the **upstream `cs` binary**. Use them when you want the upstream Unix/macOS/WSL package rather than the native-Windows Hangar desktop app or fork build.
 
 ##### Homebrew
 
@@ -159,7 +159,7 @@ curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.s
 
 Hangar is a thin Electron client over a Go core-daemon: `cs session-host`. The session host owns each workspace (git worktree + branch), ConPTY console, VT terminal state, diffs, persistence, and host-side AutoYes; the desktop app drives that engine through the native Windows backend.
 
-The daemon has standalone value. You can build and run `cs` directly as a terminal UI without the desktop app, while the Electron client lives in [`desktop/`](desktop/). For architecture details, see [`docs/native-windows.md`](docs/native-windows.md). The Go module name, binary, subcommands, and state directory remain `claude-squad`, `cs`, `cs debug`, `cs reset`, `cs session-host`, and `~/.claude-squad/`.
+The daemon has standalone value. You can build and run `cs` directly as a terminal UI without the desktop app, while the Electron client lives in [`desktop/`](desktop/). For architecture details, see [`docs/native-windows.md`](docs/native-windows.md). The Go module name, binary, subcommands, and state directory are `hangar`, `cs`, `cs debug`, `cs reset`, `cs session-host`, and `~/.hangar/`.
 
 ## Prerequisites
 
@@ -197,15 +197,15 @@ causes:
 
 Run `cs debug` to print the resolved config and log-file paths.
 
-**Where are the logs?** Hangar's `cs` engine writes to `claudesquad.log` in the OS temp dir
-(`/tmp/claudesquad.log` on Linux/WSL). On WSL that is the **Linux** `/tmp` — open it from inside WSL
-(or via `\\wsl$\<distro>\tmp\claudesquad.log` from Windows), not `C:\tmp`.
+**Where are the logs?** Hangar's `cs` engine writes to `hangar.log` in the OS temp dir
+(`/tmp/hangar.log` on Linux/WSL). On WSL that is the **Linux** `/tmp` — open it from inside WSL
+(or via `\\wsl$\<distro>\tmp\hangar.log` from Windows), not `C:\tmp`.
 
-**Where is state stored, and how do I reset it?** All state lives in `~/.claude-squad/`: `state.json`
+**Where is state stored, and how do I reset it?** All state lives in `~/.hangar/`: `state.json`
 holds your sessions/instances, `config.json` the configuration, and `daemon.pid` the autoyes daemon.
 On **native Windows** the session host also writes `host.json` (its pipe/PID/version) and `host.lock`
 there. Run `cs reset` to clear stored instances, remove worktrees, stop the daemon, and (on Windows)
-shut down the session host and its running sessions — or delete `~/.claude-squad/` manually.
+shut down the session host and its running sessions — or delete `~/.hangar/` manually.
 
 ## Usage
 
@@ -221,11 +221,11 @@ Available Commands:
   debug       Print debug information like config paths
   help        Help about any command
   reset       Reset all stored instances
-  version     Print the version number of claude-squad
+  version     Print the version number of Hangar
 
 Flags:
   -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for claude-squad
+  -h, --help             help for Hangar
   -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
 ```
 
@@ -291,11 +291,11 @@ The `cs` TUI menu at the bottom of the screen shows available commands:
 - `esc` or `ctrl-c` - Close the browser
 - `ctrl-r` - Force a re-scan and rebuild the local search index
 
-The browser is read-only toward Copilot's session files. Its content search index is cached at `~/.claude-squad/copilot-index.json` and cleared by `cs reset`.
+The browser is read-only toward Copilot's session files. Its content search index is cached at `~/.hangar/copilot-index.json` and cleared by `cs reset`.
 
 ## Configuration
 
-Hangar's `cs` engine stores its configuration in `~/.claude-squad/config.json`. You can find the exact path by running `cs debug`.
+Hangar's `cs` engine stores its configuration in `~/.hangar/config.json`. You can find the exact path by running `cs debug`.
 
 The sidebar animates rows when they move (reorder, sort, filter, pin). To turn animations off, set `"disable_sidebar_motion": true` in the config file. Motion is also automatically disabled when the terminal is very small or there are many visible workspaces.
 

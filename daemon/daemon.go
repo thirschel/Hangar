@@ -1,9 +1,9 @@
 package daemon
 
 import (
-	"claude-squad/config"
-	"claude-squad/log"
-	"claude-squad/session"
+	"hangar/config"
+	"hangar/log"
+	"hangar/session"
 	"fmt"
 	"os"
 	"os/exec"

@@ -109,7 +109,7 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
               <input
                 value={settings.workspaceDir}
                 spellCheck={false}
-                placeholder="~/.claude-squad/worktrees (default)"
+                placeholder="~/.hangar/worktrees (default)"
                 onChange={(e) => patch({ workspaceDir: e.target.value })}
               />
               <button type="button" onClick={() => void browseWorkspaceDir()}>

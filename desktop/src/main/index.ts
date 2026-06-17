@@ -264,12 +264,12 @@ ipcMain.handle('cs:pick-folder', async (): Promise<string | null> => {
   return result.filePaths[0];
 });
 
-// Returns the daemon's default agent program (from ~/.claude-squad/config.json)
+// Returns the daemon's default agent program (from ~/.hangar/config.json)
 // so the create form can pre-fill a known-good agent instead of submitting a
 // blank field that silently falls back to whatever the config holds.
 ipcMain.handle('cs:get-default-program', async (): Promise<string> => {
   try {
-    const cfgPath = path.join(os.homedir(), '.claude-squad', 'config.json');
+    const cfgPath = path.join(os.homedir(), '.hangar', 'config.json');
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8')) as { default_program?: string };
     const prog = (cfg.default_program || '').trim();
     if (prog) return prog;

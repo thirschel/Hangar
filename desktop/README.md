@@ -12,7 +12,7 @@ persistence, and host-side AutoYes.
 ## Status
 
 - **E0 (done):** scaffold + typed pipe client + three-pane shell.
-- **E1 (done):** core-daemon workspace RPC in Go (`claude-squad`, branch `desktop-core-daemon`):
+- **E1 (done):** core-daemon workspace RPC in Go (`Hangar`, branch `desktop-core-daemon`):
   `ListWorkspaces/CreateWorkspace/GetWorkspace/ArchiveWorkspace/WorkspaceDiff/SetWorkspaceAutoYes`.
 - **E2 (this app — MVP core shell):** sidebar lists/creates/archives workspaces; the center pane is
   the selected workspace's live agent terminal + a composer + an AutoYes toggle; the right panel
