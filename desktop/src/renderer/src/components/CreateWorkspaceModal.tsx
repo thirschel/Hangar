@@ -5,13 +5,15 @@ import type { CreateWorkspaceArgs } from '../../../preload';
 type CreateWorkspaceModalProps = {
   onClose: () => void;
   onCreate: (args: CreateWorkspaceArgs) => Promise<void>;
+  initialRepoPath?: string;
 };
 
 export function CreateWorkspaceModal({
   onClose,
   onCreate,
+  initialRepoPath,
 }: CreateWorkspaceModalProps): JSX.Element {
-  const [repoPath, setRepoPath] = useState('');
+  const [repoPath, setRepoPath] = useState(initialRepoPath ?? '');
   const [title, setTitle] = useState('');
   const [program, setProgram] = useState('');
   const [defaultProgram, setDefaultProgram] = useState('copilot');

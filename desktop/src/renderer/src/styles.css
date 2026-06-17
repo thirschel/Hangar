@@ -574,6 +574,12 @@ body.is-col-resizing .side-panel {
   height: 1px;
   background: var(--border);
 }
+.sidebar-section-header__add {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  font-size: 13px;
+}
 
 /* Sidebar search input */
 .sidebar-search {
