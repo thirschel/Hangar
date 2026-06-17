@@ -1,9 +1,9 @@
 package ui
 
 import (
+	"github.com/charmbracelet/lipgloss"
 	"hangar/log"
 	"hangar/session"
-	"github.com/charmbracelet/lipgloss"
 )
 
 func tabBorderWithBottom(left, middle, right string) lipgloss.Border {

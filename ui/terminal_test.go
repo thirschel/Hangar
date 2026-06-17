@@ -3,11 +3,11 @@
 package ui
 
 import (
+	"fmt"
 	"hangar/cmd/cmd_test"
 	"hangar/log"
 	"hangar/session"
 	"hangar/session/tmux"
-	"fmt"
 	"os/exec"
 	"strings"
 	"testing"

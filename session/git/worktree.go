@@ -1,9 +1,9 @@
 package git
 
 import (
+	"fmt"
 	"hangar/config"
 	"hangar/log"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"time"

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"hangar/app"
 	cmd2 "hangar/cmd"
 	"hangar/config"
@@ -10,9 +13,6 @@ import (
 	"hangar/session/copilot"
 	"hangar/session/git"
 	"hangar/session/winhost"
-	"context"
-	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
