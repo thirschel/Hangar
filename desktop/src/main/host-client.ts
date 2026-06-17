@@ -31,6 +31,7 @@ export interface WorkspaceInfo {
   waiting: boolean;
   regenerating: boolean;
   regenPhase?: string;
+  shell: string;
 }
 
 export interface FileDiffInfo {

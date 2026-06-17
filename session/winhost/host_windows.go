@@ -266,6 +266,8 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.workspaces.regenerate(req)
 	case proto.MethodForceRegenerate:
 		return h.workspaces.forceRegenerate(req)
+	case proto.MethodUpdateWorkspace:
+		return h.workspaces.updateWorkspace(req)
 	default:
 		return proto.Errorf(req.ID, "unknown method %q", req.Method)
 	}
