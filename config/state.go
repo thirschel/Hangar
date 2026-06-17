@@ -29,6 +29,12 @@ type AppState interface {
 	GetHelpScreensSeen() uint32
 	// SetHelpScreensSeen updates the bitmask of seen help screens
 	SetHelpScreensSeen(seen uint32) error
+	// GetSidebarMode returns the persisted sidebar view mode as an int. The UI
+	// layer validates the value (unknown -> Manual); config stores it opaquely to
+	// avoid a dependency on the ui package.
+	GetSidebarMode() int
+	// SetSidebarMode persists the sidebar view mode.
+	SetSidebarMode(mode int) error
 }
 
 // StateManager combines instance storage and app state management
@@ -41,6 +47,10 @@ type StateManager interface {
 type State struct {
 	// HelpScreensSeen is a bitmask tracking which help screens have been shown
 	HelpScreensSeen uint32 `json:"help_screens_seen"`
+	// SidebarMode is the persisted sidebar view mode (see ui.SidebarMode). Stored
+	// as an int so config stays decoupled from the ui package. Missing in older
+	// state.json -> 0 -> Manual.
+	SidebarMode int `json:"sidebar_mode"`
 	// Instances stores the serialized instance data as raw JSON
 	InstancesData json.RawMessage `json:"instances"`
 }
@@ -135,5 +145,16 @@ func (s *State) GetHelpScreensSeen() uint32 {
 // SetHelpScreensSeen updates the bitmask of seen help screens
 func (s *State) SetHelpScreensSeen(seen uint32) error {
 	s.HelpScreensSeen = seen
+	return SaveState(s)
+}
+
+// GetSidebarMode returns the persisted sidebar view mode as an int.
+func (s *State) GetSidebarMode() int {
+	return s.SidebarMode
+}
+
+// SetSidebarMode persists the sidebar view mode.
+func (s *State) SetSidebarMode(mode int) error {
+	s.SidebarMode = mode
 	return SaveState(s)
 }

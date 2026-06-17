@@ -48,6 +48,10 @@ type Instance struct {
 	CreatedAt time.Time
 	// UpdatedAt is the time the instance was last updated.
 	UpdatedAt time.Time
+	// LastActivityAt is the time of the last observed screen change (set from the
+	// metadata tick batch timestamp, subject to the anti-thrash dwell). It powers
+	// the "Recent activity" sidebar mode. Falls back to UpdatedAt/CreatedAt when zero.
+	LastActivityAt time.Time
 	// AutoYes is true if the instance should automatically press enter when prompted.
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
@@ -62,25 +66,37 @@ type Instance struct {
 	// The below fields are initialized upon calling Start().
 
 	started bool
+	// waitingForUser is true when the agent is awaiting human input that will not
+	// be auto-supplied (see RefreshWaitingForUser). It powers the "Pinned-pending"
+	// sidebar mode. Recompute-only (not persisted) in v1.
+	waitingForUser bool
 	// termSession is the terminal session for the instance (tmux on Unix, Windows Terminal on Windows).
 	termSession TerminalSession
 	// gitWorktree is the git worktree for the instance.
 	gitWorktree *git.GitWorktree
 }
 
+// recentActivityDwell is the minimum interval between LastActivityAt advances for
+// a single instance. It is the "minimum dwell" half of the recent-activity
+// anti-thrash rule: a continuously-streaming agent advances its activity stamp at
+// most once per dwell, so co-streaming agents don't swap sidebar slots every tick.
+// Tunable; resolved against real multi-agent usage.
+const recentActivityDwell = 2 * time.Second
+
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
 	data := InstanceData{
-		Title:     i.Title,
-		Path:      i.Path,
-		Branch:    i.Branch,
-		Status:    i.Status,
-		Height:    i.Height,
-		Width:     i.Width,
-		CreatedAt: i.CreatedAt,
-		UpdatedAt: time.Now(),
-		Program:   i.Program,
-		AutoYes:   i.AutoYes,
+		Title:          i.Title,
+		Path:           i.Path,
+		Branch:         i.Branch,
+		Status:         i.Status,
+		Height:         i.Height,
+		Width:          i.Width,
+		CreatedAt:      i.CreatedAt,
+		UpdatedAt:      time.Now(),
+		LastActivityAt: i.LastActivityAt,
+		Program:        i.Program,
+		AutoYes:        i.AutoYes,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -110,15 +126,16 @@ func (i *Instance) ToInstanceData() InstanceData {
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
 	instance := &Instance{
-		Title:     data.Title,
-		Path:      data.Path,
-		Branch:    data.Branch,
-		Status:    data.Status,
-		Height:    data.Height,
-		Width:     data.Width,
-		CreatedAt: data.CreatedAt,
-		UpdatedAt: data.UpdatedAt,
-		Program:   data.Program,
+		Title:          data.Title,
+		Path:           data.Path,
+		Branch:         data.Branch,
+		Status:         data.Status,
+		Height:         data.Height,
+		Width:          data.Width,
+		CreatedAt:      data.CreatedAt,
+		UpdatedAt:      data.UpdatedAt,
+		LastActivityAt: data.LastActivityAt,
+		Program:        data.Program,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -190,8 +207,24 @@ func (i *Instance) RepoName() (string, error) {
 	return i.gitWorktree.GetRepoName(), nil
 }
 
+// RepoPath returns the repository root path backing the instance's worktree. It
+// is the grouping key for the Group-by-repo sidebar mode (keying on path, not
+// name, avoids merging distinct repos that share a basename).
+func (i *Instance) RepoPath() (string, error) {
+	if !i.started {
+		return "", fmt.Errorf("cannot get repo path for instance that has not been started")
+	}
+	return i.gitWorktree.GetRepoPath(), nil
+}
+
 func (i *Instance) SetStatus(status Status) {
 	i.Status = status
+	// A Paused or Loading instance is never waiting on the user. Clearing here
+	// covers the case where the metadata tick skips Paused instances and would
+	// otherwise leave a stale pending flag.
+	if status == Paused || status == Loading {
+		i.waitingForUser = false
+	}
 }
 
 // SetSelectedBranch sets the branch to use when starting the instance.
@@ -349,6 +382,53 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
 		return false, false
 	}
 	return i.termSession.HasUpdated()
+}
+
+// NoteActivity records that a screen change was observed at batchNow. To damp
+// sidebar reordering ("recent activity" mode), the stored LastActivityAt only
+// advances when at least recentActivityDwell has elapsed since the last advance.
+// batchNow should be a single timestamp shared across one metadata tick so that
+// instances updated in the same tick compare equal (stable order within a tick).
+func (i *Instance) NoteActivity(batchNow time.Time) {
+	if i.LastActivityAt.IsZero() || batchNow.Sub(i.LastActivityAt) >= recentActivityDwell {
+		i.LastActivityAt = batchNow
+	}
+}
+
+// EffectiveActivityTime returns the timestamp used to order the instance in the
+// "recent activity" sidebar mode: LastActivityAt when set, else UpdatedAt, else
+// CreatedAt. This keeps instances restored from older state (no LastActivityAt)
+// sortable.
+func (i *Instance) EffectiveActivityTime() time.Time {
+	if !i.LastActivityAt.IsZero() {
+		return i.LastActivityAt
+	}
+	if !i.UpdatedAt.IsZero() {
+		return i.UpdatedAt
+	}
+	return i.CreatedAt
+}
+
+// IsWaitingForUser reports whether the agent is awaiting human input that will
+// not be auto-supplied. It powers the "Pinned-pending" sidebar mode. The value is
+// derived each metadata tick by RefreshWaitingForUser; it is never raw hasPrompt.
+func (i *Instance) IsWaitingForUser() bool {
+	return i.waitingForUser
+}
+
+// RefreshWaitingForUser recomputes the waiting-for-user (pending) signal from the
+// latest metadata tick. A workspace is pending iff it is started, not Paused, not
+// Loading, currently shows a prompt (hasPrompt) whose screen is not actively
+// changing (!updated), and AutoYes is off (so the prompt will not be auto-resolved
+// by the TUI or the Windows session host). Paused/Loading and AutoYes-resolved
+// prompts are explicitly excluded.
+func (i *Instance) RefreshWaitingForUser(updated, hasPrompt bool) {
+	i.waitingForUser = i.started &&
+		i.Status != Paused &&
+		i.Status != Loading &&
+		hasPrompt &&
+		!updated &&
+		!i.AutoYes
 }
 
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
