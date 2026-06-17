@@ -12,7 +12,14 @@ cd Hangar
 build.bat`;
 
 const homebrewInstall = "brew install claude-squad";
-const shellInstall = "curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash";
+const shellInstall = `# Download, verify, then install (replace VERSION with a release tag):
+# See https://github.com/thirschel/Hangar/releases for all versions.
+VERSION="v1.0.0"
+curl -fsSL \\
+  "https://github.com/thirschel/Hangar/releases/download/\${VERSION}/install.sh" \\
+  -o install-hangar.sh
+sha256sum install-hangar.sh   # compare against the checksum on the release page
+bash install-hangar.sh`;
 
 const features = [
   {
@@ -141,9 +148,10 @@ export default function Home() {
             <article className={styles.installCard}>
               <div>
                 <p className={styles.platform}>Unix/macOS</p>
-                <h3>Install upstream claude-squad</h3>
+                <h3>Download, verify, then install</h3>
                 <p>
-                  This fork ships no releases. Unix installs use the upstream binary. Prerequisites: gh and tmux on Unix/macOS/WSL.
+                  Download a pinned release, verify its SHA256, then run the install script.
+                  See the <a href="https://github.com/thirschel/Hangar/releases" target="_blank" rel="noopener noreferrer">releases page</a> for available versions and published checksums.
                 </p>
               </div>
               <div className={styles.codeBlockWrapper}>

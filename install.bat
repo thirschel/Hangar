@@ -1,6 +1,12 @@
 @echo off
 setlocal
 
+:: Source-build integrity: this script compiles cs.exe from the local repository
+:: clone. To verify the source you are building against, check the signed git tag:
+::   git verify-tag <tag>          (requires the release signing key in your GPG keyring)
+:: or verify the commit hash matches the published release:
+::   git log --oneline -1
+
 set "INSTALL_DIR=%LOCALAPPDATA%\bin"
 set "SOURCE=%~dp0cs.exe"
 
@@ -35,4 +41,4 @@ if %errorlevel% neq 0 (
     echo %INSTALL_DIR% is already in PATH.
 )
 
-echo Done. Run "cs" to start claude-squad.
+echo Done. Run "cs" to start Hangar.

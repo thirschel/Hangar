@@ -24,6 +24,8 @@ type mockTerminalSession struct {
 	hasPromptVal      bool
 	tapEnterCalled    bool
 	tapEnterErr       error
+	tryApproveCalled  bool
+	tryApproveResult  bool
 	sendKeysCalled    bool
 	sendKeysInput     string
 	sendKeysErr       error
@@ -66,6 +68,11 @@ func (m *mockTerminalSession) HasUpdated() (bool, bool) {
 func (m *mockTerminalSession) TapEnter() error {
 	m.tapEnterCalled = true
 	return m.tapEnterErr
+}
+
+func (m *mockTerminalSession) TryAutoApprove(sessionID string) bool {
+	m.tryApproveCalled = true
+	return m.tryApproveResult
 }
 
 func (m *mockTerminalSession) SetAutoYes(enabled bool) error {

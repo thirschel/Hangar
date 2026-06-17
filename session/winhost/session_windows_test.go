@@ -17,6 +17,7 @@ func useSharedClient(t *testing.T, pipe string) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
+	authClient(t, c)
 	clientMu.Lock()
 	sharedClient = c
 	clientMu.Unlock()
@@ -24,11 +25,12 @@ func useSharedClient(t *testing.T, pipe string) {
 }
 
 func TestSessionBackendDrivesHost(t *testing.T) {
+	requireConPTY(t)
 	pipe, cleanup := startRealHost(t)
 	defer cleanup()
 	useSharedClient(t, pipe)
 
-	s := NewSession("My Title #1", "echo HELLO_SESSION_BACKEND")
+	s := NewSession("My Title #1", "cmd.exe /c echo HELLO_SESSION_BACKEND")
 	if err := s.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -88,11 +90,12 @@ func TestSanitizeSessionName(t *testing.T) {
 // pausing must kill the host session (it can't outlive its removed worktree),
 // and pausing an already-gone session must be a no-op.
 func TestDetachSafelyKillsSession(t *testing.T) {
+	requireConPTY(t)
 	pipe, cleanup := startRealHost(t)
 	defer cleanup()
 	useSharedClient(t, pipe)
 
-	s := NewSession("Pause Me", "pause") // `pause` blocks, so the session stays alive
+	s := NewSession("Pause Me", "cmd.exe /c pause") // `pause` blocks, so the session stays alive
 	if err := s.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -114,11 +117,12 @@ func TestDetachSafelyKillsSession(t *testing.T) {
 
 // TestSessionSetAutoYes verifies the AutoYes propagation RPC round-trips (P6).
 func TestSessionSetAutoYes(t *testing.T) {
+	requireConPTY(t)
 	pipe, cleanup := startRealHost(t)
 	defer cleanup()
 	useSharedClient(t, pipe)
 
-	s := NewSession("AutoYes Me", "pause")
+	s := NewSession("AutoYes Me", "cmd.exe /c pause")
 	if err := s.Start(""); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

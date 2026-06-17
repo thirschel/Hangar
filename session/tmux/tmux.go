@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"claude-squad/cmd"
 	"claude-squad/log"
+	"claude-squad/session/agentcmd"
+	"claude-squad/session/promptpolicy"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -47,7 +49,8 @@ type TmuxSession struct {
 	// This should never be nil.
 	ptmx *os.File
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
-	monitor *statusMonitor
+	monitor            *statusMonitor
+	autoYesFingerprint string
 
 	// Initialized by Attach
 	// Deinitilaized by Detach
@@ -99,8 +102,18 @@ func (t *TmuxSession) Start(workDir string) error {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
 	}
 
-	// Create a new detached tmux session and start claude in it
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	// Build the agent command as discrete argv and pass it after `--` so tmux
+	// execs it directly (execvp argv[0] argv[1:]) instead of running it through
+	// `/bin/sh -c`. This removes the shell middleman, so metacharacters in the
+	// program or a poisoned resume id (e.g. `copilot --resume=a;calc`) are passed
+	// as literal arguments and can never act as command separators (F-01/F-04).
+	argv, perr := agentcmd.ParseProgram(t.program)
+	if perr != nil {
+		return fmt.Errorf("invalid program %q: %w", t.program, perr)
+	}
+	args := []string{"new-session", "-d", "-s", t.sanitizedName, "-c", workDir, "--"}
+	args = append(args, argv...)
+	cmd := exec.Command("tmux", args...)
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
@@ -235,31 +248,25 @@ func (t *TmuxSession) probeProgram() string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-// CheckAndHandleTrustPrompt checks the pane content once for a trust prompt and dismisses it if found.
-// Returns true if the prompt was found and handled.
+// CheckAndHandleTrustPrompt checks the pane content once and dismisses only
+// prompts classified as safe. Folder trust and MCP trust prompts are left for a
+// human unless a platform-specific one-shot handoff approval is armed.
 func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 	content, err := t.CapturePaneContent()
 	if err != nil {
 		return false
 	}
 
-	if strings.HasSuffix(t.program, ProgramClaude) {
-		if strings.Contains(content, "Do you trust the files in this folder?") ||
-			strings.Contains(content, "new MCP server") {
-			if err := t.TapEnter(); err != nil {
-				log.ErrorLog.Printf("could not tap enter on trust/MCP screen: %v", err)
-			}
-			return true
-		}
-	} else {
-		if strings.Contains(content, "Open documentation url for more info") {
-			if err := t.TapDAndEnter(); err != nil {
-				log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
-			}
-			return true
-		}
+	match, ok := promptpolicy.Classify(t.program, content)
+	if !ok || !promptpolicy.AllowsAutoApprove(match) {
+		return false
 	}
-	return false
+	if err := t.sendApprovalKeys(match.ApproveKeys); err != nil {
+		log.ErrorLog.Printf("could not send AutoYes startup keys: %v", err)
+		return false
+	}
+	promptpolicy.AuditAutoApproval(t.sanitizedName, t.program, match, "startup-policy")
+	return true
 }
 
 // Restore attaches to an existing session and restores the window size
@@ -313,13 +320,47 @@ func (t *TmuxSession) TapDAndEnter() error {
 	return nil
 }
 
+func (t *TmuxSession) TryAutoApprove(sessionID string) bool {
+	content, err := t.CapturePaneContent()
+	if err != nil {
+		log.ErrorLog.Printf("error capturing pane content for AutoYes: %v", err)
+		return false
+	}
+	match, ok := promptpolicy.Classify(t.program, content)
+	if !ok {
+		t.autoYesFingerprint = ""
+		return false
+	}
+	if !promptpolicy.AllowsAutoApprove(match) || match.Fingerprint == t.autoYesFingerprint {
+		return false
+	}
+	if err := t.sendApprovalKeys(match.ApproveKeys); err != nil {
+		log.ErrorLog.Printf("error sending AutoYes keys: %v", err)
+		return false
+	}
+	t.autoYesFingerprint = match.Fingerprint
+	promptpolicy.AuditAutoApproval(sessionID, t.program, match, "policy")
+	return true
+}
+
+func (t *TmuxSession) sendApprovalKeys(keys []byte) error {
+	if len(keys) == 0 {
+		keys = []byte{0x0D}
+	}
+	_, err := t.ptmx.Write(keys)
+	if err != nil {
+		return fmt.Errorf("error sending AutoYes keys to PTY: %w", err)
+	}
+	return nil
+}
+
 func (t *TmuxSession) SendKeys(keys string) error {
 	_, err := t.ptmx.Write([]byte(keys))
 	return err
 }
 
-// HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
-// the tmux pane has a prompt for aider or claude code.
+// HasUpdated checks if the tmux pane content has changed since the last tick. It
+// also reports whether the prompt policy recognizes a prompt on screen.
 func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	content, err := t.CapturePaneContent()
 	if err != nil {
@@ -327,13 +368,9 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 		return false, false
 	}
 
-	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
-	if t.program == ProgramClaude {
-		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
-	} else if strings.HasPrefix(t.program, ProgramAider) {
-		hasPrompt = strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
-	} else if strings.HasPrefix(t.program, ProgramGemini) {
-		hasPrompt = strings.Contains(content, "Yes, allow once")
+	hasPrompt = promptpolicy.IsPrompt(t.program, content)
+	if !hasPrompt {
+		t.autoYesFingerprint = ""
 	}
 
 	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {

@@ -252,8 +252,10 @@ func (b *SessionBrowser) renderRow(s copilot.Session, selected bool, width int) 
 	} else if !s.HasEvents {
 		glyph = browserMutedStyle.Render("○")
 	}
-	name := s.DisplayName()
-	meta := strings.Trim(strings.Join(nonEmpty(s.Repository, s.Branch), " · "), " ")
+	name := SafeDisplay(s.DisplayName())
+	repo := SafeDisplay(s.Repository)
+	branch := SafeDisplay(s.Branch)
+	meta := strings.Trim(strings.Join(nonEmpty(repo, branch), " · "), " ")
 	updated := relativeTime(s.UpdatedAt)
 	reserved := runewidth.StringWidth(glyph) + runewidth.StringWidth(meta) + runewidth.StringWidth(updated) + 6
 	nameWidth := width - reserved
@@ -277,11 +279,11 @@ func (b *SessionBrowser) renderPreview(width, height int) string {
 	}
 	b.loadSelectedPreview()
 	lines := []string{
-		browserPreviewTitleStyle.Render(sel.DisplayName()),
-		fmt.Sprintf("Name: %s", valueOr(sel.Name, "-")),
-		fmt.Sprintf("Repository: %s", valueOr(sel.Repository, "-")),
-		fmt.Sprintf("Branch: %s", valueOr(sel.Branch, "-")),
-		fmt.Sprintf("Origin root: %s", valueOr(sel.OriginRoot, "-")),
+		browserPreviewTitleStyle.Render(SafeDisplay(sel.DisplayName())),
+		fmt.Sprintf("Name: %s", valueOr(SafeDisplay(sel.Name), "-")),
+		fmt.Sprintf("Repository: %s", valueOr(SafeDisplay(sel.Repository), "-")),
+		fmt.Sprintf("Branch: %s", valueOr(SafeDisplay(sel.Branch), "-")),
+		fmt.Sprintf("Origin root: %s", valueOr(SafeDisplay(sel.OriginRoot), "-")),
 		fmt.Sprintf("Updated: %s", relativeTime(sel.UpdatedAt)),
 		"",
 		browserMutedStyle.Render("Transcript snippet"),
@@ -372,7 +374,7 @@ func (b *SessionBrowser) loadSelectedPreview() {
 	if err != nil {
 		msg = ""
 	}
-	b.previewCache[sel.ID] = msg
+	b.previewCache[sel.ID] = SafeDisplay(msg)
 }
 
 func defaultSessionFilter(sessions []copilot.Session, query string) []copilot.Session {

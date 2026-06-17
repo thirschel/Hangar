@@ -134,6 +134,19 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
+	// Validate untrusted fields loaded from state.json at the trust boundary
+	// before they can reach `git diff` or os.RemoveAll.
+	if sha := data.Worktree.BaseCommitSHA; sha != "" {
+		if err := git.ValidateSHA(sha); err != nil {
+			return nil, fmt.Errorf("state.json: %w", err)
+		}
+	}
+	if wt := data.Worktree.WorktreePath; wt != "" {
+		if err := git.AssertWorktreePathContained(wt); err != nil {
+			return nil, fmt.Errorf("state.json: %w", err)
+		}
+	}
+
 	instance := &Instance{
 		Title:          data.Title,
 		Path:           data.Path,
@@ -478,6 +491,15 @@ func (i *Instance) TapEnter() {
 	}
 }
 
+// TryAutoApprove approves the current terminal prompt only if the backend's
+// prompt policy classifies it as safe for AutoYes.
+func (i *Instance) TryAutoApprove() bool {
+	if !i.started || !i.AutoYes || i.termSession == nil {
+		return false
+	}
+	return i.termSession.TryAutoApprove(i.Title)
+}
+
 // SetAutoYes sets the AutoYes flag and propagates it to the terminal backend.
 // On Windows this hands AutoYes ownership to the session host (so prompts are
 // auto-approved even when the TUI is closed, and paused while attached); on
@@ -570,7 +592,14 @@ func (i *Instance) Pause() error {
 			log.ErrorLog.Print(err)
 		}
 		// Drop any leftover directory so a future Resume's `git worktree add` won't conflict.
-		if err := os.RemoveAll(i.gitWorktree.GetWorktreePath()); err != nil {
+		// Refuse to delete a path that is not contained within the managed worktrees
+		// directory — a tampered state.json could otherwise point worktree_path at an
+		// arbitrary directory (F-09).
+		wtPath := i.gitWorktree.GetWorktreePath()
+		if assertErr := git.AssertWorktreePathContained(wtPath); assertErr != nil {
+			log.ErrorLog.Printf("SECURITY: blocked RemoveAll on uncontained worktree path %q: %v", wtPath, assertErr)
+			errs = append(errs, fmt.Errorf("refusing to remove uncontained worktree directory: %w", assertErr))
+		} else if err := os.RemoveAll(wtPath); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove orphaned worktree directory: %w", err))
 			log.ErrorLog.Print(err)
 		}

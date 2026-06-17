@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/config"
+	"claude-squad/log"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -87,13 +88,17 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		return nil, fmt.Errorf("failed to unmarshal instances: %w", err)
 	}
 
-	instances := make([]*Instance, len(instancesData))
-	for i, data := range instancesData {
+	instances := make([]*Instance, 0, len(instancesData))
+	for _, data := range instancesData {
 		instance, err := FromInstanceData(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
+			// A single rejected entry (e.g. an unsafe persisted worktree path,
+			// F-09) must not prevent every other instance from loading. Log and
+			// skip just the bad entry instead of failing the whole load.
+			log.ErrorLog.Printf("skipping instance %q during load: %v", data.Title, err)
+			continue
 		}
-		instances[i] = instance
+		instances = append(instances, instance)
 	}
 
 	return instances, nil

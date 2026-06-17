@@ -19,6 +19,10 @@ func TestSetupFromExistingBranch_RemovesOrphanedDirectory(t *testing.T) {
 	defer func() {
 		_ = os.Setenv("HOME", originalHome)
 	}()
+	// On Windows the config (and worktrees) dir is derived from USERPROFILE, so
+	// point it at the same temp home; otherwise the worktree-containment guard
+	// resolves the managed dir to the real profile and rejects the temp path.
+	t.Setenv("USERPROFILE", tempHome)
 
 	repoPath := filepath.Join(t.TempDir(), "repo")
 	mustRunGit(t, "", "init", repoPath)

@@ -22,7 +22,14 @@ import (
 // v5 adds Regenerate/ForceRegenerate (kill the current agent and start a fresh
 // one in the same worktree, optionally seeded from a HANDOFF.md) plus additive
 // WorkspaceInfo regenerate-status fields.
-const Version = 5
+// v6 adds UpdateWorkspace and the Copilot session browser methods.
+// v7 makes Hello an authenticated nonce/HMAC challenge-response. Mixed old/new
+// clients and hosts fail closed with a protocol mismatch before any command.
+// v8 adds server-enforced cross-repo confirmation for ResumeCopilotSession
+// (Request.Confirmed plus Response.NeedsConfirm/AbsPath). Bumping the version
+// guarantees a new client cannot silently resume against an old host that would
+// ignore the confirmation flag and create a worktree in an unconfirmed repo.
+const Version = 8
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
 // whole scrollback, so this is generous but still guards against abuse/OOM.
@@ -69,8 +76,8 @@ const (
 	MethodUpdateWorkspace = "UpdateWorkspace"
 
 	// Copilot session browser (v6): discover and resume local Copilot CLI sessions.
-	MethodListCopilotSessions   = "ListCopilotSessions"
-	MethodResumeCopilotSession  = "ResumeCopilotSession"
+	MethodListCopilotSessions  = "ListCopilotSessions"
+	MethodResumeCopilotSession = "ResumeCopilotSession"
 )
 
 // Capture modes for MethodCapturePane.
@@ -104,7 +111,8 @@ type Request struct {
 	WithANSI bool   `json:"withANSI,omitempty"`
 
 	// Hello
-	ClientVersion int `json:"clientVersion,omitempty"`
+	ClientVersion int    `json:"clientVersion,omitempty"`
+	ClientNonce   string `json:"clientNonce,omitempty"`
 
 	// Workspace methods (v2)
 	RepoPath    string `json:"repoPath,omitempty"`
@@ -130,6 +138,11 @@ type Request struct {
 
 	// ResumeCopilotSession
 	SessionID string `json:"sessionId,omitempty"`
+
+	// Confirmed (v8): set by the client to acknowledge a cross-repo resume after
+	// the host returned NeedsConfirm. The host refuses to create a worktree in a
+	// repo other than its own working directory unless this is true (F-03).
+	Confirmed bool `json:"confirmed,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -180,7 +193,10 @@ type Response struct {
 	Error string `json:"error,omitempty"`
 
 	// Hello
-	HostVersion int `json:"hostVersion,omitempty"`
+	HostVersion     int    `json:"hostVersion,omitempty"`
+	HostPID         int    `json:"hostPid,omitempty"`
+	HostCreatedUnix int64  `json:"hostCreatedUnix,omitempty"`
+	HostNonceProof  string `json:"hostNonceProof,omitempty"`
 
 	// CapturePane
 	Content string `json:"content,omitempty"`
@@ -213,6 +229,13 @@ type Response struct {
 	// Copilot session browser (v6)
 	CopilotSessions []CopilotSessionInfo `json:"copilotSessions,omitempty"`
 	Skipped         int                  `json:"skipped,omitempty"`
+
+	// Cross-repo resume confirmation (v8). When NeedsConfirm is true the host
+	// declined to resume because the target repo differs from its own working
+	// directory; AbsPath is the fully resolved repo path to show the user. The
+	// client re-issues ResumeCopilotSession with Confirmed=true to proceed (F-03).
+	NeedsConfirm bool   `json:"needsConfirm,omitempty"`
+	AbsPath      string `json:"absPath,omitempty"`
 }
 
 // CopilotSessionInfo describes a discovered local Copilot CLI session.
