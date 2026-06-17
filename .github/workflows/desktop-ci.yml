@@ -42,7 +42,7 @@ jobs:
 
     - name: Install dependencies
       working-directory: desktop
-      run: npm ci
+      run: npm install
 
     - name: Audit dependencies
       working-directory: desktop

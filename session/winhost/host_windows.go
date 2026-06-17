@@ -68,7 +68,7 @@ func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
 		newSession: func(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
-				return newConptySession(name, program, workDir, "cmd", cols, rows, autoYes)
+			return newConptySession(name, program, workDir, "cmd", cols, rows, autoYes)
 		},
 		lastActive:  time.Now(),
 		idleTimeout: idle,
