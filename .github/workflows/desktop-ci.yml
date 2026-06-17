@@ -1,0 +1,62 @@
+name: Desktop CI
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop-ci.yml'
+
+jobs:
+  desktop:
+    name: Lint, Test & Build Desktop App
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Build Go binary for Windows
+      run: go build -v -o dist/cs.exe .
+
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+        cache: 'npm'
+        cache-dependency-path: desktop/package-lock.json
+
+    - name: Install dependencies
+      run: cd desktop && npm ci
+
+    - name: Lint
+      run: cd desktop && npm run lint
+
+    - name: Typecheck
+      run: cd desktop && npm run typecheck
+
+    - name: Unit tests
+      run: cd desktop && npm run test
+
+    - name: Build Electron app
+      run: cd desktop && npm run pack
+
+    - name: E2E tests
+      run: cd desktop && npm run test:e2e
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: claude-squad-desktop-win
+        path: desktop/release/win-unpacked
+        retention-days: 7
