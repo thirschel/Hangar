@@ -1841,3 +1841,13 @@ body.is-col-resizing .side-panel {
 .about-value a:hover {
   text-decoration: underline;
 }
+
+.modal--welcome .modal__body p {
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+
+.modal--welcome .welcome-detail {
+  color: #8b8b8b;
+  font-size: 0.9em;
+}

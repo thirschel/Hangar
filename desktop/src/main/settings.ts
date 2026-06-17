@@ -21,6 +21,7 @@ export type AppSettings = {
   minimizeToTray: boolean;
   uiRefreshMs: number;
   autoUpdate: boolean;
+  setupComplete: boolean;
 };
 
 // The merged, flat view the renderer's Settings UI works with.
@@ -41,6 +42,7 @@ const APP_DEFAULTS: AppSettings = {
   minimizeToTray: true,
   uiRefreshMs: 2000,
   autoUpdate: false,
+  setupComplete: false,
 };
 
 function csDir(): string {
@@ -65,6 +67,17 @@ function readJson<T>(file: string, fallback: T): T {
 
 export function readDaemonConfig(): DaemonConfig {
   return readJson<DaemonConfig>(configPath(), {});
+}
+
+export function isFirstRun(): boolean {
+  return !readAppSettings().setupComplete;
+}
+
+export function markSetupComplete(): void {
+  mkdirSync(csDir(), { recursive: true });
+  const app = readAppSettings();
+  app.setupComplete = true;
+  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n');
 }
 
 export function readAppSettings(): AppSettings {
