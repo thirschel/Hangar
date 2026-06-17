@@ -294,7 +294,7 @@ export function controlPipeName(): string {
 }
 
 export function hostInfoPath(): string {
-  return path.join(os.homedir(), '.claude-squad', 'host.json');
+  return path.join(os.homedir(), '.hangar', 'host.json');
 }
 
 function isLowerHexBytes(value: string, nbytes: number): boolean {
