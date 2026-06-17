@@ -43,7 +43,7 @@ type workspace struct {
 	ExistingBranch bool   `json:"existingBranch"`
 	CreatedUnix    int64  `json:"createdUnix"`
 	RunCommand     string `json:"runCommand"`
-	AgentSessionID string `json:"agentSessionId"` // stable agent session UUID for resume (copilot)
+	AgentSessionID string `json:"agentSessionId"`  // stable agent session UUID for resume (copilot)
 	Shell          string `json:"shell,omitempty"` // "cmd", "powershell", "pwsh"; empty = config default
 }
 
@@ -1005,13 +1005,13 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	// Phase 2: Optional worktree/branch deletion
 	if req.DeleteWorktree {
 		wt := w.worktreeFor()
-		
+
 		// Canonicalize and validate worktree path to prevent traversal
 		worktreePath, err := filepath.Abs(w.WorktreePath)
 		if err == nil {
 			worktreePath = filepath.Clean(worktreePath)
 		}
-		
+
 		// Remove worktree directory (retry loop for Windows handle release)
 		for i := 0; i < 10; i++ {
 			if err := wt.Remove(); err == nil {
@@ -1019,15 +1019,15 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 			}
 			time.Sleep(150 * time.Millisecond)
 		}
-		
+
 		// Prune worktree references
 		_ = wt.Prune()
-		
+
 		// Best-effort branch deletion (local only, non-fatal if fails)
 		// We use git CLI directly here instead of worktree methods
 		cmd := exec.Command("git", "-C", w.RepoPath, "branch", "-D", w.Branch)
 		_ = cmd.Run() // Ignore errors - branch might not exist locally
-		
+
 		m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
 	} else {
 		// Keep worktree and branch - just prune references
