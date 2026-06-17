@@ -77,8 +77,23 @@ func (g *GitWorktree) setupNewWorktree() error {
 	// Clean up any existing branch using git CLI (much faster than go-git PlainOpen)
 	_, _ = g.runGitCommand(g.repoPath, "branch", "-D", g.branchName) // Ignore error if branch doesn't exist
 
-	output, err := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
-	if err != nil {
+	headOutput, headErr := g.runGitCommand(g.repoPath, "rev-parse", "HEAD")
+	base := ""
+	if headErr == nil {
+		base = strings.TrimSpace(headOutput)
+	}
+
+	if g.baseCommitOverride != "" {
+		overrideOutput, overrideErr := g.runGitCommand(g.repoPath, "rev-parse", "--verify", fmt.Sprintf("%s^{commit}", g.baseCommitOverride))
+		if overrideErr == nil {
+			base = strings.TrimSpace(overrideOutput)
+		} else {
+			log.WarningLog.Printf("recorded base commit %s is unavailable; falling back to HEAD: %v", g.baseCommitOverride, overrideErr)
+		}
+	}
+
+	if base == "" {
+		err := headErr
 		if strings.Contains(err.Error(), "fatal: ambiguous argument 'HEAD'") ||
 			strings.Contains(err.Error(), "fatal: not a valid object name") ||
 			strings.Contains(err.Error(), "fatal: HEAD: not a valid object name") {
@@ -86,15 +101,14 @@ func (g *GitWorktree) setupNewWorktree() error {
 		}
 		return fmt.Errorf("failed to get HEAD commit hash: %w", err)
 	}
-	headCommit := strings.TrimSpace(string(output))
-	g.baseCommitSHA = headCommit
+	g.baseCommitSHA = base
 
-	// Create a new worktree from the HEAD commit
+	// Create a new worktree from the resolved base commit
 	// Otherwise, we'll inherit uncommitted changes from the previous worktree.
 	// This way, we can start the worktree with a clean slate.
 	// TODO: we might want to give an option to use main/master instead of the current branch.
-	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, headCommit); err != nil {
-		return fmt.Errorf("failed to create worktree from commit %s: %w", headCommit, err)
+	if _, err := g.runGitCommand(g.repoPath, "worktree", "add", "-b", g.branchName, g.worktreePath, base); err != nil {
+		return fmt.Errorf("failed to create worktree from commit %s: %w", base, err)
 	}
 
 	return nil

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	cslog "claude-squad/log"
+	"claude-squad/session/agentcmd"
 )
 
 // TestMain initializes the global logger so tests that drive config/git (e.g.
@@ -213,30 +214,109 @@ func TestCreateWorkspaceRejectsUnknownProgram(t *testing.T) {
 	}
 }
 
-// TestAgentLaunchCommand covers the resume-command builder: copilot gets a
-// stable --session-id flag (so a relaunch after a daemon restart resumes the
-// same conversation), while a blank id or an unknown agent is launched as-is.
-func TestAgentLaunchCommand(t *testing.T) {
-	cases := []struct {
+// TestAgentCommandsForWorkspaceIntent covers the command builders used by
+// workspace create (seed a new session id) and revive (resume an existing id).
+func TestAgentCommandsForWorkspaceIntent(t *testing.T) {
+	seedCases := []struct {
 		program, id, want string
 	}{
 		{"copilot", "abc-123", "copilot --session-id=abc-123"},
-		{"cmd.exe /c copilot", "abc-123", "cmd.exe /c copilot --session-id=abc-123"},
 		{"copilot", "", "copilot"},      // no id -> unchanged
 		{"bash", "abc-123", "bash"},     // unknown agent -> unchanged
 		{"claude", "abc-123", "claude"}, // not yet verified -> unchanged
 	}
-	for _, c := range cases {
-		if got := agentLaunchCommand(c.program, c.id); got != c.want {
-			t.Fatalf("agentLaunchCommand(%q, %q) = %q, want %q", c.program, c.id, got, c.want)
+	for _, c := range seedCases {
+		if got := agentcmd.SeedNewCommand(c.program, c.id); got != c.want {
+			t.Fatalf("SeedNewCommand(%q, %q) = %q, want %q", c.program, c.id, got, c.want)
 		}
 	}
 
-	if !supportsResume("copilot") || !supportsResume("cmd.exe /c copilot") {
-		t.Fatal("expected copilot to support resume")
+	resumeCases := []struct {
+		program, id, want string
+	}{
+		{"copilot", "abc-123", "copilot --resume=abc-123"},
+		{"copilot", "", "copilot"},      // no id -> unchanged
+		{"bash", "abc-123", "bash"},     // unknown agent -> unchanged
+		{"claude", "abc-123", "claude"}, // not yet verified -> unchanged
 	}
-	if supportsResume("claude") || supportsResume("cmd") {
+	for _, c := range resumeCases {
+		if got := agentcmd.ResumeCommand(c.program, c.id); got != c.want {
+			t.Fatalf("ResumeCommand(%q, %q) = %q, want %q", c.program, c.id, got, c.want)
+		}
+	}
+
+	if !agentcmd.SupportsResume("copilot") ||
+		!agentcmd.SupportsResume(`C:\Tools\copilot.exe`) ||
+		!agentcmd.SupportsResume("copilot.cmd --verbose") {
+		t.Fatal("expected copilot executable names to support resume")
+	}
+	if agentcmd.SupportsResume("cmd.exe /c copilot") ||
+		agentcmd.SupportsResume("claude") ||
+		agentcmd.SupportsResume("cmd") {
 		t.Fatal("expected non-copilot agents to not (yet) support resume")
+	}
+}
+
+func TestCopilotWorkspaceLaunchCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	bin := t.TempDir()
+	copilotCmd := filepath.Join(bin, "copilot.cmd")
+	if err := os.WriteFile(copilotCmd, []byte("@echo off\r\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	repo := initTempRepo(t)
+
+	pipe, cleanup := startTestHost(t)
+	defer cleanup()
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	ws, err := c.CreateWorkspace(repo, "Copilot Launch", "copilot.cmd", "")
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+
+	sessionProgram := func() string {
+		t.Helper()
+		sessions, err := c.ListSessions()
+		if err != nil {
+			t.Fatalf("ListSessions: %v", err)
+		}
+		for _, s := range sessions {
+			if s.Name == ws.SessionName {
+				return s.Program
+			}
+		}
+		t.Fatalf("session %s not found in %+v", ws.SessionName, sessions)
+		return ""
+	}
+
+	seedProgram := sessionProgram()
+	const seedPrefix = "copilot.cmd --session-id="
+	if !strings.HasPrefix(seedProgram, seedPrefix) || strings.Contains(seedProgram, "--resume=") {
+		t.Fatalf("create command = %q, want seed command with --session-id", seedProgram)
+	}
+	agentID := strings.TrimPrefix(seedProgram, seedPrefix)
+	if agentID == "" {
+		t.Fatalf("create command had empty agent session id: %q", seedProgram)
+	}
+
+	if err := c.Kill(ws.SessionName); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if _, _, err := c.Attach(ws.SessionName, 120, 30); err != nil {
+		t.Fatalf("Attach should revive workspace: %v", err)
+	}
+	if got, want := sessionProgram(), "copilot.cmd --resume="+agentID; got != want {
+		t.Fatalf("revive command = %q, want %q", got, want)
 	}
 }
 
