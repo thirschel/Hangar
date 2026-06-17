@@ -67,6 +67,8 @@ const mockCs = {
   onClosed: () => noop,
   onError: () => noop,
   onFocusWorkspace: () => noop,
+  onFirstRun: () => noop,
+  completeSetup: asyncNoop,
   sendInput: noop,
   resize: noop,
 };
