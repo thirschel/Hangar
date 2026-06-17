@@ -41,6 +41,7 @@ const (
 	StateNewInstance
 	StatePrompt
 	StateSearch
+	StateBrowse
 )
 
 type Menu struct {
@@ -54,7 +55,7 @@ type Menu struct {
 	keyDown keys.KeyName
 }
 
-var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
+var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyBrowse, keys.KeyHelp, keys.KeyQuit}
 var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var searchMenuOptions = []keys.KeyName{keys.KeySearchCancel, keys.KeySearchApply}
@@ -86,8 +87,8 @@ func (m *Menu) SetState(state MenuState) {
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
 	// Only change the state if we're not in a special state (NewInstance, Prompt,
-	// or Search) that owns the menu and must not be reset by background updates.
-	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateSearch {
+	// Search, or Browse) that owns the menu and must not be reset by background updates.
+	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateSearch && m.state != StateBrowse {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -122,6 +123,8 @@ func (m *Menu) updateOptions() {
 		m.options = promptMenuOptions
 	case StateSearch:
 		m.options = searchMenuOptions
+	case StateBrowse:
+		m.options = []keys.KeyName{keys.KeyUp, keys.KeyDown, keys.KeyEnter}
 	}
 }
 
