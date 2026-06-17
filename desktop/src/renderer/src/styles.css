@@ -175,7 +175,7 @@ button {
 
 .workspace {
   display: grid;
-  grid-template-columns: 240px minmax(360px, 1fr) 6px 420px;
+  grid-template-columns: 280px minmax(360px, 1fr) 6px 420px;
   min-height: 0;
 }
 
