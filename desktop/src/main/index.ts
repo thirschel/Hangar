@@ -18,7 +18,25 @@ import { getSettings, applySettings, type Settings } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { log } from './logger';
-import { initAutoUpdate } from './updater';
+import {
+  checkForUpdate,
+  downloadUpdate,
+  getUpdateStatus,
+  initAutoUpdate,
+  installUpdate,
+  type UpdateStatus,
+} from './updater';
+
+export type AppInfo = {
+  version: string;
+  appName: string;
+  electronVersion: string;
+  nodeVersion: string;
+  platform: string;
+  arch: string;
+  githubUrl: string;
+  author: string;
+};
 
 const CS_EXE =
   process.env.CS_EXE ||
@@ -297,6 +315,34 @@ ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Prom
   return applySettings(patch);
 });
 
+ipcMain.handle(
+  'cs:get-app-info',
+  async (): Promise<AppInfo> => ({
+    version: app.getVersion(),
+    appName: app.getName(),
+    electronVersion: process.versions.electron,
+    nodeVersion: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    githubUrl: 'https://github.com/thirschel/Hangar',
+    author: 'Hangar contributors',
+  }),
+);
+
+ipcMain.handle('cs:get-update-status', async (): Promise<UpdateStatus> => getUpdateStatus());
+
+ipcMain.handle('cs:check-for-update', async () => {
+  return checkForUpdate();
+});
+
+ipcMain.handle('cs:download-update', async () => {
+  return downloadUpdate();
+});
+
+ipcMain.handle('cs:install-update', async () => {
+  installUpdate();
+});
+
 // Show a native OS notification (e.g. agent finished / needs input). Clicking it
 // reveals the window and asks the renderer to select the originating workspace.
 ipcMain.handle(
@@ -339,7 +385,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   createWindow();
   createTray(() => mainWindow);
-  initAutoUpdate();
+  initAutoUpdate(mainWindow);
   // Global hotkey: summon/focus the app window from anywhere.
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (!mainWindow) return;

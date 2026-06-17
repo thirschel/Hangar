@@ -1776,3 +1776,68 @@ body.is-col-resizing .side-panel {
     scroll-behavior: auto !important;
   }
 }
+
+.settings-divider {
+  border-top: 1px solid #3a3a3a;
+  margin: 12px 0;
+}
+
+.update-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.update-btn {
+  padding: 4px 12px;
+  font-size: 0.85em;
+}
+
+.update-status {
+  color: #8b8b8b;
+  font-size: 0.85em;
+}
+
+.update-status--error {
+  color: #f44747;
+}
+
+.update-progress {
+  color: #8b8b8b;
+  font-size: 0.85em;
+}
+
+.about-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.about-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.about-label {
+  color: #8b8b8b;
+  font-size: 0.85em;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.about-value {
+  font-size: 0.85em;
+  color: #cccccc;
+}
+
+.about-value a {
+  color: #569cd6;
+  text-decoration: none;
+}
+
+.about-value a:hover {
+  text-decoration: underline;
+}
