@@ -130,6 +130,46 @@
   line-height: 1.15;
 }
 
+.ctaGroup,
+.downloadActions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.ctaGroup {
+  margin-top: 8px;
+}
+
+.ctaButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  max-width: 100%;
+  padding: 0 22px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  transition: transform 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+
+.ctaButtonPrimary {
+  border-color: color-mix(in srgb, var(--accent-warm) 78%, var(--border));
+  background: var(--accent-warm);
+  color: #081426;
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--accent-warm) 32%, transparent);
+}
+
+.ctaButtonSecondary {
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--accent-strong);
+}
+
 .demoVideo {
   display: flex;
   justify-content: center;
@@ -221,8 +261,42 @@
   padding: 24px;
 }
 
+.downloadCard {
+  margin-bottom: 18px;
+}
+
+.downloadActions {
+  justify-content: flex-start;
+}
+
+.downloadNote {
+  flex: 1 1 260px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.installSubhead {
+  display: grid;
+  gap: 8px;
+  max-width: 760px;
+  margin: 8px 0 18px;
+}
+
+.installSubhead h3 {
+  color: var(--accent-strong);
+  font-size: clamp(24px, 3.8vw, 34px);
+}
+
+.installSubhead p:last-child {
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
 .installCard code,
-.note code {
+.note code,
+.installSubhead code {
   color: var(--accent-strong);
   font-size: 0.92em;
   font-weight: 700;
@@ -284,6 +358,20 @@
     transform: translateY(-1px);
   }
 
+  .ctaButton:hover {
+    transform: translateY(-2px);
+  }
+
+  .ctaButtonPrimary:hover {
+    background: color-mix(in srgb, var(--accent-warm) 92%, white);
+    box-shadow: 0 18px 38px color-mix(in srgb, var(--accent-warm) 40%, transparent);
+  }
+
+  .ctaButtonSecondary:hover {
+    border-color: color-mix(in srgb, var(--accent-warm) 58%, var(--border));
+    background: var(--surface);
+  }
+
   .footer a:hover,
   .brand:hover .wordmark {
     color: var(--accent-warm);
@@ -336,6 +424,14 @@
     padding: 14px 42px 14px 14px;
     font-size: 12px;
   }
+
+  .downloadActions {
+    align-items: stretch;
+  }
+
+  .downloadActions .ctaButton {
+    width: 100%;
+  }
 }
 
 @media (max-width: 375px) {
@@ -353,5 +449,11 @@
     min-height: 34px;
     padding: 0 11px;
     font-size: 13px;
+  }
+
+  .ctaButton {
+    width: 100%;
+    min-height: 46px;
+    padding: 0 16px;
   }
 }

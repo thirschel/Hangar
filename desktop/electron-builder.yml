@@ -1,6 +1,6 @@
-appId: com.claudesquad.desktop
-productName: claude-squad
-copyright: Copyright © 2026 claude-squad
+appId: com.thirschel.hangar
+productName: Hangar
+copyright: Copyright © 2026 Hangar
 
 directories:
   output: release
@@ -34,11 +34,11 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   artifactName: ${productName}-Setup-${version}.${ext}
-  shortcutName: claude-squad
+  shortcutName: Hangar
 
 # Auto-update source. Update owner/repo to the fork that publishes releases; the
 # updater only runs in packaged builds and logs (does not crash) if no release exists.
 publish:
   provider: github
-  owner: thirschel-microsoft
-  repo: claude-squad
+  owner: thirschel
+  repo: Hangar

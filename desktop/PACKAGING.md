@@ -1,15 +1,15 @@
 # Packaging & distribution (E6)
 
-The desktop app is packaged with [electron-builder] into a Windows **NSIS**
+The Hangar desktop app is packaged with [electron-builder] into a Windows **NSIS**
 installer that bundles the Go core-daemon (`cs.exe`).
 
 ## Prerequisites
 
-1. Build the core-daemon first so it exists at the repo root `dist/cs.exe`
+1. Build the core-daemon first so it exists at the repo root `dist\cs.exe`
    (the installer ships this verbatim — see `electron-builder.yml` → `extraResources`):
 
    ```pwsh
-   # from the repo root (D:\dev\claude-squad)
+   # from the repo root (for example D:\dev\Hangar)
    go build -o dist\cs.exe .
    ```
 
@@ -25,7 +25,7 @@ installer that bundles the Go core-daemon (`cs.exe`).
 cd desktop
 npm install
 npm run pack    # unpacked app in release/win-unpacked (fast smoke test)
-npm run dist    # full NSIS installer in release/claude-squad-Setup-<version>.exe
+npm run dist    # full NSIS installer in release/Hangar-Setup-<version>.exe
 ```
 
 At runtime the packaged app finds the daemon at
@@ -36,8 +36,8 @@ At runtime the packaged app finds the daemon at
 
 `electron-updater` is wired in `src/main/updater.ts` and runs **only in packaged
 builds**. The release feed is configured in `electron-builder.yml` → `publish`
-(GitHub provider). Update `owner`/`repo` to the fork that hosts your releases, then
-publish with `electron-builder --win nsis --publish always` (needs a `GH_TOKEN`).
+(GitHub provider) and should point at `thirschel/Hangar`. Publish with
+`electron-builder --win nsis --publish always` (needs a `GH_TOKEN`).
 If no release exists the updater logs and no-ops — it never crashes the app.
 
 ## Code signing (currently UNSIGNED)
