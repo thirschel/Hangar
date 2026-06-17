@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { MODE_LABELS, type SidebarMode } from './sidebar-modes';
@@ -15,6 +15,158 @@ type SidebarProps = {
   onFilterChange: (value: string) => void;
   searchInputRef?: RefObject<HTMLInputElement>;
 };
+
+function WorkspaceRow({
+  w,
+  selected,
+  onSelect,
+  onArchive,
+}: {
+  w: WorkspaceInfo;
+  selected: boolean;
+  onSelect: () => void;
+  onArchive: () => void;
+}): JSX.Element {
+  const status = !w.alive ? 'exited' : w.waiting ? 'waiting' : w.busy ? 'busy' : 'idle';
+  const statusTitle =
+    status === 'exited'
+      ? 'Agent exited'
+      : status === 'waiting'
+        ? 'Waiting for input'
+        : status === 'busy'
+          ? 'Working…'
+          : 'Ready';
+  return (
+    <div
+      className={`workspace-item${selected ? ' workspace-item--selected' : ''}`}
+      onClick={onSelect}
+      role="button"
+      tabIndex={0}
+    >
+      {status === 'busy' ? (
+        <span className="workspace-item__spinner" title={statusTitle} aria-label={statusTitle} />
+      ) : (
+        <span
+          className={`workspace-item__dot is-${status}`}
+          title={statusTitle}
+          aria-label={statusTitle}
+        />
+      )}
+      <div className="workspace-item__body">
+        <div className="workspace-item__name">{w.title}</div>
+        <div className="workspace-item__detail">
+          <span className="workspace-item__branch">{w.branch}</span>
+          {(w.added > 0 || w.removed > 0) && (
+            <span className="diffstat">
+              <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
+            </span>
+          )}
+        </div>
+      </div>
+      <button
+        className="icon-button archive"
+        type="button"
+        title="Archive workspace (D)"
+        onClick={(e) => {
+          e.stopPropagation();
+          void onArchive();
+        }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function SectionHeader({ label }: { label: string }): JSX.Element {
+  return (
+    <div className="sidebar-section-header">
+      <span className="sidebar-section-header__label">{label}</span>
+      <span className="sidebar-section-header__line" />
+    </div>
+  );
+}
+
+function buildGroupedList(
+  workspaces: WorkspaceInfo[],
+  mode: SidebarMode,
+  selectedId: string | null,
+  onSelect: (id: string) => void,
+  onArchive: (id: string) => void,
+): ReactNode[] {
+  if (mode === 'group-by-repo') {
+    const groups = new Map<string, WorkspaceInfo[]>();
+    for (const w of workspaces) {
+      const repo = w.repoPath || 'Unknown';
+      if (!groups.has(repo)) groups.set(repo, []);
+      groups.get(repo)!.push(w);
+    }
+    const nodes: ReactNode[] = [];
+    for (const [repo, items] of groups) {
+      // Show just the last path segment as the repo name.
+      const repoName = repo.split(/[\\/]/).pop() || repo;
+      nodes.push(<SectionHeader key={`hdr-${repo}`} label={repoName} />);
+      for (const w of items) {
+        nodes.push(
+          <WorkspaceRow
+            key={w.id}
+            w={w}
+            selected={w.id === selectedId}
+            onSelect={() => onSelect(w.id)}
+            onArchive={() => onArchive(w.id)}
+          />,
+        );
+      }
+    }
+    return nodes;
+  }
+
+  if (mode === 'pinned-pending') {
+    const pending = workspaces.filter((w) => w.waiting);
+    const rest = workspaces.filter((w) => !w.waiting);
+    const nodes: ReactNode[] = [];
+    if (pending.length > 0) {
+      nodes.push(<SectionHeader key="hdr-pending" label="Pending" />);
+      for (const w of pending) {
+        nodes.push(
+          <WorkspaceRow
+            key={w.id}
+            w={w}
+            selected={w.id === selectedId}
+            onSelect={() => onSelect(w.id)}
+            onArchive={() => onArchive(w.id)}
+          />,
+        );
+      }
+    }
+    if (rest.length > 0) {
+      nodes.push(<SectionHeader key="hdr-other" label="Other" />);
+      for (const w of rest) {
+        nodes.push(
+          <WorkspaceRow
+            key={w.id}
+            w={w}
+            selected={w.id === selectedId}
+            onSelect={() => onSelect(w.id)}
+            onArchive={() => onArchive(w.id)}
+          />,
+        );
+      }
+    }
+    return nodes;
+  }
+
+  // Flat list for manual / recent-activity.
+  return workspaces.map((w) => (
+    <WorkspaceRow
+      key={w.id}
+      w={w}
+      selected={w.id === selectedId}
+      onSelect={() => onSelect(w.id)}
+      onArchive={() => onArchive(w.id)}
+    />
+  ));
+}
 
 export function Sidebar({
   workspaces,
@@ -83,63 +235,8 @@ export function Sidebar({
             <p>No workspaces match &ldquo;{filter}&rdquo;</p>
           </div>
         )}
-        {workspaces.map((w) => {
-          const status = !w.alive ? 'exited' : w.waiting ? 'waiting' : w.busy ? 'busy' : 'idle';
-          const statusTitle =
-            status === 'exited'
-              ? 'Agent exited'
-              : status === 'waiting'
-                ? 'Waiting for input'
-                : status === 'busy'
-                  ? 'Working…'
-                  : 'Ready';
-          return (
-            <div
-              key={w.id}
-              className={`workspace-item${w.id === selectedId ? ' workspace-item--selected' : ''}`}
-              onClick={() => onSelect(w.id)}
-              role="button"
-              tabIndex={0}
-            >
-              {status === 'busy' ? (
-                <span
-                  className="workspace-item__spinner"
-                  title={statusTitle}
-                  aria-label={statusTitle}
-                />
-              ) : (
-                <span
-                  className={`workspace-item__dot is-${status}`}
-                  title={statusTitle}
-                  aria-label={statusTitle}
-                />
-              )}
-              <div className="workspace-item__body">
-                <div className="workspace-item__name">{w.title}</div>
-                <div className="workspace-item__detail">
-                  <span className="workspace-item__branch">{w.branch}</span>
-                  {(w.added > 0 || w.removed > 0) && (
-                    <span className="diffstat">
-                      <span className="add">+{w.added}</span>{' '}
-                      <span className="del">-{w.removed}</span>
-                    </span>
-                  )}
-                </div>
-              </div>
-              <button
-                className="icon-button archive"
-                type="button"
-                title="Archive workspace (D)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void onArchive(w.id);
-                }}
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
+        {workspaces.length > 0 &&
+          buildGroupedList(workspaces, sidebarMode, selectedId, onSelect, onArchive)}
       </nav>
     </aside>
   );
