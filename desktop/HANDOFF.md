@@ -1,6 +1,6 @@
-# claude-squad Desktop — Handoff
+# Hangar Desktop — Handoff
 
-A pick-up-and-go guide for the **Windows desktop app** (a Conductor-like GUI for running parallel
+A pick-up-and-go guide for **Hangar Desktop**, the **Windows desktop app** (a Conductor-like GUI for running parallel
 coding agents in isolated git worktrees) and its **Go core-daemon**. Read this first; it complements:
 
 - **`docs/native-windows.md`** — the lower-level native-Windows **session-host / daemon** model (ConPTY,
@@ -148,7 +148,7 @@ $env:GOTOOLCHAIN = "local"; $env:GOFLAGS = "-mod=mod"
 
 **Go — Linux verify (must ALSO pass; use the hardcoded path, do NOT munge PATH):**
 ```pwsh
-wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/claude-squad; export GOTOOLCHAIN=local GOFLAGS=-mod=mod; /home/bendog/go125/go/bin/go build ./... && /home/bendog/go125/go/bin/go test ./...'
+wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/Hangar; export GOTOOLCHAIN=local GOFLAGS=-mod=mod; /home/bendog/go125/go/bin/go build ./... && /home/bendog/go125/go/bin/go test ./...'
 ```
 > **Rule:** keep `go build/test ./...` green on **Windows AND Linux** for every change. Windows-only code
 > goes in `*_windows.go`; provide a `!windows` stub when a symbol is referenced cross-platform
@@ -156,7 +156,7 @@ wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/claude-squad; export GOTOOLCHAIN=local GOF
 
 **Rebuild the daemon binary the app launches** (after any Go change):
 ```pwsh
-& $go build -o dist\cs.exe .    # the app spawns D:\dev\claude-squad\dist\cs.exe (packaged: resources\dist\cs.exe)
+& $go build -o dist\cs.exe .    # the app spawns D:\dev\Hangar\dist\cs.exe (packaged: resources\dist\cs.exe)
 & $go build -o cs.exe .         # the root binary too, to avoid version skew
 ```
 
@@ -257,8 +257,8 @@ user, not per worktree.
   state per workspace (today only "agent finished" fires). `detectWaiting` already exists to build on.
 - **Multi-window pop-out** (E5 deferred).
 - **E6 signing & updater** — the installer is **unsigned** (no EV cert); set `CSC_LINK`/`CSC_KEY_PASSWORD`
-  or Azure Trusted Signing (`PACKAGING.md`). The updater `publish` owner/repo is a placeholder — point it
-  at the real release fork before shipping.
+  or Azure Trusted Signing (`PACKAGING.md`). The updater `publish` owner/repo should point to `thirschel/Hangar`
+  before shipping.
 - **Files tab editing** — read-only this round; a Monaco editor with save is the natural next step.
 - **Resume for non-copilot agents** — verify claude/codex/aider/gemini resume flags, then extend
   `supportsResume`/`agentLaunchCommand`.
