@@ -62,7 +62,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     const paste = (): void => {
       void navigator.clipboard.readText().then((text) => {
-        if (text) window.cs.sendInput(session, text);
+        // Route through xterm so the text is wrapped for bracketed-paste mode
+        // when the app enables it (and so right-click and Ctrl+Shift+V behave
+        // identically). term.paste fires onData, which forwards to sendInput.
+        if (text) term.paste(text);
       });
     };
     term.attachCustomKeyEventHandler((e) => {
@@ -73,6 +76,9 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         return false;
       }
       if (e.ctrlKey && e.shiftKey && key === 'v') {
+        // Suppress Chromium's built-in "paste and match style"; otherwise it
+        // pastes a second copy via xterm's native paste handler.
+        e.preventDefault();
         paste();
         return false;
       }
@@ -123,8 +129,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       if (d.session === session) {
         // "Follow mode": only auto-scroll to bottom when user is already at bottom.
         // This preserves the user's scroll position when reviewing history.
+        // viewportY is the buffer line at the top of the viewport; it equals baseY
+        // only when scrolled fully to the bottom (and is smaller when scrolled up).
         const wasAtBottom =
-          term.buffer.active.baseY + term.rows >= term.buffer.active.cursorY;
+          term.buffer.active.viewportY >= term.buffer.active.baseY;
         term.write(toBytes(d.chunk));
         if (wasAtBottom) {
           term.scrollToBottom();
