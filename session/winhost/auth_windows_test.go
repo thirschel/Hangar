@@ -7,7 +7,7 @@ import (
 	"errors"
 	"testing"
 
-	"claude-squad/session/winhost/proto"
+	"hangar/session/winhost/proto"
 )
 
 type errReader struct{}
@@ -18,7 +18,7 @@ func (errReader) Read([]byte) (int, error) {
 
 func testHostInfo() *hostInfo {
 	return &hostInfo{
-		PipeName:    `\\.\pipe\claudesquad-host-test`,
+		PipeName:    `\\.\pipe\hangar-host-test`,
 		PID:         4242,
 		CreatedUnix: 1710000000,
 		Nonce:       "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",

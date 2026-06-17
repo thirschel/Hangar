@@ -1,4 +1,4 @@
-module claude-squad
+module hangar
 
 go 1.25.0
 

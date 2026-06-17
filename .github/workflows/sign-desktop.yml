@@ -1,0 +1,95 @@
+# SignPath.io code signing for the desktop installer.
+# This workflow is DISABLED until the SignPath OSS application is approved.
+# To enable: uncomment the 'on' trigger and add SIGNPATH_API_TOKEN secret.
+#
+# Apply at: https://signpath.org/open-source
+# Docs: https://docs.signpath.io/documentation/integrations/github-actions
+
+name: Sign Desktop Installer
+
+# Disabled until SignPath OSS application is approved.
+# Uncomment the block below to enable:
+# on:
+#   workflow_run:
+#     workflows: ["Release"]
+#     types: [completed]
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to sign (e.g. v1.0.18)'
+        required: true
+
+permissions: {}
+
+jobs:
+  sign:
+    name: Sign Windows Installer
+    runs-on: windows-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Determine tag
+        id: tag
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            echo "tag=${{ github.event.inputs.tag }}" >> $env:GITHUB_OUTPUT
+          } else {
+            # Get the tag from the triggering release workflow
+            $tag = gh run view ${{ github.event.workflow_run.id }} --json headBranch --jq '.headBranch'
+            echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          }
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download unsigned installer from release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.tag.outputs.tag }}"
+          New-Item -ItemType Directory -Force unsigned | Out-Null
+          gh release download $tag --pattern "claude-squad-Setup-*.exe" --dir unsigned
+          $file = Get-ChildItem unsigned -Filter "*.exe" | Select-Object -First 1
+          if (-not $file) { throw "No installer found in release $tag" }
+          Write-Output "Downloaded: $($file.Name)"
+
+      # SignPath signing step — requires SIGNPATH_API_TOKEN and org/project config.
+      # Uncomment when SignPath OSS application is approved:
+      #
+      # - name: Submit signing request
+      #   uses: SignPath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: '<your-signpath-org-id>'
+      #     project-slug: 'claude-squad'
+      #     signing-policy-slug: 'release-signing'
+      #     artifact-configuration-slug: 'windows-installer'
+      #     github-artifact-id: '<artifact-id>'
+      #     wait-for-completion: true
+      #     output-artifact-directory: signed/
+
+      - name: Placeholder — signing not yet configured
+        shell: pwsh
+        run: |
+          Write-Output "::warning::SignPath signing is not yet configured."
+          Write-Output "Apply for the OSS program at https://signpath.org/open-source"
+          Write-Output "Then uncomment the signing step above and add SIGNPATH_API_TOKEN secret."
+
+      # After signing is active, upload the signed installer:
+      # - name: Upload signed installer to release
+      #   shell: pwsh
+      #   env:
+      #     GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #   run: |
+      #     $tag = "${{ steps.tag.outputs.tag }}"
+      #     $signed = Get-ChildItem signed -Filter "*.exe" | Select-Object -First 1
+      #     gh release upload $tag $signed.FullName --clobber
+      #     Write-Output "Uploaded signed installer: $($signed.Name)"

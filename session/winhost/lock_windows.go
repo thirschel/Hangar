@@ -42,7 +42,7 @@ func controlPipeName() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return `\\.\pipe\claudesquad-host-` + sid, nil
+	return `\\.\pipe\hangar-host-` + sid, nil
 }
 
 // acquireLock opens (creating if needed) the lock file and takes an exclusive,

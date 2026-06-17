@@ -9,6 +9,7 @@ import { RegenerateModal } from './components/RegenerateModal';
 import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import { SessionBrowserModal } from './components/SessionBrowserModal';
+import { WelcomeModal } from './components/WelcomeModal';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -51,6 +52,7 @@ export function App(): JSX.Element {
   const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
   const [workspaceToEdit, setWorkspaceToEdit] = useState<WorkspaceInfo | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
+  const [showWelcome, setShowWelcome] = useState(false);
   const [refreshMs, setRefreshMs] = useState(2000);
   const [sideWidth, setSideWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDE_KEY));
@@ -175,10 +177,12 @@ export function App(): JSX.Element {
       })
       .catch(() => {});
     const unsubFocus = window.cs.onFocusWorkspace((id) => setSelectedId(id));
+    const unsubWelcome = window.cs.onFirstRun?.(() => setShowWelcome(true));
 
     return () => {
       active = false;
       unsubFocus();
+      unsubWelcome?.();
     };
   }, [refresh]);
 
@@ -503,7 +507,7 @@ export function App(): JSX.Element {
   return (
     <div className="app-shell">
       <header className="top-bar">
-        <div className="brand">claude-squad</div>
+        <div className="brand">Hangar</div>
         <div className="breadcrumb">
           {selected ? (
             <>
@@ -675,6 +679,8 @@ export function App(): JSX.Element {
           }}
         />
       )}
+
+      {showWelcome && <WelcomeModal onClose={() => setShowWelcome(false)} />}
 
       {showHelp && (
         <div className="help-overlay" onClick={() => setShowHelp(false)} role="presentation">

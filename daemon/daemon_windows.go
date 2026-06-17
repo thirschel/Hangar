@@ -18,7 +18,7 @@ func getSysProcAttr() *syscall.SysProcAttr {
 }
 
 // isDaemonProcess returns true if the process at pid is a Hangar daemon binary
-// (cs.exe, claude-squad.exe, or hangar.exe).
+// (cs.exe, hangar.exe, or hangar.exe).
 // Returns (false, nil) when the process is gone, belongs to another user, or is
 // not a Hangar binary.  Returns (false, err) only for unexpected system errors.
 func isDaemonProcess(pid int) (bool, error) {
@@ -41,5 +41,5 @@ func isDaemonProcess(pid int) (bool, error) {
 	}
 	exePath := windows.UTF16ToString(buf[:size])
 	base := strings.ToLower(filepath.Base(exePath))
-	return base == "cs.exe" || base == "claude-squad.exe" || base == "hangar.exe", nil
+	return base == "cs.exe" || base == "hangar.exe", nil
 }

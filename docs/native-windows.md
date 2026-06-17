@@ -1,7 +1,7 @@
 # Native Windows Support — Architecture & Handoff
 
 > **Audience:** maintainers and AI agents picking up the native-Windows work in this fork
-> (`thirschel/claude-squad`). This document explains **what** was built, **why** it was built that
+> (`thirschel/Hangar`). This document explains **what** was built, **why** it was built that
 > way, and **what alternatives were considered and rejected**. Read this before changing anything
 > under `session/winhost/` or the Windows attach/AutoYes/persistence paths.
 
@@ -9,7 +9,7 @@
 
 ## TL;DR
 
-claude-squad upstream manages each agent in a **tmux** session (Unix only). This fork adds a
+Hangar upstream manages each agent in a **tmux** session (Unix only). This fork adds a
 **native Windows backend** — no WSL, no tmux — that reaches tmux feature parity using a
 **tmux-style client/host split**:
 
@@ -32,7 +32,7 @@ The fork started from a user report on a **WSL-on-Windows** machine:
 
 ```
 error capturing pane content: exit status 1
-... wrote logs to /tmp/claudesquad.log   (but the file "didn't exist")
+... wrote logs to /tmp/hangar.log   (but the file "didn't exist")
 ```
 
 Root cause (diagnosed first, fixed in commit `b5c72f9`): the **agent program never actually ran**.
@@ -133,7 +133,7 @@ cross-platform shim files). Unix builds never compile it.
 | `winhost.go` | cross-platform | `SessionHostCmd` const, `ErrSessionGone`, `VersionMismatch` + `AsVersionMismatch` (so the TUI can detect skew without importing Windows code). |
 | `runhost_other.go` | `!windows` | Stubs: `RunHost`, `HostInfo` (so `main.go` compiles everywhere). |
 | `winhost_test.go` | cross-platform | `AsVersionMismatch` tests (run on Linux too). |
-| `paths.go` | cross-platform | `~/.claude-squad/host.{json,lock,log}` paths + the `hostInfo` struct. |
+| `paths.go` | cross-platform | `~/.hangar/host.{json,lock,log}` paths + the `hostInfo` struct. |
 | `host_windows.go` | windows | go-winio pipe server, session registry, request dispatch, idle-exit, `RunHost`, attach plumbing. |
 | `conpty_windows.go` | windows | `conptySession`: ConPTY via `xpty`, `x/vt SafeEmulator`, always-drain goroutine, subscriber fan-out, rawRing, **host-side AutoYes** (`autoYesLoop`/`maybeAutoYes`/`autoYesDecision`/`detectPrompt`). |
 | `client_windows.go` | windows | Control `Client` (one request/response per call), `EnsureHost`, `connectAndHello`, `transportError`. |
@@ -261,7 +261,7 @@ go1.25.11`). Key pinned deps: `charmbracelet/x/xpty`, `.../x/conpty`, `.../x/vt`
 
 **Quirks / gotchas when working on this:**
 - Leftover `cs session-host` processes hold `host.lock`. Before cross-process e2e runs, kill stray
-  `session-host` PIDs and remove `~/.claude-squad/host.json` + `host.lock`.
+  `session-host` PIDs and remove `~/.hangar/host.json` + `host.lock`.
 - `xpty.WaitProcess` is used instead of `cmd.Wait` (Go #62708 — `cmd.Wait` can deadlock with ConPTY).
 - `SafeEmulator` has no `String()`; use the cell-walk helpers (`plainScreen`/`scrollbackPlain`).
 - PowerShell: `gofmt -w <dir>` works but the `*.go` glob doesn't; `&&` only chains native commands.
@@ -337,7 +337,7 @@ cs reset                # clear instances, remove worktrees, stop the daemon AND
 cs session-host         # (hidden) the detached host process; you won't run this by hand
 ```
 
-State in `~/.claude-squad/`: `state.json` (instances), `config.json`, `daemon.pid`, and on Windows
+State in `~/.hangar/`: `state.json` (instances), `config.json`, `daemon.pid`, and on Windows
 `host.json` + `host.lock` (the session host).
 
 Key types: `winhost.Session` (implements `session.TerminalSession`) · `conptySession` (one ConPTY +

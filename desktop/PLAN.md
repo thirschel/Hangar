@@ -1,4 +1,4 @@
-# claude-squad Desktop (Electron, Windows) — Phased Implementation Plan
+# Hangar Desktop (Electron, Windows) — Phased Implementation Plan
 
 > Builds on `files/electron-feasibility.md` (architecture + parity) and the working POC in this
 > directory. Goal: a Conductor-like (www.conductor.build) desktop app — run **parallel coding agents
@@ -11,9 +11,9 @@
 
 Conductor: *"Each task gets its own workspace, branch, files, terminal, diff, and review path. When
 the work is ready, review the diff, open a PR, merge, and archive the workspace."* That is exactly
-claude-squad's worktree-per-session model, with a richer GUI around it.
+Hangar's worktree-per-session model, with a richer GUI around it.
 
-| Conductor concept | claude-squad equivalent |
+| Conductor concept | Hangar equivalent |
 |---|---|
 | Workspace (isolated, own branch/files/terminal/diff) | Instance = git worktree + agent terminal session (exists) |
 | Parallel agents | Multiple host sessions (exists) |
@@ -40,7 +40,7 @@ claude-squad's worktree-per-session model, with a richer GUI around it.
 
 ## 3. Open decisions (please confirm/adjust when reviewing)
 
-- **D1 — Repo layout:** monorepo — add the Electron app as `desktop/` inside the `claude-squad`
+- **D1 — Repo layout:** monorepo — add the Electron app as `desktop/` inside the `Hangar`
   repo (bundles the same `cs.exe` daemon; one protocol version). *Recommended* (evolve this POC into
   `desktop/`). Alternative: a separate repo.
 - **D2 — UI stack:** Electron + **TypeScript + React + Vite** (largest ecosystem; HMR). Alternative:
@@ -56,7 +56,7 @@ claude-squad's worktree-per-session model, with a richer GUI around it.
 ```
   Electron app (desktop/, Windows)                         core daemon = cs.exe (Go, extended host)
   ┌───────────────────────────────┐                        ┌─────────────────────────────────────────┐
-  │ renderer (React + xterm.js)   │  preload  ipcMain      │ control pipe  \\.\pipe\claudesquad-host-* │
+  │ renderer (React + xterm.js)   │  preload  ipcMain      │ control pipe  \\.\pipe\hangar-host-* │
   │  - workspace sidebar          │◄────────►│  host-client│   length-prefixed JSON RPC (extended)     │
   │  - agent terminal + composer  │          │  (TS, from  │ ── owns Workspaces (instance.go + state)  │
   │  - changes/diff panel         │          │   proto.go) │ ── owns git worktrees (session/git)       │

@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	"claude-squad/session/winhost/proto"
+	"hangar/session/winhost/proto"
 
 	"golang.org/x/sys/windows"
 )

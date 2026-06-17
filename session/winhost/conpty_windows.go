@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session/agentcmd"
-	"claude-squad/session/promptpolicy"
-	"claude-squad/session/winhost/proto"
+	"hangar/session/agentcmd"
+	"hangar/session/promptpolicy"
+	"hangar/session/winhost/proto"
 
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"

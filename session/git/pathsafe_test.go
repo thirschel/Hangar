@@ -77,7 +77,7 @@ func TestPathSegments(t *testing.T) {
 // so the Windows-spelled cases are gated on runtime.GOOS.
 func TestContainsCanonical(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		base := `C:\Users\x\.claude-squad\worktrees`
+		base := `C:\Users\x\.hangar\worktrees`
 		win := []struct {
 			name   string
 			target string
@@ -86,19 +86,19 @@ func TestContainsCanonical(t *testing.T) {
 			{"direct child", base + `\mybranch_abc`, true},
 			{"nested child", base + `\a\b\c`, true},
 			{"equal to base is not under", base, false},
-			{"parent is not under", `C:\Users\x\.claude-squad`, false},
+			{"parent is not under", `C:\Users\x\.hangar`, false},
 			{"system32 rejected", `C:\Windows\System32`, false},
 			// ..foo prefix false positive: a string-prefix test would accept this
 			// sibling; segment comparison rejects it.
-			{"sibling prefix worktrees-evil rejected", `C:\Users\x\.claude-squad\worktrees-evil\a`, false},
-			{"sibling suffix worktreesX rejected", `C:\Users\x\.claude-squad\worktreesX`, false},
+			{"sibling prefix worktrees-evil rejected", `C:\Users\x\.hangar\worktrees-evil\a`, false},
+			{"sibling suffix worktreesX rejected", `C:\Users\x\.hangar\worktreesX`, false},
 			// ..foo as a legitimate child directory name (begins with .. but is a
 			// real segment, not a traversal) must be accepted.
 			{"legit child named ..foo", base + `\..foo`, true},
 			// case-insensitive on Windows.
 			{"case-insensitive child", strings.ToUpper(base) + `\Branch`, true},
 			// different drive letter.
-			{"different volume rejected", `D:\Users\x\.claude-squad\worktrees\a`, false},
+			{"different volume rejected", `D:\Users\x\.hangar\worktrees\a`, false},
 			// extended-length spelling of a child (already stripped by canonicalize,
 			// but verify the comparison itself is prefix-agnostic).
 			{"forward slash child", base + `/altsep`, true},
@@ -123,7 +123,7 @@ func TestContainsCanonical(t *testing.T) {
 	}
 
 	// POSIX (case-sensitive) cases.
-	base := "/home/user/.claude-squad/worktrees"
+	base := "/home/user/.hangar/worktrees"
 	posix := []struct {
 		name   string
 		target string
@@ -131,11 +131,11 @@ func TestContainsCanonical(t *testing.T) {
 	}{
 		{"direct child", base + "/mybranch", true},
 		{"equal not under", base, false},
-		{"parent not under", "/home/user/.claude-squad", false},
+		{"parent not under", "/home/user/.hangar", false},
 		{"etc rejected", "/etc", false},
-		{"sibling prefix rejected", "/home/user/.claude-squad/worktrees-evil/a", false},
+		{"sibling prefix rejected", "/home/user/.hangar/worktrees-evil/a", false},
 		{"legit child ..foo", base + "/..foo", true},
-		{"case-sensitive mismatch rejected", "/home/user/.claude-squad/Worktrees/a", false},
+		{"case-sensitive mismatch rejected", "/home/user/.hangar/Worktrees/a", false},
 	}
 	for _, tt := range posix {
 		t.Run(tt.name, func(t *testing.T) {

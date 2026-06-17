@@ -2,6 +2,36 @@ import { useEffect, useRef, useState } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 import type { Settings } from '../../../main/settings';
 
+type AppInfo = {
+  version: string;
+  appName: string;
+  electronVersion: string;
+  nodeVersion: string;
+  platform: string;
+  arch: string;
+  githubUrl: string;
+  author: string;
+};
+
+type UpdateStatusInfo = {
+  status: string;
+  version?: string;
+  progress?: number;
+  error?: string;
+};
+
+type CsApiWithUpdates = typeof window.cs & {
+  getAppInfo?: () => Promise<AppInfo>;
+  checkForUpdate?: () => Promise<UpdateStatusInfo>;
+  downloadUpdate?: () => Promise<void>;
+  installUpdate?: () => Promise<void>;
+  onUpdateStatus?: (callback: (status: UpdateStatusInfo) => void) => (() => void) | void;
+};
+
+function getCsApi(): CsApiWithUpdates {
+  return window.cs as CsApiWithUpdates;
+}
+
 type SettingsModalProps = {
   onClose: () => void;
   onSaved?: (next: Settings) => void;
@@ -11,6 +41,11 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
   const [settings, setSettings] = useState<Settings | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<string>('idle');
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<number | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const modalRef = useRef<ModalHandle>(null);
 
   useEffect(() => {
@@ -24,6 +59,22 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const cs = getCsApi();
+    cs.getAppInfo
+      ?.()
+      .then((info: AppInfo) => setAppInfo(info))
+      .catch(() => {});
+
+    const unsub = cs.onUpdateStatus?.((status: UpdateStatusInfo) => {
+      setUpdateStatus(status.status);
+      if (status.version) setUpdateVersion(status.version);
+      if (status.progress != null) setUpdateProgress(status.progress);
+      if (status.error) setUpdateError(status.error);
+    });
+    return () => unsub?.();
   }, []);
 
   const patch = (p: Partial<Settings>): void => setSettings((s) => (s ? { ...s, ...p } : s));
@@ -46,6 +97,38 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleCheckForUpdate = async (): Promise<void> => {
+    const cs = getCsApi();
+    setUpdateStatus('checking');
+    setUpdateError(null);
+    try {
+      const result = (await cs.checkForUpdate?.()) as UpdateStatusInfo | undefined;
+      if (result) {
+        setUpdateStatus(result.status);
+        if (result.version) setUpdateVersion(result.version);
+        if (result.error) setUpdateError(result.error);
+      }
+    } catch (e) {
+      setUpdateStatus('error');
+      setUpdateError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleDownloadUpdate = async (): Promise<void> => {
+    const cs = getCsApi();
+    setUpdateStatus('downloading');
+    try {
+      await cs.downloadUpdate?.();
+    } catch (e) {
+      setUpdateStatus('error');
+      setUpdateError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleInstallUpdate = async (): Promise<void> => {
+    await getCsApi().installUpdate?.();
   };
 
   return (
@@ -109,7 +192,7 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
               <input
                 value={settings.workspaceDir}
                 spellCheck={false}
-                placeholder="~/.claude-squad/worktrees (default)"
+                placeholder="~/.hangar/worktrees (default)"
                 onChange={(e) => patch({ workspaceDir: e.target.value })}
               />
               <button type="button" onClick={() => void browseWorkspaceDir()}>
@@ -152,6 +235,98 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
               onChange={(e) => patch({ uiRefreshMs: Number(e.target.value) })}
             />
           </label>
+          <div className="settings-divider" />
+
+          <label className="field field--row">
+            <input
+              type="checkbox"
+              checked={settings.autoUpdate}
+              onChange={(e) => patch({ autoUpdate: e.target.checked })}
+            />
+            <span>Auto-update (download updates automatically)</span>
+          </label>
+
+          <div className="field">
+            <span>Updates</span>
+            <div className="update-controls">
+              <button
+                type="button"
+                className="update-btn"
+                onClick={() => void handleCheckForUpdate()}
+                disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+              >
+                {updateStatus === 'checking' ? 'Checking…' : 'Check for Updates'}
+              </button>
+              {updateVersion && updateStatus === 'available' && (
+                <button
+                  type="button"
+                  className="update-btn modal__primary"
+                  onClick={() => void handleDownloadUpdate()}
+                >
+                  Download v{updateVersion}
+                </button>
+              )}
+              {updateStatus === 'downloading' && (
+                <span className="update-progress">
+                  Downloading…{updateProgress != null ? ` ${Math.round(updateProgress)}%` : ''}
+                </span>
+              )}
+              {updateStatus === 'downloaded' && updateVersion && (
+                <button
+                  type="button"
+                  className="update-btn modal__primary"
+                  onClick={() => void handleInstallUpdate()}
+                >
+                  Install v{updateVersion} & Restart
+                </button>
+              )}
+              {updateStatus === 'not-available' && (
+                <span className="update-status">Up to date</span>
+              )}
+              {updateStatus === 'error' && updateError && (
+                <span className="update-status update-status--error">{updateError}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="settings-divider" />
+
+          <div className="about-section">
+            <div className="about-row">
+              <span className="about-label">Version</span>
+              <span className="about-value">{appInfo?.version ?? '…'}</span>
+            </div>
+            <div className="about-row">
+              <span className="about-label">Electron</span>
+              <span className="about-value">
+                {appInfo ? `${appInfo.electronVersion} · Node ${appInfo.nodeVersion}` : '…'}
+              </span>
+            </div>
+            <div className="about-row">
+              <span className="about-label">Platform</span>
+              <span className="about-value">
+                {appInfo ? `${appInfo.platform} (${appInfo.arch})` : '…'}
+              </span>
+            </div>
+            <div className="about-row">
+              <span className="about-label">GitHub</span>
+              <span className="about-value">
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (appInfo?.githubUrl) void window.cs.openExternal(appInfo.githubUrl);
+                  }}
+                >
+                  {appInfo?.githubUrl ?? '…'}
+                </a>
+              </span>
+            </div>
+            <div className="about-row">
+              <span className="about-label">Author</span>
+              <span className="about-value">{appInfo?.author ?? '…'}</span>
+            </div>
+          </div>
         </>
       )}
     </Modal>

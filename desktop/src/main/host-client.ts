@@ -290,7 +290,7 @@ export function currentUserSid(): string {
 }
 
 export function controlPipeName(): string {
-  return `\\\\.\\pipe\\claudesquad-host-${currentUserSid()}`;
+  return `\\\\.\\pipe\\hangar-host-${currentUserSid()}`;
 }
 
 export function hostInfoPath(): string {
