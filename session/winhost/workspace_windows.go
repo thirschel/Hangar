@@ -5,8 +5,10 @@ package winhost
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -43,13 +45,28 @@ type workspace struct {
 }
 
 type workspaceManager struct {
-	mu   sync.Mutex
-	host *host
-	wss  map[string]*workspace // by ID
+	mu          sync.Mutex
+	host        *host
+	wss         map[string]*workspace // by ID
+	regens      map[string]*regenState
+	tombstone   map[string]bool
+	thresholds  regenThresholds
+	bootFloor   time.Duration // min wait for a (re)started agent to be input-ready
+	submitDelay time.Duration // settle between typing a prompt and the submit Enter
 }
 
 func newWorkspaceManager(h *host) *workspaceManager {
-	m := &workspaceManager{host: h, wss: map[string]*workspace{}}
+	m := &workspaceManager{
+		host:      h,
+		wss:       map[string]*workspace{},
+		regens:    map[string]*regenState{},
+		tombstone: map[string]bool{},
+		thresholds: regenThresholds{
+			stableMs: 1500, graceMs: 4000, inactivityMs: 30000, hardCapMs: 300000,
+		},
+		bootFloor:   bootReadyFloor,
+		submitDelay: promptSubmitDelay,
+	}
 	m.load()
 	return m
 }
@@ -113,6 +130,80 @@ func newWorkspaceID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+func shortRand() string {
+	var b [3]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+// bootReadyFloor is the minimum time to wait for a freshly (re)started agent
+// before sending it input. A just-spawned CLI flushes stdin during boot, so input
+// sent too early is dropped; this floor (plus a saw-output + settle check) keeps
+// the handoff/seed prompts from landing on a not-yet-ready agent.
+const bootReadyFloor = 3 * time.Second
+
+// promptSubmitDelay is the settle time between typing a prompt's text and sending
+// the submit Enter as a separate keystroke (and between Enter retries). It must be
+// long enough that the agent processes the text paste and the CR in distinct reads
+// so the CR submits rather than being absorbed into the input.
+const promptSubmitDelay = 350 * time.Millisecond
+
+const (
+	// handoffPrompt and seedPrompt are SINGLE-LINE on purpose: a multi-line prompt
+	// (embedded \n) is typed into the agent's editor as newlines and the trailing
+	// Enter then fails to submit the buffer, so the prompt is never sent. One line
+	// + one Enter is the submit contract the desktop composer also uses.
+	handoffPrompt = "You are about to be replaced by a fresh agent in this same workspace. Before that, write a " +
+		"handoff document named HANDOFF.md in the current working directory. Capture, concisely: " +
+		"Task — what you were asked to do and the goal; " +
+		"Current status — what is done, in progress, and what works or does not; " +
+		"Next steps — the concrete actions the next agent should take, in order; " +
+		"Key context — important files, decisions, constraints, gotchas, and build/test commands. " +
+		"Write ONLY that file; make no other changes. When it is fully written, print: HANDOFF_COMPLETE"
+	seedPrompt = "A previous agent in this workspace left a handoff at HANDOFF.md in the current working directory. " +
+		"Read it first, then continue the work it describes. If anything is unclear, inspect the relevant files before proceeding."
+	handoffSentinel = "HANDOFF_COMPLETE"
+)
+
+var errArchived = errors.New("workspace archived")
+
+type regenState struct {
+	phase     string
+	force     chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+type regenThresholds struct{ stableMs, graceMs, inactivityMs, hardCapMs int64 }
+
+type regenWait struct {
+	sentinelSeen bool
+	fileChanged  bool
+	fileStableMs int64
+	agentBusy    bool
+	agentWaiting bool
+	inactiveMs   int64
+	elapsedMs    int64
+	forced       bool
+}
+
+func handoffReady(s regenWait, th regenThresholds) (proceed bool, reason string) {
+	switch {
+	case s.forced:
+		return true, "forced"
+	case s.sentinelSeen && s.fileChanged:
+		return true, "sentinel"
+	case s.fileChanged && s.fileStableMs >= th.stableMs && !s.agentBusy && s.elapsedMs >= th.graceMs:
+		return true, "file-stable-idle"
+	case s.inactiveMs >= th.inactivityMs:
+		return true, "inactivity"
+	case s.elapsedMs >= th.hardCapMs:
+		return true, "hardcap"
+	default:
+		return false, ""
+	}
 }
 
 // newUUID returns a random RFC-4122 v4 UUID, used as a stable agent session id.
@@ -296,6 +387,10 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		alive = s.alive()
 		busy, waiting = s.agentStatus()
 	}
+	regenerating, phase := false, ""
+	if regen, ok := m.regens[w.ID]; ok {
+		regenerating, phase = true, regen.phase
+	}
 	running, previewURL := m.host.runs.info(w.ID)
 	added, removed := 0, 0
 	if stats := w.worktreeFor().DiffNumstat(); stats != nil && stats.Error == nil {
@@ -307,6 +402,7 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		Alive: alive, AutoYes: w.AutoYes, Added: added, Removed: removed, CreatedUnix: w.CreatedUnix,
 		RunCommand: w.RunCommand, Running: running, PreviewURL: previewURL,
 		Busy: busy, Waiting: waiting,
+		Regenerating: regenerating, RegenPhase: phase,
 	}
 }
 
@@ -374,6 +470,401 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 		return false, err
 	}
 	return true, nil
+}
+
+func (m *workspaceManager) regenerate(req *proto.Request) *proto.Response {
+	m.mu.Lock()
+	w, ok := m.wss[req.WorkspaceID]
+	if !ok {
+		m.mu.Unlock()
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+	if _, exists := m.regens[w.ID]; exists {
+		m.mu.Unlock()
+		return proto.Errorf(req.ID, "workspace is already regenerating: %s", req.WorkspaceID)
+	}
+	phase := "restarting"
+	if req.Handoff {
+		phase = "handoff"
+	}
+	m.regens[w.ID] = &regenState{phase: phase, force: make(chan struct{}), done: make(chan struct{})}
+	id := w.ID
+	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
+	handoff := req.Handoff
+	m.mu.Unlock()
+
+	m.host.logger.Printf("regenerate requested ws=%s handoff=%v cols=%d rows=%d", id, handoff, cols, rows)
+	go m.runRegenerate(id, handoff, cols, rows)
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (m *workspaceManager) forceRegenerate(req *proto.Request) *proto.Response {
+	m.mu.Lock()
+	regen := m.regens[req.WorkspaceID]
+	m.mu.Unlock()
+	if regen != nil {
+		regen.closeOnce.Do(func() { close(regen.force) })
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (m *workspaceManager) runRegenerate(id string, handoff bool, cols, rows int) {
+	m.mu.Lock()
+	regen := m.regens[id]
+	m.mu.Unlock()
+	if regen == nil {
+		return
+	}
+	defer recoverGoroutine("workspace.regenerate")
+	defer close(regen.done)
+	defer func() {
+		m.mu.Lock()
+		delete(m.regens, id)
+		m.mu.Unlock()
+	}()
+	defer m.setWorkspaceForceApprove(id, false)
+
+	cancelled := func() bool {
+		select {
+		case <-regen.force:
+			return true
+		default:
+		}
+		m.mu.Lock()
+		tombstoned := m.tombstone[id]
+		m.mu.Unlock()
+		if tombstoned {
+			return true
+		}
+		select {
+		case <-m.host.shutdownCh:
+			return true
+		default:
+			return false
+		}
+	}
+
+	if handoff {
+		m.runHandoff(id, regen, cancelled)
+	}
+
+	m.setRegenPhase(id, "restarting")
+	if err := m.restartAgent(id, cols, rows); err != nil {
+		if errors.Is(err, errArchived) {
+			m.host.logger.Printf("regenerate for workspace %s cancelled by archive", id)
+			return
+		}
+		m.host.logger.Printf("regenerate restart failed for workspace %s: %v", id, err)
+		return
+	}
+	m.host.logger.Printf("regenerate: restarted ws=%s handoff=%v", id, handoff)
+	if handoff {
+		m.setRegenPhase(id, "seeding")
+		// Engage force-approve so copilot's fresh-boot "trust this folder?" prompt is
+		// cleared, and wait until the new agent has actually booted and settled before
+		// seeding — a just-spawned CLI reads as not-busy and drops early input.
+		m.setWorkspaceForceApprove(id, true)
+		m.waitWorkspaceReady(id, cancelled)
+		m.submitPrompt(id, seedPrompt)
+		m.host.logger.Printf("regenerate: seed sent ws=%s", id)
+		m.logScreenTail(id, "after-seed-send")
+		m.setWorkspaceForceApprove(id, false)
+	}
+}
+
+func (m *workspaceManager) runHandoff(id string, regen *regenState, cancelled func() bool) {
+	worktree := m.workspaceWorktree(id)
+	if worktree == "" {
+		return
+	}
+	handoffPath := filepath.Join(worktree, "HANDOFF.md")
+	baseToken, _ := handoffFileToken(handoffPath)
+
+	m.waitWorkspaceReady(id, cancelled)
+	if cancelled() {
+		m.writeTranscriptFallback(id, handoffPath)
+		return
+	}
+	m.setWorkspaceForceApprove(id, true)
+	m.submitPrompt(id, handoffPrompt)
+	m.host.logger.Printf("regenerate handoff: prompt sent to ws=%s", id)
+	m.logScreenTail(id, "after-handoff-send")
+
+	start := time.Now()
+	lastFileChange := start
+	lastActivity := start
+	lastToken := baseToken
+	ticker := time.NewTicker(regenTick(m.thresholds))
+	defer ticker.Stop()
+	for {
+		forced := cancelled()
+		token, content := handoffFileToken(handoffPath)
+		now := time.Now()
+		if token != lastToken {
+			lastToken = token
+			lastFileChange = now
+			lastActivity = now
+		}
+		busy, waiting := false, false
+		if s := m.workspaceSession(id); s != nil {
+			busy, waiting = s.agentStatus()
+			if busy {
+				lastActivity = now
+			}
+		}
+		screen := ""
+		if s := m.workspaceSession(id); s != nil {
+			screen = s.capture(false, false)
+		}
+		snap := regenWait{
+			sentinelSeen: hasSentinelLine(screen),
+			fileChanged:  token != baseToken,
+			fileStableMs: now.Sub(lastFileChange).Milliseconds(),
+			agentBusy:    busy,
+			agentWaiting: waiting,
+			inactiveMs:   now.Sub(lastActivity).Milliseconds(),
+			elapsedMs:    now.Sub(start).Milliseconds(),
+			forced:       forced,
+		}
+		if proceed, reason := handoffReady(snap, m.thresholds); proceed {
+			usable := snap.fileChanged && len(strings.TrimSpace(content)) >= 16
+			m.host.logger.Printf("regenerate handoff: proceeding ws=%s reason=%s usable=%v fileChanged=%v elapsedMs=%d",
+				id, reason, usable, snap.fileChanged, snap.elapsedMs)
+			if !usable {
+				m.writeTranscriptFallback(id, handoffPath)
+			}
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-regen.force:
+		case <-m.host.shutdownCh:
+		}
+	}
+}
+
+func regenTick(th regenThresholds) time.Duration {
+	tick := 500 * time.Millisecond
+	min := th.stableMs
+	for _, v := range []int64{th.graceMs, th.inactivityMs, th.hardCapMs} {
+		if v > 0 && (min <= 0 || v < min) {
+			min = v
+		}
+	}
+	if min > 0 && min < 1000 {
+		tick = time.Duration(maxInt64(10, min/2)) * time.Millisecond
+	}
+	return tick
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// hasSentinelLine reports whether the agent printed the completion sentinel on a
+// line of its own. It matches an exact trimmed line (not a substring) on the
+// VISIBLE screen only, so the handoff prompt — which itself contains the word
+// HANDOFF_COMPLETE ("…print: HANDOFF_COMPLETE") and is echoed/kept in scrollback —
+// does not trigger a false early completion.
+func hasSentinelLine(screen string) bool {
+	for _, line := range strings.Split(screen, "\n") {
+		if strings.TrimSpace(line) == handoffSentinel {
+			return true
+		}
+	}
+	return false
+}
+
+func handoffFileToken(path string) (token, content string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "absent", ""
+		}
+		return "error:" + err.Error(), ""
+	}
+	sum := sha256.Sum256(data)
+	return "present:" + hex.EncodeToString(sum[:]), string(data)
+}
+
+func (m *workspaceManager) writeTranscriptFallback(id, handoffPath string) {
+	transcript := ""
+	if s := m.workspaceSession(id); s != nil {
+		transcript = s.capture(true, false)
+	}
+	_ = os.WriteFile(handoffPath, []byte("# Auto-captured transcript (agent did not write a handoff)\n\n"+transcript), 0o600)
+}
+
+// waitWorkspaceReady waits until a workspace's agent is ready to accept typed
+// input: it has produced some output (a just-spawned CLI reads as "not busy"
+// before it has rendered anything, so a plain not-busy check fires too early and
+// the input is dropped during the boot stdin-flush) and has since settled to
+// not-busy, after at least bootFloor. Bounded; returns on cancellation.
+func (m *workspaceManager) waitWorkspaceReady(id string, cancelled func() bool) {
+	start := time.Now()
+	sawOutput := false
+	deadline := start.Add(25 * time.Second)
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if cancelled != nil && cancelled() {
+			return
+		}
+		if s := m.workspaceSession(id); s != nil {
+			busy, _ := s.agentStatus()
+			if busy || strings.TrimSpace(s.capture(false, false)) != "" {
+				sawOutput = true
+			}
+			if time.Since(start) >= m.bootFloor && sawOutput && !busy {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-m.host.shutdownCh:
+			return
+		}
+	}
+}
+
+func (m *workspaceManager) setRegenPhase(id, phase string) {
+	m.mu.Lock()
+	if regen := m.regens[id]; regen != nil {
+		regen.phase = phase
+	}
+	m.mu.Unlock()
+}
+
+func (m *workspaceManager) workspaceSession(id string) managedSession {
+	m.mu.Lock()
+	w := m.wss[id]
+	m.mu.Unlock()
+	if w == nil {
+		return nil
+	}
+	s, _ := m.host.getSession(w.SessionName)
+	return s
+}
+
+func (m *workspaceManager) workspaceWorktree(id string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if w := m.wss[id]; w != nil {
+		return w.WorktreePath
+	}
+	return ""
+}
+
+func (m *workspaceManager) setWorkspaceForceApprove(id string, enabled bool) {
+	if s := m.workspaceSession(id); s != nil {
+		s.setForceApprove(enabled)
+	}
+}
+
+// submitPrompt types text into the agent's input box and submits it. The text and
+// the submit Enter are sent as SEPARATE writes with a settle delay between them:
+// a trailing CR in the same write as a long paste is coalesced into the agent's
+// input as a newline instead of submitting, so the agent (copilot) only treats the
+// CR as "send" once it arrives as its own keystroke after the pasted text has
+// rendered. The Enter is retried until the agent starts working (goes busy), since
+// the first CR can still be swallowed while the paste is mid-render.
+func (m *workspaceManager) submitPrompt(id, text string) {
+	s := m.workspaceSession(id)
+	if s == nil {
+		m.host.logger.Printf("regenerate: submitPrompt found no live session for ws=%s", id)
+		return
+	}
+	oneLine := strings.Join(strings.Fields(text), " ")
+	_ = s.sendKeys([]byte(oneLine))
+	submitted := false
+	for attempt := 0; attempt < 4; attempt++ {
+		if m.submitDelay > 0 {
+			time.Sleep(m.submitDelay)
+		}
+		_ = s.sendKeys([]byte{'\r'})
+		if m.submitDelay > 0 {
+			time.Sleep(m.submitDelay)
+		}
+		if busy, _ := s.agentStatus(); busy {
+			submitted = true
+			break
+		}
+	}
+	m.host.logger.Printf("regenerate: submitPrompt ws=%s len=%d submitted=%v", id, len(oneLine), submitted)
+}
+
+// logScreenTail logs the last chunk of the agent's visible screen (whitespace
+// collapsed) so a manual-QA run can show whether a prompt actually reached and was
+// submitted by the agent.
+func (m *workspaceManager) logScreenTail(id, label string) {
+	s := m.workspaceSession(id)
+	if s == nil {
+		return
+	}
+	scr := strings.Join(strings.Fields(s.capture(false, false)), " ")
+	if len(scr) > 180 {
+		scr = scr[len(scr)-180:]
+	}
+	m.host.logger.Printf("regenerate %s ws=%s screen=%q", label, id, scr)
+}
+
+func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
+	var oldName, newName, program, worktree, agentSessionID string
+	var autoYes bool
+	m.mu.Lock()
+	w := m.wss[id]
+	if m.tombstone[id] || w == nil {
+		m.mu.Unlock()
+		return errArchived
+	}
+	oldName = w.SessionName
+	w.SessionName = "ws_" + id + "-" + shortRand()
+	if supportsResume(w.Program) {
+		w.AgentSessionID = newUUID()
+	} else {
+		w.AgentSessionID = ""
+	}
+	newName, program, worktree, agentSessionID, autoYes = w.SessionName, w.Program, w.WorktreePath, w.AgentSessionID, w.AutoYes
+	m.saveLocked()
+	m.mu.Unlock()
+
+	oldKilled := false
+	defer func() {
+		if !oldKilled {
+			m.host.killSession(oldName)
+		}
+	}()
+	m.host.killSession(oldName)
+	oldKilled = true
+
+	var lastErr error
+	for attempt := 0; attempt < 8; attempt++ {
+		err := m.host.startManagedSession(newName, agentLaunchCommand(program, agentSessionID), worktree, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !strings.Contains(err.Error(), "session already exists") {
+			return err
+		}
+		m.mu.Lock()
+		w := m.wss[id]
+		if m.tombstone[id] || w == nil {
+			m.mu.Unlock()
+			return errArchived
+		}
+		w.SessionName = "ws_" + id + "-" + shortRand()
+		newName = w.SessionName
+		m.saveLocked()
+		m.mu.Unlock()
+	}
+	return lastErr
 }
 
 func (m *workspaceManager) create(req *proto.Request) *proto.Response {
@@ -459,7 +950,36 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 		m.mu.Unlock()
 		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
 	}
+	if m.tombstone[w.ID] {
+		m.mu.Unlock()
+		return &proto.Response{ID: req.ID, OK: true, Content: "archive already in progress"}
+	}
+	var done chan struct{}
+	if regen := m.regens[w.ID]; regen != nil {
+		m.tombstone[w.ID] = true
+		regen.closeOnce.Do(func() { close(regen.force) })
+		done = regen.done
+	}
+	m.mu.Unlock()
+
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(60 * time.Second):
+		case <-m.host.shutdownCh:
+		}
+	}
+
+	m.mu.Lock()
+	w, ok = m.wss[req.WorkspaceID]
+	if !ok {
+		delete(m.tombstone, req.WorkspaceID)
+		m.mu.Unlock()
+		return &proto.Response{ID: req.ID, OK: true}
+	}
 	delete(m.wss, w.ID)
+	delete(m.tombstone, w.ID)
+	sessionName := w.SessionName
 	m.saveLocked()
 	m.mu.Unlock()
 
@@ -468,7 +988,7 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	// ConPTY held the worktree as its cwd; Windows can take a moment to release
 	// that directory handle after the process dies, so retry the removal.
 	m.host.runs.stop(w.ID)
-	m.host.killSession(w.SessionName)
+	m.host.killSession(sessionName)
 	wt := w.worktreeFor()
 	for i := 0; i < 10; i++ {
 		if err := wt.Remove(); err == nil {
