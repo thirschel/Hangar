@@ -23,8 +23,9 @@ export function SessionBrowserModal({
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [resuming, setResuming] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false);
   const [skipped, setSkipped] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const modalRef = useRef<ModalHandle>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
@@ -57,22 +58,26 @@ export function SessionBrowserModal({
         return (
           s.name.toLowerCase().includes(q) ||
           s.repository.toLowerCase().includes(q) ||
-          s.branch.toLowerCase().includes(q)
+          s.branch.toLowerCase().includes(q) ||
+          (s.firstMsg ?? '').toLowerCase().includes(q)
         );
       })
     : sessions;
 
-  const handleResume = async (s: CopilotSessionInfo): Promise<void> => {
-    if (s.inUse || resuming) return;
-    setResuming(s.id);
+  const selected = selectedId ? sessions.find((s) => s.id === selectedId) ?? null : null;
+  const canResume = selected && !selected.inUse && !resuming;
+
+  const handleResume = async (): Promise<void> => {
+    if (!selected || selected.inUse || resuming) return;
+    setResuming(true);
     setError(null);
     try {
-      await onResume(s);
+      await onResume(selected);
       modalRef.current?.close();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setResuming(null);
+      setResuming(false);
     }
   };
 
@@ -82,64 +87,101 @@ export function SessionBrowserModal({
       className="modal--browser"
       title="Copilot Session Browser"
       onClose={onClose}
-      busy={!!resuming}
+      busy={resuming}
       error={error}
       footer={
-        <button type="button" onClick={() => modalRef.current?.close()}>
-          Close (Esc)
-        </button>
+        <>
+          <button type="button" onClick={() => modalRef.current?.close()}>
+            Close
+          </button>
+          <button
+            type="button"
+            className="modal__primary"
+            disabled={!canResume}
+            onClick={() => void handleResume()}
+          >
+            {resuming ? 'Starting…' : 'Start Session'}
+          </button>
+        </>
       }
     >
       {loading ? (
         <div className="browser-loading">Discovering sessions…</div>
       ) : (
-        <>
-          <div className="browser-search">
-            <input
-              ref={filterRef}
-              className="browser-search__input"
-              type="text"
-              placeholder="Filter sessions…"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              data-is-input="true"
-            />
-            <span className="browser-search__count">
-              {filtered.length} session{filtered.length === 1 ? '' : 's'}
-              {skipped > 0 && ` · ${skipped} skipped`}
-            </span>
+        <div className="browser-layout">
+          <div className="browser-left">
+            <div className="browser-search">
+              <input
+                ref={filterRef}
+                className="browser-search__input"
+                type="text"
+                placeholder="Filter sessions…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                data-is-input="true"
+              />
+              <span className="browser-search__count">
+                {filtered.length} session{filtered.length === 1 ? '' : 's'}
+                {skipped > 0 && ` · ${skipped} skipped`}
+              </span>
+            </div>
+            <div className="browser-list">
+              {filtered.length === 0 && (
+                <div className="browser-empty">
+                  {sessions.length === 0 ? 'No Copilot sessions found' : 'No matches'}
+                </div>
+              )}
+              {filtered.map((s) => (
+                <div
+                  key={s.id}
+                  className={`browser-item${s.id === selectedId ? ' browser-item--selected' : ''}${s.inUse ? ' browser-item--in-use' : ''}`}
+                  onClick={() => setSelectedId(s.id)}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="browser-item__header">
+                    <span className="browser-item__name">{s.name}</span>
+                    <span className="browser-item__time">{relativeTime(s.updatedAt)}</span>
+                  </div>
+                  <div className="browser-item__meta">
+                    {s.repository && (
+                      <span className="browser-item__repo">{s.repository}</span>
+                    )}
+                    {s.branch && (
+                      <span className="browser-item__branch">{s.branch}</span>
+                    )}
+                    {s.inUse && <span className="browser-item__badge">in use</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="browser-list">
-            {filtered.length === 0 && (
-              <div className="browser-empty">
-                {sessions.length === 0 ? 'No Copilot sessions found' : 'No matches'}
-              </div>
+
+          <div className="browser-preview">
+            {selected ? (
+              <>
+                <div className="browser-preview__header">
+                  <h3>{selected.name}</h3>
+                  <div className="browser-preview__meta">
+                    {selected.repository && <span>Repo: {selected.repository}</span>}
+                    {selected.branch && <span>Branch: {selected.branch}</span>}
+                    {selected.originRoot && <span>Path: {selected.originRoot}</span>}
+                    <span>Updated: {relativeTime(selected.updatedAt)}</span>
+                  </div>
+                </div>
+                <div className="browser-preview__body">
+                  {selected.firstMsg ? (
+                    <pre className="browser-preview__text">{selected.firstMsg}</pre>
+                  ) : (
+                    <div className="browser-preview__empty">No message preview available</div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="browser-preview__empty">Select a session to preview</div>
             )}
-            {filtered.map((s) => (
-              <div
-                key={s.id}
-                className={`browser-item${s.inUse ? ' browser-item--in-use' : ''}${resuming === s.id ? ' browser-item--resuming' : ''}`}
-                onClick={() => void handleResume(s)}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="browser-item__header">
-                  <span className="browser-item__name">{s.name}</span>
-                  <span className="browser-item__time">{relativeTime(s.updatedAt)}</span>
-                </div>
-                <div className="browser-item__meta">
-                  {s.repository && (
-                    <span className="browser-item__repo">{s.repository}</span>
-                  )}
-                  {s.branch && (
-                    <span className="browser-item__branch">{s.branch}</span>
-                  )}
-                  {s.inUse && <span className="browser-item__badge">in use</span>}
-                </div>
-              </div>
-            ))}
           </div>
-        </>
+        </div>
       )}
     </Modal>
   );

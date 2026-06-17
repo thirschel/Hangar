@@ -632,6 +632,7 @@ export function App(): JSX.Element {
           onResume={async (session) => {
             const ws = await window.cs.resumeCopilotSession(session.id, {
               title: session.name,
+              repoPath: session.originRoot || undefined,
             });
             await refresh();
             setSelectedId(ws.id);

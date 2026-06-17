@@ -1187,6 +1187,7 @@ func (m *workspaceManager) listCopilotSessions(req *proto.Request) *proto.Respon
 	out := make([]proto.CopilotSessionInfo, 0, len(sessions))
 	for _, s := range sessions {
 		inUse := s.InUse || resumedIDs[s.ID]
+		firstMsg, _ := copilot.FirstUserMessage(s)
 		out = append(out, proto.CopilotSessionInfo{
 			ID:         s.ID,
 			Name:       s.DisplayName(),
@@ -1196,6 +1197,7 @@ func (m *workspaceManager) listCopilotSessions(req *proto.Request) *proto.Respon
 			CreatedAt:  s.CreatedAt.Unix(),
 			UpdatedAt:  s.UpdatedAt.Unix(),
 			InUse:      inUse,
+			FirstMsg:   firstMsg,
 		})
 	}
 	return &proto.Response{ID: req.ID, OK: true, CopilotSessions: out, Skipped: skipped}
