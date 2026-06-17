@@ -69,8 +69,8 @@ const (
 	MethodUpdateWorkspace = "UpdateWorkspace"
 
 	// Copilot session browser (v6): discover and resume local Copilot CLI sessions.
-	MethodListCopilotSessions   = "ListCopilotSessions"
-	MethodResumeCopilotSession  = "ResumeCopilotSession"
+	MethodListCopilotSessions  = "ListCopilotSessions"
+	MethodResumeCopilotSession = "ResumeCopilotSession"
 )
 
 // Capture modes for MethodCapturePane.

@@ -1,0 +1,44 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Modal > matches the snapshot with all props 1`] = `
+<div>
+  <div
+    class="modal-overlay"
+  >
+    <div
+      aria-modal="true"
+      class="modal modal--snapshot"
+      role="dialog"
+    >
+      <div
+        class="modal__header"
+      >
+        <span>
+          Snapshot Modal
+        </span>
+      </div>
+      <div
+        class="modal__body"
+      >
+        <p>
+          Snapshot content
+        </p>
+      </div>
+      <div
+        class="modal__error"
+      >
+        Snapshot error
+      </div>
+      <div
+        class="modal__footer"
+      >
+        <button
+          type="button"
+        >
+          Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+`;

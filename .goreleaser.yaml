@@ -28,6 +28,17 @@ release:
 checksum:
   name_template: 'checksums.txt'
 
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    output: true
+    args:
+      - sign-blob
+      - --yes
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - ${artifact}
+
 changelog:
   use: github
 
@@ -37,4 +48,3 @@ changelog:
       - typo
       - "^refactor"
       - "^chore"
-

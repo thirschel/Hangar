@@ -16,10 +16,33 @@ on:
       - 'go.sum'
       - '.github/workflows/build.yml'
 
+permissions: {}
+
 jobs:
-  build:
-    name: Build Binary and Test
+  test:
+    name: Run Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Run tests
+      run: go test -v ./...
+
+  build:
+    name: Build Binary
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     strategy:
       matrix:
         goos: [linux, darwin, windows]
@@ -29,16 +52,13 @@ jobs:
             goarch: arm64
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4
       with:
-        go-version: '1.23'
+        go-version: '1.25'
         cache: true
-
-    - name: Run tests
-      run: go test -v ./...
 
     - name: Build
       env:
@@ -52,7 +72,7 @@ jobs:
         go build -v -o build/${{ matrix.goos }}_${{ matrix.goarch }}/$BINARY_NAME
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: claude-squad-${{ matrix.goos }}-${{ matrix.goarch }}
         path: build/${{ matrix.goos }}_${{ matrix.goarch }}/*

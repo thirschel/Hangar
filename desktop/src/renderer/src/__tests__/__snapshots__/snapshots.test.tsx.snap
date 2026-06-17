@@ -1,0 +1,45 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`snapshots > matches the Modal snapshot 1`] = `
+<div>
+  <div
+    class="modal-overlay"
+  >
+    <div
+      aria-modal="true"
+      class="modal"
+      role="dialog"
+    >
+      <div
+        class="modal__header"
+      >
+        Test Modal
+      </div>
+      <div
+        class="modal__body"
+      >
+        <p>
+          content
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`snapshots > matches the sidebar modes data snapshot 1`] = `
+{
+  "MODE_LABELS": {
+    "group-by-repo": "Group by repo",
+    "manual": "Manual",
+    "pinned-pending": "Pinned pending",
+    "recent-activity": "Recent activity",
+  },
+  "SIDEBAR_MODES": [
+    "manual",
+    "group-by-repo",
+    "recent-activity",
+    "pinned-pending",
+  ],
+}
+`;
