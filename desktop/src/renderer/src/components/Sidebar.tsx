@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { MODE_LABELS, type SidebarMode } from './sidebar-modes';
@@ -12,7 +12,6 @@ type SidebarProps = {
   onCycleMode: () => void;
   sidebarMode: SidebarMode;
   filter: string;
-  searching: boolean;
   onFilterChange: (value: string) => void;
   searchInputRef?: RefObject<HTMLInputElement>;
 };
@@ -26,19 +25,11 @@ export function Sidebar({
   onCycleMode,
   sidebarMode,
   filter,
-  searching,
   onFilterChange,
   searchInputRef,
 }: SidebarProps): JSX.Element {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = searchInputRef ?? internalRef;
-
-  // Auto-focus the search input when searching becomes true.
-  useEffect(() => {
-    if (searching && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [searching, inputRef]);
 
   return (
     <aside className="sidebar">
@@ -67,19 +58,17 @@ export function Sidebar({
         </div>
       </div>
 
-      {searching && (
-        <div className="sidebar-search">
-          <input
-            ref={inputRef}
-            className="sidebar-search__input"
-            type="text"
-            placeholder="Filter workspaces…"
-            value={filter}
-            onChange={(e) => onFilterChange(e.target.value)}
-            data-is-input="true"
-          />
-        </div>
-      )}
+      <div className="sidebar-search">
+        <input
+          ref={inputRef}
+          className="sidebar-search__input"
+          type="text"
+          placeholder="Filter workspaces… (/)"
+          value={filter}
+          onChange={(e) => onFilterChange(e.target.value)}
+          data-is-input="true"
+        />
+      </div>
 
       <nav className="workspace-list" aria-label="Workspaces">
         {workspaces.length === 0 && !filter && (

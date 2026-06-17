@@ -78,7 +78,6 @@ export function App(): JSX.Element {
     return SIDEBAR_MODES.includes(saved as SidebarMode) ? (saved as SidebarMode) : 'manual';
   });
   const [sidebarFilter, setSidebarFilter] = useState('');
-  const [sidebarSearching, setSidebarSearching] = useState(false);
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => {
     try {
       const arr = JSON.parse(localStorage.getItem(SIDEBAR_ORDER_KEY) ?? '[]') as unknown;
@@ -248,13 +247,13 @@ export function App(): JSX.Element {
           break;
         case '/':
           e.preventDefault();
-          setSidebarSearching(true);
+          searchInputRef.current?.focus();
           break;
         case 'Escape':
           e.preventDefault();
-          if (sidebarSearching) {
-            setSidebarSearching(false);
+          if (document.activeElement === searchInputRef.current) {
             setSidebarFilter('');
+            searchInputRef.current?.blur();
           } else if (showHelp) {
             setShowHelp(false);
           }
@@ -349,7 +348,7 @@ export function App(): JSX.Element {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, sidebarMode, sidebarSearching, showHelp]);
+  }, [selectedId, sidebarMode, showHelp]);
 
   workspacesRef.current = workspaces;
   connectionRef.current = connection;
@@ -560,7 +559,6 @@ export function App(): JSX.Element {
           onCycleMode={onCycleMode}
           sidebarMode={sidebarMode}
           filter={sidebarFilter}
-          searching={sidebarSearching}
           onFilterChange={setSidebarFilter}
           searchInputRef={searchInputRef}
         />
