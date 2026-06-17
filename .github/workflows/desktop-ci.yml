@@ -41,25 +41,32 @@ jobs:
         cache-dependency-path: desktop/package-lock.json
 
     - name: Install dependencies
-      run: cd desktop && npm ci
+      working-directory: desktop
+      run: npm ci
 
     - name: Audit dependencies
-      run: cd desktop && npm audit --audit-level=high --omit=dev
+      working-directory: desktop
+      run: npm audit --audit-level=high --omit=dev
 
     - name: Lint
-      run: cd desktop && npm run lint
+      working-directory: desktop
+      run: npm run lint
 
     - name: Typecheck
-      run: cd desktop && npm run typecheck
+      working-directory: desktop
+      run: npm run typecheck
 
     - name: Unit tests
-      run: cd desktop && npm run test
+      working-directory: desktop
+      run: npm run test
 
     - name: Build Electron app
-      run: cd desktop && npm run pack
+      working-directory: desktop
+      run: npm run pack
 
     - name: E2E tests
-      run: cd desktop && npm run test:e2e
+      working-directory: desktop
+      run: npm run test:e2e
 
     - name: Upload artifacts
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
