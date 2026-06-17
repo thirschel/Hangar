@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CenterPane } from './components/CenterPane';
-import { Composer } from './components/Composer';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
@@ -35,27 +34,6 @@ function sideMax(): number {
   );
 }
 
-// Workspaces created without an explicit title get auto-named by the agent after
-// the first message. We remember which ones are still pending (across reloads) so
-// only the first message triggers the rename.
-const PENDING_TITLE_KEY = 'cs.autoTitlePending';
-
-function loadPendingTitles(): Set<string> {
-  try {
-    const arr = JSON.parse(localStorage.getItem(PENDING_TITLE_KEY) ?? '[]') as unknown;
-    return new Set(Array.isArray(arr) ? (arr as string[]) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function savePendingTitles(s: Set<string>): void {
-  try {
-    localStorage.setItem(PENDING_TITLE_KEY, JSON.stringify([...s]));
-  } catch {
-    /* ignore */
-  }
-}
 
 export function App(): JSX.Element {
   const [connection, setConnection] = useState<ConnectionState>('connecting');
@@ -93,7 +71,6 @@ export function App(): JSX.Element {
   const sessionNameRef = useRef<Map<string, string>>(new Map());
   const regeneratingRef = useRef<Map<string, boolean>>(new Map());
   const connectionRef = useRef<ConnectionState>('connecting');
-  const pendingTitlesRef = useRef<Set<string>>(loadPendingTitles());
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (): Promise<WorkspaceInfo[]> => {
@@ -410,11 +387,6 @@ export function App(): JSX.Element {
   const onCreate = useCallback(
     async (args: CreateWorkspaceArgs): Promise<void> => {
       const ws = await window.cs.createWorkspace(args);
-      // No explicit title → let the agent name it from the first message.
-      if (!args.title || !args.title.trim()) {
-        pendingTitlesRef.current.add(ws.id);
-        savePendingTitles(pendingTitlesRef.current);
-      }
       await refresh();
       setSelectedId(ws.id);
     },
@@ -447,7 +419,6 @@ export function App(): JSX.Element {
       const id = workspaceToRemove.id;
       await window.cs.archiveWorkspace(id, { deleteWorktree });
       void window.cs.closeShell(id);
-      if (pendingTitlesRef.current.delete(id)) savePendingTitles(pendingTitlesRef.current);
       setSelectedId((cur) => (cur === id ? null : cur));
       setWorkspaceToRemove(null);
       await refresh();
@@ -462,23 +433,6 @@ export function App(): JSX.Element {
       await refresh();
     },
     [selected, refresh],
-  );
-
-  const sendInput = useCallback(
-    (data: string) => {
-      if (!selected) return;
-      window.cs.sendInput(selected.sessionName, data);
-      // First message for an untitled workspace → ask the agent to name it.
-      if (pendingTitlesRef.current.has(selected.id)) {
-        const message = data.replace(/[\r\n]+$/, '').trim();
-        if (message) {
-          pendingTitlesRef.current.delete(selected.id);
-          savePendingTitles(pendingTitlesRef.current);
-          void window.cs.generateWorkspaceTitle(selected.id, message);
-        }
-      }
-    },
-    [selected],
   );
 
   // Keep the right panel within bounds as the window resizes.
@@ -571,7 +525,6 @@ export function App(): JSX.Element {
           onKillNow={() => {
             if (selected) void window.cs.forceRegenerate(selected.id);
           }}
-          composer={<Composer disabled={!selected || selectedRegenerating} onSend={sendInput} />}
         />
         <div
           className="col-gutter"

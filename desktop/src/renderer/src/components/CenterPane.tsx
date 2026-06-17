@@ -1,4 +1,3 @@
-import type { ReactNode } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
 
@@ -9,7 +8,6 @@ type CenterPaneProps = {
   regenerating: boolean;
   regenPhase?: string;
   onKillNow: () => void;
-  composer: ReactNode;
 };
 
 const regenPhaseCopy: Record<string, string> = {
@@ -28,7 +26,6 @@ export function CenterPane({
   regenerating,
   regenPhase,
   onKillNow,
-  composer,
 }: CenterPaneProps): JSX.Element {
   return (
     <section className="center-pane">
@@ -79,7 +76,6 @@ export function CenterPane({
               sessionName={workspace?.sessionName ?? null}
             />
           </div>
-          {composer}
         </div>
       </div>
     </section>
