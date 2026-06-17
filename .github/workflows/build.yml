@@ -17,8 +17,24 @@ on:
       - '.github/workflows/build.yml'
 
 jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Run tests
+      run: go test -v ./...
+
   build:
-    name: Build Binary and Test
+    name: Build Binary
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -34,11 +50,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.23'
+        go-version: '1.25'
         cache: true
-
-    - name: Run tests
-      run: go test -v ./...
 
     - name: Build
       env:
