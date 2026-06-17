@@ -9,6 +9,7 @@ type SidebarProps = {
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
   onNewWorkspace: () => void;
+  onNewAtRepo: (repoPath: string) => void;
   onCycleMode: () => void;
   sidebarMode: SidebarMode;
   filter: string;
@@ -78,11 +79,27 @@ function WorkspaceRow({
   );
 }
 
-function SectionHeader({ label }: { label: string }): JSX.Element {
+function SectionHeader({
+  label,
+  onAdd,
+}: {
+  label: string;
+  onAdd?: () => void;
+}): JSX.Element {
   return (
     <div className="sidebar-section-header">
       <span className="sidebar-section-header__label">{label}</span>
       <span className="sidebar-section-header__line" />
+      {onAdd && (
+        <button
+          className="icon-button sidebar-section-header__add"
+          type="button"
+          title={`New workspace in ${label}`}
+          onClick={onAdd}
+        >
+          +
+        </button>
+      )}
     </div>
   );
 }
@@ -93,6 +110,7 @@ function buildGroupedList(
   selectedId: string | null,
   onSelect: (id: string) => void,
   onArchive: (id: string) => void,
+  onNewAtRepo?: (repoPath: string) => void,
 ): ReactNode[] {
   if (mode === 'group-by-repo') {
     const groups = new Map<string, WorkspaceInfo[]>();
@@ -105,7 +123,13 @@ function buildGroupedList(
     for (const [repo, items] of groups) {
       // Show just the last path segment as the repo name.
       const repoName = repo.split(/[\\/]/).pop() || repo;
-      nodes.push(<SectionHeader key={`hdr-${repo}`} label={repoName} />);
+      nodes.push(
+        <SectionHeader
+          key={`hdr-${repo}`}
+          label={repoName}
+          onAdd={onNewAtRepo ? () => onNewAtRepo(repo) : undefined}
+        />,
+      );
       for (const w of items) {
         nodes.push(
           <WorkspaceRow
@@ -174,6 +198,7 @@ export function Sidebar({
   onSelect,
   onArchive,
   onNewWorkspace,
+  onNewAtRepo,
   onCycleMode,
   sidebarMode,
   filter,
@@ -236,7 +261,7 @@ export function Sidebar({
           </div>
         )}
         {workspaces.length > 0 &&
-          buildGroupedList(workspaces, sidebarMode, selectedId, onSelect, onArchive)}
+          buildGroupedList(workspaces, sidebarMode, selectedId, onSelect, onArchive, onNewAtRepo)}
       </nav>
     </aside>
   );

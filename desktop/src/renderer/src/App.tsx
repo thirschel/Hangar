@@ -43,6 +43,7 @@ export function App(): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [createRepoPath, setCreateRepoPath] = useState<string | undefined>();
   const [showRegen, setShowRegen] = useState(false);
   const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
   const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
@@ -188,6 +189,7 @@ export function App(): JSX.Element {
       }
       if (e.ctrlKey && (e.key === 'n' || e.key === 'N')) {
         e.preventDefault();
+        setCreateRepoPath(undefined);
         setShowCreate(true);
         return;
       }
@@ -208,10 +210,12 @@ export function App(): JSX.Element {
       switch (e.key) {
         case 'n':
           e.preventDefault();
+          setCreateRepoPath(undefined);
           setShowCreate(true);
           break;
         case 'N':
           e.preventDefault();
+          setCreateRepoPath(undefined);
           setShowCreate(true);
           break;
         case 'q':
@@ -509,7 +513,14 @@ export function App(): JSX.Element {
           selectedId={selectedId}
           onSelect={setSelectedId}
           onArchive={onArchive}
-          onNewWorkspace={() => setShowCreate(true)}
+          onNewWorkspace={() => {
+            setCreateRepoPath(undefined);
+            setShowCreate(true);
+          }}
+          onNewAtRepo={(repoPath) => {
+            setCreateRepoPath(repoPath);
+            setShowCreate(true);
+          }}
           onCycleMode={onCycleMode}
           sidebarMode={sidebarMode}
           filter={sidebarFilter}
@@ -547,7 +558,14 @@ export function App(): JSX.Element {
       </footer>
 
       {showCreate && (
-        <CreateWorkspaceModal onClose={() => setShowCreate(false)} onCreate={onCreate} />
+        <CreateWorkspaceModal
+          onClose={() => {
+            setShowCreate(false);
+            setCreateRepoPath(undefined);
+          }}
+          onCreate={onCreate}
+          initialRepoPath={createRepoPath}
+        />
       )}
 
       {showSettings && (
