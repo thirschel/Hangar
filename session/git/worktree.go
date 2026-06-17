@@ -36,6 +36,8 @@ type GitWorktree struct {
 	branchName string
 	// Base commit hash for the worktree
 	baseCommitSHA string
+	// Optional commit to use instead of HEAD when creating a new worktree branch.
+	baseCommitOverride string
 	// isExistingBranch is true if the branch existed before the session was created.
 	// When true, the branch will not be deleted on cleanup.
 	isExistingBranch bool
@@ -143,3 +145,8 @@ func (g *GitWorktree) GetRepoName() string {
 func (g *GitWorktree) GetBaseCommitSHA() string {
 	return g.baseCommitSHA
 }
+
+// SetBaseCommitOverride makes setupNewWorktree base the new branch on the given commit
+// (instead of the repo's current HEAD), when the commit exists. Has no effect for
+// existing-branch worktrees. Pass "" to clear.
+func (g *GitWorktree) SetBaseCommitOverride(sha string) { g.baseCommitOverride = sha }

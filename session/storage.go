@@ -23,9 +23,11 @@ type InstanceData struct {
 	LastActivityAt time.Time `json:"last_activity_at"`
 	AutoYes        bool      `json:"auto_yes"`
 
-	Program   string          `json:"program"`
-	Worktree  GitWorktreeData `json:"worktree"`
-	DiffStats DiffStatsData   `json:"diff_stats"`
+	Program        string          `json:"program"`
+	AgentSessionID string          `json:"agent_session_id,omitempty"`
+	BaseCommit     string          `json:"base_commit,omitempty"`
+	Worktree       GitWorktreeData `json:"worktree"`
+	DiffStats      DiffStatsData   `json:"diff_stats"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
