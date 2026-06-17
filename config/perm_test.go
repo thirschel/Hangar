@@ -25,13 +25,13 @@ func TestSaveConfigRestrictedPermissions(t *testing.T) {
 	cfg := DefaultConfig()
 	require.NoError(t, saveConfig(cfg))
 
-	configDir := filepath.Join(tempHome, ".claude-squad")
+	configDir := filepath.Join(tempHome, ".hangar")
 	configFile := filepath.Join(configDir, ConfigFileName)
 
 	dirInfo, err := os.Stat(configDir)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0700), dirInfo.Mode().Perm(),
-		"~/.claude-squad must be created with mode 0700")
+		"~/.hangar must be created with mode 0700")
 
 	fileInfo, err := os.Stat(configFile)
 	require.NoError(t, err)
@@ -52,13 +52,13 @@ func TestSaveStateRestrictedPermissions(t *testing.T) {
 	state := DefaultState()
 	require.NoError(t, SaveState(state))
 
-	configDir := filepath.Join(tempHome, ".claude-squad")
+	configDir := filepath.Join(tempHome, ".hangar")
 	stateFile := filepath.Join(configDir, StateFileName)
 
 	dirInfo, err := os.Stat(configDir)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0700), dirInfo.Mode().Perm(),
-		"~/.claude-squad must be created with mode 0700")
+		"~/.hangar must be created with mode 0700")
 
 	fileInfo, err := os.Stat(stateFile)
 	require.NoError(t, err)

@@ -1,9 +1,9 @@
 {
-  "name": "claude-squad-desktop",
+  "name": "hangar-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron + TypeScript + React desktop app for claude-squad (Windows core-daemon thin client).",
-  "author": "claude-squad",
+  "description": "Electron + TypeScript + React desktop app for Hangar (Windows core-daemon thin client).",
+  "author": "Hangar",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -13,6 +13,11 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "make-icons": "node scripts/make-icons.js",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "npx playwright test",
+    "test:snapshot": "vitest run --update",
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder --win nsis"
   },
@@ -26,6 +31,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@playwright/test": "^1.61.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
@@ -36,9 +44,11 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.16",
+    "jsdom": "^29.1.1",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.19.0",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^4.1.9"
   }
 }

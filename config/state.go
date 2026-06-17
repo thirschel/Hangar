@@ -1,9 +1,9 @@
 package config
 
 import (
-	"claude-squad/log"
 	"encoding/json"
 	"fmt"
+	"hangar/log"
 	"os"
 	"path/filepath"
 )

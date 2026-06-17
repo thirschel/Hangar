@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
-const logFile = path.join(os.homedir(), '.claude-squad', 'desktop.log');
+const logFile = path.join(os.homedir(), '.hangar', 'desktop.log');
 
 function write(level: string, args: unknown[]): void {
   try {

@@ -14,10 +14,10 @@ function showWindow(win: BrowserWindow | null): void {
 export function createTray(getWindow: () => BrowserWindow | null): Tray {
   const image = nativeImage.createFromPath(buildAsset('tray.png'));
   tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
-  tray.setToolTip('claude-squad');
+  tray.setToolTip('Hangar');
 
   const menu = Menu.buildFromTemplate([
-    { label: 'Show claude-squad', click: () => showWindow(getWindow()) },
+    { label: 'Show Hangar', click: () => showWindow(getWindow()) },
     { type: 'separator' },
     {
       label: 'Quit',

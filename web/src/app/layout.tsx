@@ -24,13 +24,13 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: "Hangar — Manage your AI coding agents on native Windows",
-  description: "The native-Windows-first manager for your AI coding agents.",
+  description: "The Windows desktop app for running multiple AI coding agents in parallel.",
   keywords: ["hangar", "windows", "native windows", "claude code", "codex", "gemini", "copilot cli", "aider", "tmux-free", "ai agents"],
   authors: [{ name: "thirschel" }],
   metadataBase: new URL("https://thirschel.github.io/Hangar/"),
   openGraph: {
     title: "Hangar",
-    description: "The native-Windows-first manager for your AI coding agents.",
+    description: "The Windows desktop app for running multiple AI coding agents in parallel.",
     url: "https://thirschel.github.io/Hangar/",
     type: "website",
     images: [{ url: "https://thirschel.github.io/Hangar/og-hangar.png", width: 1200, height: 630 }],
@@ -38,7 +38,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Hangar",
-    description: "The native-Windows-first manager for your AI coding agents.",
+    description: "The Windows desktop app for running multiple AI coding agents in parallel.",
     images: ["https://thirschel.github.io/Hangar/og-hangar.png"],
   },
 };

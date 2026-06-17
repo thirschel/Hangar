@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -16,11 +16,29 @@ import {
   type DirEntry,
   type FileContents,
 } from './host-client';
-import { getSettings, applySettings, type Settings } from './settings';
+import { getSettings, applySettings, isFirstRun, markSetupComplete, type Settings } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { log } from './logger';
-import { initAutoUpdate } from './updater';
+import {
+  checkForUpdate,
+  downloadUpdate,
+  getUpdateStatus,
+  initAutoUpdate,
+  installUpdate,
+  type UpdateStatus,
+} from './updater';
+
+export type AppInfo = {
+  version: string;
+  appName: string;
+  electronVersion: string;
+  nodeVersion: string;
+  platform: string;
+  arch: string;
+  githubUrl: string;
+  author: string;
+};
 
 const CS_EXE =
   process.env.CS_EXE ||
@@ -132,7 +150,6 @@ function createWindow(): void {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: '#1e1e1e',
-    icon: buildAsset('icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '..\\preload\\index.js'),
       contextIsolation: true,
@@ -157,6 +174,9 @@ function createWindow(): void {
   }
 
   mainWindow.webContents.once('did-finish-load', () => {
+    if (isFirstRun()) {
+      sendToRenderer('cs:first-run');
+    }
     getControlClient().catch((error) => {
       log.error('setup error:', error);
       sendToRenderer('term:error', String(error.message || error));
@@ -282,12 +302,12 @@ ipcMain.handle('cs:pick-folder', async (): Promise<string | null> => {
   return result.filePaths[0];
 });
 
-// Returns the daemon's default agent program (from ~/.claude-squad/config.json)
+// Returns the daemon's default agent program (from ~/.hangar/config.json)
 // so the create form can pre-fill a known-good agent instead of submitting a
 // blank field that silently falls back to whatever the config holds.
 ipcMain.handle('cs:get-default-program', async (): Promise<string> => {
   try {
-    const cfgPath = path.join(os.homedir(), '.claude-squad', 'config.json');
+    const cfgPath = path.join(os.homedir(), '.hangar', 'config.json');
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8')) as { default_program?: string };
     const prog = (cfg.default_program || '').trim();
     if (prog) return prog;
@@ -314,6 +334,39 @@ ipcMain.handle('cs:get-settings', async (): Promise<Settings> => getSettings());
 
 ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Promise<Settings> => {
   return applySettings(patch);
+});
+
+ipcMain.handle('cs:complete-setup', async (_event, opts: { autoUpdate: boolean }): Promise<void> => {
+  applySettings({ autoUpdate: opts.autoUpdate });
+  markSetupComplete();
+});
+
+ipcMain.handle(
+  'cs:get-app-info',
+  async (): Promise<AppInfo> => ({
+    version: app.getVersion(),
+    appName: app.getName(),
+    electronVersion: process.versions.electron,
+    nodeVersion: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    githubUrl: 'https://github.com/thirschel/Hangar',
+    author: 'Hangar contributors',
+  }),
+);
+
+ipcMain.handle('cs:get-update-status', async (): Promise<UpdateStatus> => getUpdateStatus());
+
+ipcMain.handle('cs:check-for-update', async () => {
+  return checkForUpdate();
+});
+
+ipcMain.handle('cs:download-update', async () => {
+  return downloadUpdate();
+});
+
+ipcMain.handle('cs:install-update', async () => {
+  installUpdate();
 });
 
 // Show a native OS notification (e.g. agent finished / needs input). Clicking it
@@ -354,9 +407,11 @@ ipcMain.on('term:resize', (_event, args: { session: string; cols: number; rows: 
 });
 
 app.whenReady().then(() => {
+  // Hide the default application menu bar (File / Edit / View / Window / Help).
+  Menu.setApplicationMenu(null);
   createWindow();
   createTray(() => mainWindow);
-  initAutoUpdate();
+  initAutoUpdate(mainWindow);
   // Global hotkey: summon/focus the app window from anywhere.
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     if (!mainWindow) return;

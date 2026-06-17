@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"claude-squad/config"
-	"claude-squad/session"
+	"hangar/session"
+	"hangar/session/git"
 	"os"
 	"path/filepath"
 	"testing"
@@ -255,10 +255,6 @@ func TestListTracksReposByFullPath(t *testing.T) {
 	s := spinner.New()
 	l := NewList(&s, false)
 
-	tempHome := t.TempDir()
-	t.Setenv("HOME", tempHome)
-	t.Setenv("USERPROFILE", tempHome)
-
 	root := t.TempDir()
 	instA := newPausedTestInstance(t, "a", filepath.Join(root, "owner-a", "app"))
 	instB := newPausedTestInstance(t, "b", filepath.Join(root, "owner-b", "app"))
@@ -272,10 +268,16 @@ func TestListTracksReposByFullPath(t *testing.T) {
 func newPausedTestInstance(t *testing.T, title string, repoPath string) *session.Instance {
 	t.Helper()
 
-	configDir, err := config.GetConfigDir()
+	// A worktree path must live under the managed worktrees directory or
+	// FromInstanceData rejects it (the F-09 arbitrary-deletion guard). Point HOME
+	// at a temp dir and place the worktree under the resolved worktrees dir.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	wtDir, err := git.WorktreesDir()
 	require.NoError(t, err)
-	worktreePath := filepath.Join(configDir, "worktrees", title)
-	require.NoError(t, os.MkdirAll(worktreePath, 0o755))
+	worktreePath := filepath.Join(wtDir, title)
+	require.NoError(t, os.MkdirAll(worktreePath, 0o700))
 
 	inst, err := session.FromInstanceData(session.InstanceData{
 		Title:   title,

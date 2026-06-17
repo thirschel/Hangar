@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	cslog "claude-squad/log"
+	cslog "hangar/log"
 )
 
 // TestMain initializes the global logger so tests that drive worktree creation —

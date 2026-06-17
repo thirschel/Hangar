@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/winhost/proto"
+	"hangar/session/winhost/proto"
 
 	"github.com/Microsoft/go-winio"
 )
@@ -156,7 +156,7 @@ func startTestHost(t *testing.T) (string, func()) {
 
 func startTestHostWithHandle(t *testing.T) (string, *host, func()) {
 	t.Helper()
-	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	pipe := fmt.Sprintf(`\\.\pipe\hangar-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
 	sddl, err := currentUserSDDL()
 	if err != nil {
 		t.Fatalf("sddl: %v", err)
@@ -187,7 +187,7 @@ func startTestHostWithHandle(t *testing.T) (string, *host, func()) {
 // startRealHost starts an in-process host using the real ConPTY session factory.
 func startRealHost(t *testing.T) (string, func()) {
 	t.Helper()
-	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-rtest-%d-%d`, os.Getpid(), time.Now().UnixNano())
+	pipe := fmt.Sprintf(`\\.\pipe\hangar-rtest-%d-%d`, os.Getpid(), time.Now().UnixNano())
 	sddl, err := currentUserSDDL()
 	if err != nil {
 		t.Fatalf("sddl: %v", err)

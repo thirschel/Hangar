@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	cslog "claude-squad/log"
-	"claude-squad/session/winhost/proto"
+	cslog "hangar/log"
+	"hangar/session/winhost/proto"
 
 	"github.com/Microsoft/go-winio"
 )
@@ -415,7 +415,7 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 		return proto.Errorf(req.ID, "%v", err)
 	}
 	seq := h.attachSeq.Add(1)
-	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-att-%s-%s-%d`, sid, req.Session, seq)
+	pipe := fmt.Sprintf(`\\.\pipe\hangar-att-%s-%s-%d`, sid, req.Session, seq)
 	ln, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
 	if err != nil {
 		return proto.Errorf(req.ID, "attach listen: %v", err)

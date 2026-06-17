@@ -1,7 +1,7 @@
 package session
 
 import (
-	cslog "claude-squad/log"
+	cslog "hangar/log"
 	"os"
 	"runtime"
 	"strings"

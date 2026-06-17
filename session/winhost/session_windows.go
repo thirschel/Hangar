@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session/promptpolicy"
-	"claude-squad/session/winhost/proto"
+	"hangar/session/promptpolicy"
+	"hangar/session/winhost/proto"
 )
 
 // Shared control client. The session host stays alive while the TUI holds this
