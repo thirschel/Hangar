@@ -4,7 +4,7 @@ type SidebarProps = {
   workspaces: WorkspaceInfo[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onArchive: (id: string) => Promise<void>;
+  onArchive: (id: string) => void;
   onNewWorkspace: () => void;
 };
 

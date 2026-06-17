@@ -6,6 +6,7 @@ import { Sidebar } from './components/Sidebar';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RegenerateModal } from './components/RegenerateModal';
+import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -61,6 +62,7 @@ export function App(): JSX.Element {
   const [showCreate, setShowCreate] = useState(false);
   const [showRegen, setShowRegen] = useState(false);
   const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
+  const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
   const [refreshMs, setRefreshMs] = useState(2000);
   const [sideWidth, setSideWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDE_KEY));
@@ -218,14 +220,28 @@ export function App(): JSX.Element {
   );
 
   const onArchive = useCallback(
-    async (id: string): Promise<void> => {
-      await window.cs.archiveWorkspace(id);
+    (id: string): void => {
+      // Show the confirmation modal instead of immediately archiving
+      const workspace = workspaces.find((w) => w.id === id);
+      if (workspace) {
+        setWorkspaceToRemove(workspace);
+      }
+    },
+    [workspaces],
+  );
+
+  const onConfirmRemove = useCallback(
+    async (deleteWorktree: boolean): Promise<void> => {
+      if (!workspaceToRemove) return;
+      const id = workspaceToRemove.id;
+      await window.cs.archiveWorkspace(id, { deleteWorktree });
       void window.cs.closeShell(id);
       if (pendingTitlesRef.current.delete(id)) savePendingTitles(pendingTitlesRef.current);
       setSelectedId((cur) => (cur === id ? null : cur));
+      setWorkspaceToRemove(null);
       await refresh();
     },
-    [refresh],
+    [workspaceToRemove, refresh],
   );
 
   const toggleAutoYes = useCallback(
@@ -388,6 +404,15 @@ export function App(): JSX.Element {
             void window.cs.regenerateAgent(id, handoff);
           }}
           onClose={() => setShowRegen(false)}
+        />
+      )}
+
+      {workspaceToRemove && (
+        <RemoveWorkspaceModal
+          workspaceTitle={workspaceToRemove.title}
+          hasUncommittedChanges={workspaceToRemove.added > 0 || workspaceToRemove.removed > 0}
+          onConfirm={onConfirmRemove}
+          onClose={() => setWorkspaceToRemove(null)}
         />
       )}
     </div>

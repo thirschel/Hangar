@@ -190,8 +190,12 @@ func (c *Client) ListWorkspaces() ([]proto.WorkspaceInfo, error) {
 	return r.Workspaces, nil
 }
 
-func (c *Client) ArchiveWorkspace(id string) error {
-	return respErr(c.call(&proto.Request{Method: proto.MethodArchiveWorkspace, WorkspaceID: id}))
+func (c *Client) ArchiveWorkspace(id string, deleteWorktree bool) error {
+	return respErr(c.call(&proto.Request{
+		Method:         proto.MethodArchiveWorkspace,
+		WorkspaceID:    id,
+		DeleteWorktree: deleteWorktree,
+	}))
 }
 
 func (c *Client) RegenerateAgent(id string, handoff bool, cols, rows int) error {
