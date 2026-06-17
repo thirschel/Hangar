@@ -382,7 +382,7 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		Alive: alive, AutoYes: w.AutoYes, Added: added, Removed: removed, CreatedUnix: w.CreatedUnix,
 		RunCommand: w.RunCommand, Running: running, PreviewURL: previewURL,
 		Busy: busy, Waiting: waiting,
-		Regenerating: regenerating, RegenPhase: phase,
+		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 	}
 }
 
@@ -1143,6 +1143,28 @@ func (m *workspaceManager) setAutoYes(req *proto.Request) *proto.Response {
 		s.setAutoYes(req.Enabled)
 	}
 	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (m *workspaceManager) updateWorkspace(req *proto.Request) *proto.Response {
+	m.mu.Lock()
+	w, ok := m.wss[req.WorkspaceID]
+	if !ok {
+		m.mu.Unlock()
+		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+	if t := strings.TrimSpace(req.Title); t != "" {
+		w.Title = t
+	}
+	if req.Program != "" {
+		w.Program = req.Program
+	}
+	if req.Shell != "" {
+		w.Shell = req.Shell
+	}
+	m.saveLocked()
+	info := m.toInfo(w)
+	m.mu.Unlock()
+	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
 
 func (m *workspaceManager) startRun(req *proto.Request) *proto.Response {

@@ -135,6 +135,20 @@ const api = {
     if (!r.ok) throw new Error(r.error || 'WorkspacePush failed');
     return r.content ?? '';
   },
+  updateWorkspace: async (
+    id: string,
+    patch: { title?: string; program?: string; shell?: string },
+  ): Promise<WorkspaceInfo> => {
+    const r = await rpc({
+      method: 'UpdateWorkspace',
+      workspaceId: id,
+      title: patch.title,
+      program: patch.program,
+      shell: patch.shell,
+    });
+    if (!r.ok || !r.workspace) throw new Error(r.error || 'UpdateWorkspace failed');
+    return r.workspace;
+  },
   startRun: async (id: string, command: string): Promise<void> => {
     const r = await rpc({ method: 'StartRun', workspaceId: id, command });
     if (!r.ok) throw new Error(r.error || 'StartRun failed');

@@ -7,6 +7,7 @@ import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RegenerateModal } from './components/RegenerateModal';
 import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
+import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -47,6 +48,7 @@ export function App(): JSX.Element {
   const [showRegen, setShowRegen] = useState(false);
   const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
   const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
+  const [workspaceToEdit, setWorkspaceToEdit] = useState<WorkspaceInfo | null>(null);
   const [refreshMs, setRefreshMs] = useState(2000);
   const [sideWidth, setSideWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDE_KEY));
@@ -513,6 +515,10 @@ export function App(): JSX.Element {
           selectedId={selectedId}
           onSelect={setSelectedId}
           onArchive={onArchive}
+          onSettings={(id) => {
+            const ws = workspaces.find((w) => w.id === id);
+            if (ws) setWorkspaceToEdit(ws);
+          }}
           onNewWorkspace={() => {
             setCreateRepoPath(undefined);
             setShowCreate(true);
@@ -600,6 +606,17 @@ export function App(): JSX.Element {
           hasUncommittedChanges={workspaceToRemove.added > 0 || workspaceToRemove.removed > 0}
           onConfirm={onConfirmRemove}
           onClose={() => setWorkspaceToRemove(null)}
+        />
+      )}
+
+      {workspaceToEdit && (
+        <WorkspaceSettingsModal
+          workspace={workspaceToEdit}
+          onClose={() => setWorkspaceToEdit(null)}
+          onSaved={() => {
+            setWorkspaceToEdit(null);
+            void refresh();
+          }}
         />
       )}
 
