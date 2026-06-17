@@ -434,58 +434,6 @@ body.is-col-resizing .side-panel {
   overflow: hidden;
 }
 
-.composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: var(--space-4);
-  padding: var(--space-4);
-  border-top: 1px solid var(--border);
-  background: var(--bg-elevated);
-}
-
-.composer textarea {
-  min-height: 52px;
-  max-height: 120px;
-  resize: vertical;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  outline: none;
-  padding: 9px 10px;
-  background: var(--bg-base);
-  color: var(--text);
-  transition:
-    border-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease);
-}
-
-.composer textarea:focus {
-  border-color: var(--accent);
-  box-shadow: var(--shadow-focus);
-}
-
-.composer button {
-  align-self: end;
-  padding: 9px 16px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--accent-gradient);
-  color: var(--accent-contrast);
-  font-weight: 600;
-  cursor: pointer;
-  box-shadow: var(--shadow-sm);
-  transition:
-    filter var(--dur-fast) var(--ease),
-    transform var(--dur-fast) var(--ease);
-}
-
-.composer button:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-
-.composer button:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
 .mini-tabs {
   height: 35px;
 }
@@ -925,10 +873,6 @@ body.is-col-resizing .side-panel {
   font-weight: 600;
 }
 
-.composer--disabled textarea {
-  opacity: 0.6;
-}
-.composer button:disabled,
 .create-form button:disabled {
   opacity: 0.5;
   cursor: default;
