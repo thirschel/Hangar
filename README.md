@@ -143,31 +143,16 @@ ln -s "$(brew --prefix)/bin/claude-squad" "$(brew --prefix)/bin/cs"
 
 ##### Shell script
 
-Download a tagged release, verify its integrity, then install:
-
 ```bash
-# 1. Pick a release version from: https://github.com/thirschel/Hangar/releases
-VERSION="v1.0.0"
-
-# 2. Download the install script pinned to that release tag:
-curl -fsSL \
-  "https://github.com/thirschel/Hangar/releases/download/${VERSION}/install.sh" \
-  -o install-hangar.sh
-
-# 3. Verify the script's SHA256 against the value published on the release page:
-sha256sum install-hangar.sh
-
-# 4. Review the script, then run it:
-bash install-hangar.sh
+curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash
 ```
 
-> ⚠️ `curl … | bash` pipes untrusted bytes directly into a shell without any review
-> opportunity. The steps above let you inspect the script and verify its checksum first.
+This puts the `cs` binary in `~/.local/bin`.
 
-To install with a custom binary name:
+To use a custom name for the binary:
 
 ```bash
-bash install-hangar.sh --name <your-binary-name>
+curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
 ```
 
 ## The underlying daemon (`cs`)
