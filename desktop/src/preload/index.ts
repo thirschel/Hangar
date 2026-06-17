@@ -211,6 +211,7 @@ const api = {
     ipcRenderer.invoke('cs:set-settings', patch),
   notify: (n: { title: string; body: string; workspaceId?: string }): Promise<void> =>
     ipcRenderer.invoke('cs:notify', n),
+  setBadge: (count: number): Promise<void> => ipcRenderer.invoke('cs:set-badge', count),
 
   // Files tab (read-only worktree browser).
   listDir: (worktreePath: string, relDir: string): Promise<DirEntry[]> =>
