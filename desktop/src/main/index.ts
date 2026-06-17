@@ -317,6 +317,11 @@ ipcMain.handle(
   },
 );
 
+// Badge count: show the number of workspaces awaiting input on the taskbar icon.
+ipcMain.handle('cs:set-badge', async (_event, count: number): Promise<void> => {
+  app.setBadgeCount(count);
+});
+
 ipcMain.on('term:input', (_event, args: { session: string; data: string }) => {
   const socket = attachments.get(args.session);
   if (socket) {
