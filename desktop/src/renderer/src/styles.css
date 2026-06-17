@@ -714,8 +714,9 @@ body.is-col-resizing .side-panel {
 .modal--browser .modal__body {
   display: flex;
   flex-direction: column;
-  min-height: 300px;
-  max-height: 60vh;
+  min-height: 400px;
+  max-height: 75vh;
+  flex: 1;
 }
 .browser-loading {
   display: flex;
@@ -833,8 +834,8 @@ body.is-col-resizing .side-panel {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--space-4);
-  min-height: 300px;
-  max-height: 60vh;
+  min-height: 400px;
+  flex: 1;
 }
 .browser-left {
   display: flex;
@@ -883,10 +884,7 @@ body.is-col-resizing .side-panel {
   font-size: var(--fs-sm);
 }
 
-/* Widen the browser modal */
-.modal--browser .modal__inner {
-  max-width: 800px;
-}
+/* Widen the browser modal — rule placed in styles but overridden; actual override below .modal */
 
 .create-form {
   display: flex;
@@ -1399,6 +1397,10 @@ body.is-col-resizing .side-panel {
 }
 .modal--create {
   width: 540px;
+}
+.modal--browser {
+  width: min(1100px, 92vw);
+  max-height: min(700px, 85vh);
 }
 .modal__header {
   padding: var(--space-5) var(--space-6);
