@@ -710,6 +710,120 @@ body.is-col-resizing .side-panel {
   color: var(--text-strong);
 }
 
+/* Session browser modal */
+.modal--browser .modal__body {
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
+  max-height: 60vh;
+}
+.browser-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-muted);
+}
+.browser-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-bottom: var(--space-3);
+}
+.browser-search__input {
+  flex: 1;
+  height: 28px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-family: var(--font-ui);
+  outline: none;
+}
+.browser-search__input:focus {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.browser-search__count {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.browser-list {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.browser-empty {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--text-muted);
+}
+.browser-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.browser-item:hover {
+  background: var(--bg-hover);
+}
+.browser-item--in-use {
+  opacity: 0.5;
+  cursor: default;
+}
+.browser-item--resuming {
+  opacity: 0.7;
+}
+.browser-item__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.browser-item__name {
+  font-size: var(--fs-md);
+  color: var(--text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.browser-item__time {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  margin-left: var(--space-3);
+}
+.browser-item__meta {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.browser-item__repo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-item__branch {
+  font-family: var(--font-mono);
+}
+.browser-item__badge {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--bg-selected);
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
 .create-form {
   display: flex;
   flex-direction: column;
