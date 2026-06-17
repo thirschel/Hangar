@@ -44,7 +44,9 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("N")+descStyle.Render("         - Create a new session with a prompt"),
 		keyStyle.Render("D")+descStyle.Render("         - Kill (delete) the selected session"),
 		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
-		keyStyle.Render("J/K")+descStyle.Render("       - Reorder sessions"),
+		keyStyle.Render("J/K")+descStyle.Render("       - Reorder sessions (Manual mode only)"),
+		keyStyle.Render("s/S")+descStyle.Render("       - Cycle sidebar mode (manual/by repo/recent/pending)"),
+		keyStyle.Render("/")+descStyle.Render("         - Search/filter sessions by title or repo"),
 		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
 		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
 		"",
@@ -57,6 +59,8 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
 		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
+		"",
+		descStyle.Render("Sidebar rows animate when they move; set ")+keyStyle.Render("disable_sidebar_motion")+descStyle.Render(" in config to turn it off."),
 	)
 	return content
 }

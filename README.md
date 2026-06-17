@@ -172,11 +172,16 @@ The menu at the bottom of the screen shows available commands:
 - `N` - Create a new session with a prompt
 - `D` - Kill (delete) the selected session
 - `↑/j`, `↓/k` - Navigate between sessions
+- `J/K` - Reorder sessions (Manual sidebar mode only)
+
+##### Sidebar view
+- `s` / `S` - Cycle the sidebar mode forward / backward: **Manual → Group by repo → Recent activity → Pinned-pending**. The active mode is shown in the sidebar title and persists across restarts.
+- `/` - Search/filter sessions by title or repo path. While searching, letters edit the query and only the arrow keys navigate; `enter` keeps the filter, `esc` clears it and restores your previous selection.
 
 ##### Actions
 - `↵/o` - Attach to the selected session to reprompt
 - `ctrl-q` - Detach from session
-- `s` - Commit and push branch to github
+- `p` - Commit and push branch to github
 - `c` - Checkout. Commits changes and pauses the session
 - `r` - Resume a paused session
 - `?` - Show help menu
@@ -189,6 +194,8 @@ The menu at the bottom of the screen shows available commands:
 ### Configuration
 
 Claude Squad stores its configuration in `~/.claude-squad/config.json`. You can find the exact path by running `cs debug`.
+
+The sidebar animates rows when they move (reorder, sort, filter, pin). To turn animations off, set `"disable_sidebar_motion": true` in the config file. Motion is also automatically disabled when the terminal is very small or there are many visible workspaces.
 
 #### Profiles
 
