@@ -10,6 +10,24 @@ import type {
 } from '../main/host-client';
 import type { Settings } from '../main/settings';
 
+export type AppInfo = {
+  version: string;
+  appName: string;
+  electronVersion: string;
+  nodeVersion: string;
+  platform: string;
+  arch: string;
+  githubUrl: string;
+  author: string;
+};
+
+export type UpdateStatus = {
+  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  version?: string;
+  progress?: number;
+  error?: string;
+};
+
 export type ReadyInfo = {
   session: string;
 };
@@ -209,6 +227,10 @@ const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
   setSettings: (patch: Partial<Settings>): Promise<Settings> =>
     ipcRenderer.invoke('cs:set-settings', patch),
+  getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke('cs:get-app-info'),
+  checkForUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('cs:check-for-update'),
+  downloadUpdate: (): Promise<void> => ipcRenderer.invoke('cs:download-update'),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('cs:install-update'),
   notify: (n: { title: string; body: string; workspaceId?: string }): Promise<void> =>
     ipcRenderer.invoke('cs:notify', n),
   setBadge: (count: number): Promise<void> => ipcRenderer.invoke('cs:set-badge', count),
@@ -224,6 +246,8 @@ const api = {
   onHostReady: (callback: (info: HostReadyInfo) => void): Unsubscribe => on('cs:ready', callback),
   onClosed: (callback: (info: TermClosed) => void): Unsubscribe => on('term:closed', callback),
   onError: (callback: (info: TermError) => void): Unsubscribe => on('term:error', callback),
+  onUpdateStatus: (callback: (status: UpdateStatus) => void): Unsubscribe =>
+    on('cs:update-status', callback),
   onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe =>
     on('cs:focus-workspace', callback),
   sendInput: (session: string, data: string): void =>

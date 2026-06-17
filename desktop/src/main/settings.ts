@@ -20,6 +20,7 @@ export type AppSettings = {
   notifications: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
+  autoUpdate: boolean;
 };
 
 // The merged, flat view the renderer's Settings UI works with.
@@ -32,12 +33,14 @@ export type Settings = {
   notifications: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
+  autoUpdate: boolean;
 };
 
 const APP_DEFAULTS: AppSettings = {
   notifications: true,
   minimizeToTray: true,
   uiRefreshMs: 2000,
+  autoUpdate: false,
 };
 
 function csDir(): string {
@@ -80,6 +83,7 @@ export function getSettings(): Settings {
     notifications: app.notifications,
     minimizeToTray: app.minimizeToTray,
     uiRefreshMs: app.uiRefreshMs,
+    autoUpdate: app.autoUpdate,
   };
 }
 
@@ -105,6 +109,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
   const app = readAppSettings();
   if (patch.notifications !== undefined) app.notifications = patch.notifications;
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
+  if (patch.autoUpdate !== undefined) app.autoUpdate = patch.autoUpdate;
   if (patch.uiRefreshMs !== undefined) {
     const n = Number(patch.uiRefreshMs);
     app.uiRefreshMs = Number.isFinite(n)
