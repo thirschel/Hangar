@@ -105,7 +105,7 @@ func TestAutoYesEdgeSequence(t *testing.T) {
 // reads as waiting; changing output reads as busy; settled output reads as idle.
 func TestAgentStatus(t *testing.T) {
 	// Prompt on screen -> waiting (not busy).
-	s := newConptySession("t", "copilot", "", 80, 24, false).(*conptySession)
+	s := newConptySession("t", "copilot", "", "cmd", 80, 24, false).(*conptySession)
 	_, _ = s.emu.Write([]byte("Do you want to run this command?\r\n" +
 		"  3. No, and tell Copilot what to do differently (Esc to stop)"))
 	s.updateStatus()
@@ -114,7 +114,7 @@ func TestAgentStatus(t *testing.T) {
 	}
 
 	// Changing output, no prompt -> busy.
-	s2 := newConptySession("t2", "copilot", "", 80, 24, false).(*conptySession)
+	s2 := newConptySession("t2", "copilot", "", "cmd", 80, 24, false).(*conptySession)
 	_, _ = s2.emu.Write([]byte("thinking...\r\nwriting code\r\n"))
 	s2.updateStatus()
 	if busy, waiting := s2.agentStatus(); !busy || waiting {
@@ -130,7 +130,7 @@ func TestAgentStatus(t *testing.T) {
 
 	// Content changing right after user input is the keystrokes echoing to the
 	// screen, not the agent working -> not busy.
-	s3 := newConptySession("t3", "copilot", "", 80, 24, false).(*conptySession)
+	s3 := newConptySession("t3", "copilot", "", "cmd", 80, 24, false).(*conptySession)
 	s3.mu.Lock()
 	s3.lastInputMs = time.Now().UnixMilli()
 	s3.mu.Unlock()
@@ -146,7 +146,7 @@ func TestAgentStatus(t *testing.T) {
 // attached and is paused (stays armed) while a client is attached.
 func TestMaybeAutoYesPausesWhileAttached(t *testing.T) {
 	mk := func() *conptySession {
-		s := newConptySession("t", "copilot", "", 80, 24, true).(*conptySession)
+		s := newConptySession("t", "copilot", "", "cmd", 80, 24, true).(*conptySession)
 		_, _ = s.emu.Write([]byte("Do you want to run this command?\r\n" +
 			"  3. No, and tell Copilot what to do differently (Esc to stop)"))
 		return s

@@ -84,6 +84,17 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
             />
           </label>
           <label className="field">
+            <span>Shell</span>
+            <select
+              value={settings.defaultShell}
+              onChange={(e) => patch({ defaultShell: e.target.value })}
+            >
+              <option value="cmd">cmd.exe</option>
+              <option value="powershell">PowerShell 5 (powershell.exe)</option>
+              <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
+            </select>
+          </label>
+          <label className="field">
             <span>Branch prefix</span>
             <input
               value={settings.branchPrefix}

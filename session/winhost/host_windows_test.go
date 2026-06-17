@@ -260,7 +260,7 @@ func TestConcurrentClients(t *testing.T) {
 // short-lived command, verifying the rendered screen captures the program's
 // output and the exit is recorded.
 func TestConptySessionRealEcho(t *testing.T) {
-	s := newConptySession("t", "echo P2_CONPTY_OK", "", 80, 24, false).(*conptySession)
+	s := newConptySession("t", "echo P2_CONPTY_OK", "", "cmd", 80, 24, false).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestConptySessionRealEcho(t *testing.T) {
 // TestConptySessionResizeAndAnsi verifies resize and that ANSI capture preserves
 // styling while plain capture does not leak escape sequences.
 func TestConptySessionResizeAndAnsi(t *testing.T) {
-	s := newConptySession("t2", "echo done", "", 40, 10, false).(*conptySession)
+	s := newConptySession("t2", "echo done", "", "cmd", 40, 10, false).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}

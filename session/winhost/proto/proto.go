@@ -116,6 +116,10 @@ type Request struct {
 	// ArchiveWorkspace: when true, also delete the worktree directory and
 	// its branch; when false (default), keep the worktree and branch on disk.
 	DeleteWorktree bool `json:"deleteWorktree,omitempty"`
+
+	// Shell selects the shell used to launch the agent: "cmd", "powershell", "pwsh".
+	// Empty falls back to the config default_shell, which itself defaults to "cmd".
+	Shell string `json:"shell,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.

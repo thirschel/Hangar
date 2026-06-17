@@ -17,6 +17,7 @@ export function CreateWorkspaceModal({
   const [title, setTitle] = useState('');
   const [program, setProgram] = useState('');
   const [defaultProgram, setDefaultProgram] = useState('copilot');
+  const [shell, setShell] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +60,7 @@ export function CreateWorkspaceModal({
         title: title.trim() || undefined,
         program: program.trim() || undefined,
         baseBranch: baseBranch.trim() || undefined,
+        shell: shell || undefined,
       });
       modalRef.current?.close();
     } catch (e) {
@@ -117,12 +119,21 @@ export function CreateWorkspaceModal({
           />
         </label>
         <label>
-          Agent <span className="hint">(must be on PATH)</span>
+          Agent <span className="hint">(must be on PATH or a PowerShell function)</span>
           <input
             value={program}
             onChange={(e) => setProgram(e.target.value)}
             placeholder={defaultProgram}
           />
+        </label>
+        <label>
+          Shell <span className="hint">(defaults to Settings value)</span>
+          <select value={shell} onChange={(e) => setShell(e.target.value)}>
+            <option value="">Default (from Settings)</option>
+            <option value="cmd">cmd.exe</option>
+            <option value="powershell">PowerShell 5 (powershell.exe)</option>
+            <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
+          </select>
         </label>
         <label>
           Base branch <span className="hint">(optional)</span>
