@@ -34,6 +34,18 @@ export interface WorkspaceInfo {
   shell: string;
 }
 
+export interface CopilotSessionInfo {
+  id: string;
+  name: string;
+  repository: string;
+  branch: string;
+  originRoot: string;
+  createdAt: number;
+  updatedAt: number;
+  inUse: boolean;
+  firstMsg?: string;
+}
+
 export interface FileDiffInfo {
   path: string;
   added: number;
@@ -105,6 +117,8 @@ export interface Request {
   handoff?: boolean;
   // Shell selection
   shell?: string;
+  // ResumeCopilotSession
+  sessionId?: string;
 }
 
 export interface Response {
@@ -130,6 +144,9 @@ export interface Response {
   nextOffset?: number;
   runRunning?: boolean;
   exitCode?: number;
+  // Copilot session browser (v6)
+  copilotSessions?: CopilotSessionInfo[];
+  skipped?: number;
 }
 
 type PendingCall = {

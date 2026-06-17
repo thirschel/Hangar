@@ -67,6 +67,10 @@ const (
 
 	// UpdateWorkspace (v6): update mutable workspace fields (title, program, shell).
 	MethodUpdateWorkspace = "UpdateWorkspace"
+
+	// Copilot session browser (v6): discover and resume local Copilot CLI sessions.
+	MethodListCopilotSessions   = "ListCopilotSessions"
+	MethodResumeCopilotSession  = "ResumeCopilotSession"
 )
 
 // Capture modes for MethodCapturePane.
@@ -123,6 +127,9 @@ type Request struct {
 	// Shell selects the shell used to launch the agent: "cmd", "powershell", "pwsh".
 	// Empty falls back to the config default_shell, which itself defaults to "cmd".
 	Shell string `json:"shell,omitempty"`
+
+	// ResumeCopilotSession
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -202,6 +209,23 @@ type Response struct {
 	NextOffset int64           `json:"nextOffset,omitempty"`
 	RunRunning bool            `json:"runRunning,omitempty"`
 	ExitCode   int             `json:"exitCode,omitempty"`
+
+	// Copilot session browser (v6)
+	CopilotSessions []CopilotSessionInfo `json:"copilotSessions,omitempty"`
+	Skipped         int                  `json:"skipped,omitempty"`
+}
+
+// CopilotSessionInfo describes a discovered local Copilot CLI session.
+type CopilotSessionInfo struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Repository string `json:"repository"`
+	Branch     string `json:"branch"`
+	OriginRoot string `json:"originRoot"`
+	CreatedAt  int64  `json:"createdAt"` // Unix seconds
+	UpdatedAt  int64  `json:"updatedAt"` // Unix seconds
+	InUse      bool   `json:"inUse"`
+	FirstMsg   string `json:"firstMsg,omitempty"`
 }
 
 // Errorf builds a failed Response for the given request id.

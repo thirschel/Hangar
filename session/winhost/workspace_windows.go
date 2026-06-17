@@ -21,6 +21,7 @@ import (
 
 	"claude-squad/config"
 	"claude-squad/session/agentcmd"
+	"claude-squad/session/copilot"
 	"claude-squad/session/git"
 	"claude-squad/session/winhost/proto"
 )
@@ -1164,6 +1165,110 @@ func (m *workspaceManager) updateWorkspace(req *proto.Request) *proto.Response {
 	m.saveLocked()
 	info := m.toInfo(w)
 	m.mu.Unlock()
+	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
+}
+
+func (m *workspaceManager) listCopilotSessions(req *proto.Request) *proto.Response {
+	sessions, skipped, err := copilot.DiscoverWithStats()
+	if err != nil {
+		return proto.Errorf(req.ID, "discover copilot sessions: %v", err)
+	}
+
+	// Check which session IDs are already resumed as workspaces.
+	m.mu.Lock()
+	resumedIDs := make(map[string]bool)
+	for _, w := range m.wss {
+		if w.AgentSessionID != "" {
+			resumedIDs[w.AgentSessionID] = true
+		}
+	}
+	m.mu.Unlock()
+
+	out := make([]proto.CopilotSessionInfo, 0, len(sessions))
+	for _, s := range sessions {
+		inUse := s.InUse || resumedIDs[s.ID]
+		out = append(out, proto.CopilotSessionInfo{
+			ID:         s.ID,
+			Name:       s.DisplayName(),
+			Repository: s.Repository,
+			Branch:     s.Branch,
+			OriginRoot: s.OriginRoot,
+			CreatedAt:  s.CreatedAt.Unix(),
+			UpdatedAt:  s.UpdatedAt.Unix(),
+			InUse:      inUse,
+		})
+	}
+	return &proto.Response{ID: req.ID, OK: true, CopilotSessions: out, Skipped: skipped}
+}
+
+func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Response {
+	if req.SessionID == "" {
+		return proto.Errorf(req.ID, "sessionId required")
+	}
+
+	// The resume flow reuses the normal workspace creation but sets the agent
+	// session ID so the agent resumes the conversation instead of starting fresh.
+	// We need the repo path — use the request's repoPath or fall back to cwd.
+	repoPath := req.RepoPath
+	if repoPath == "" {
+		var err error
+		repoPath, err = os.Getwd()
+		if err != nil {
+			return proto.Errorf(req.ID, "cannot determine repo path: %v", err)
+		}
+	}
+
+	cfg := config.LoadConfig()
+	program := cfg.GetProgram()
+	if !agentcmd.SupportsResume(program) {
+		return proto.Errorf(req.ID, "agent %q does not support session resume", program)
+	}
+
+	shell := req.Shell
+	if shell == "" {
+		shell = cfg.DefaultShell
+	}
+	if shell == "" {
+		shell = "cmd"
+	}
+
+	title := req.Title
+	if title == "" {
+		title = "Resumed session"
+	}
+
+	id := newWorkspaceID()
+	sessionName := "ws_" + id
+	gitName := slug(title) + "-" + id[:6]
+
+	wt, branch, err := git.NewGitWorktree(repoPath, gitName)
+	if err != nil {
+		return proto.Errorf(req.ID, "prepare worktree: %v", err)
+	}
+	if err := wt.Setup(); err != nil {
+		return proto.Errorf(req.ID, "create worktree: %v", err)
+	}
+
+	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
+	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.ResumeCommand(program, req.SessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+		_ = wt.Remove()
+		_ = wt.Prune()
+		return proto.Errorf(req.ID, "start agent: %v", err)
+	}
+
+	w := &workspace{
+		ID: id, Title: title, Program: program, RepoPath: wt.GetRepoPath(),
+		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
+		SessionName: sessionName, AutoYes: req.AutoYes,
+		CreatedUnix: time.Now().Unix(), AgentSessionID: req.SessionID, Shell: shell,
+	}
+	m.mu.Lock()
+	m.wss[id] = w
+	info := m.toInfo(w)
+	m.saveLocked()
+	m.mu.Unlock()
+
+	m.host.logger.Printf("resumed copilot session %q as workspace %q (%s)", req.SessionID, title, id)
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
 
