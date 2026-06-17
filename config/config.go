@@ -48,6 +48,10 @@ type Config struct {
 	WorktreeDir string `json:"worktree_dir,omitempty"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
+	// DisableSidebarMotion disables the sidebar row animations (pulse/crossfade).
+	// Default false (motion enabled). Motion also auto-disables when the terminal
+	// is too small or there are too many visible workspaces.
+	DisableSidebarMotion bool `json:"disable_sidebar_motion,omitempty"`
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and

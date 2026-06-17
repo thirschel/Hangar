@@ -32,6 +32,15 @@ const (
 	// Reorder keybindings
 	KeyMoveUp
 	KeyMoveDown
+
+	// Sidebar mode cycling
+	KeyModeCycle
+	KeyModeCycleBack
+
+	// Search / filter
+	KeySearch
+	KeySearchApply  // menu hint: enter applies the search
+	KeySearchCancel // menu hint: esc clears the search
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -44,6 +53,9 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"shift+down": KeyShiftDown,
 	"J":          KeyMoveDown,
 	"K":          KeyMoveUp,
+	"s":          KeyModeCycle,
+	"S":          KeyModeCycleBack,
+	"/":          KeySearch,
 	"N":          KeyPrompt,
 	"enter":      KeyEnter,
 	"o":          KeyEnter,
@@ -123,6 +135,30 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyMoveDown: key.NewBinding(
 		key.WithKeys("J"),
 		key.WithHelp("J", "move down"),
+	),
+
+	KeyModeCycle: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "sort"),
+	),
+	KeyModeCycleBack: key.NewBinding(
+		key.WithKeys("S"),
+		key.WithHelp("S", "sort back"),
+	),
+	KeySearch: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "search"),
+	),
+
+	// -- Special keybindings --
+
+	KeySearchApply: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "apply"),
+	),
+	KeySearchCancel: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "clear"),
 	),
 
 	// -- Special keybindings --
