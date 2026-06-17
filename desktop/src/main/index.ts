@@ -123,7 +123,6 @@ function createWindow(): void {
     minWidth: 1080,
     minHeight: 680,
     backgroundColor: '#1e1e1e',
-    icon: buildAsset('icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '..\\preload\\index.js'),
       contextIsolation: true,
