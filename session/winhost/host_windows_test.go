@@ -20,21 +20,36 @@ import (
 // lifecycle without spawning real ConPTY processes.
 type fakeSession struct {
 	name, program string
+	workDir       string
 	mu            sync.Mutex
 	buf           []byte
 	changed       bool
 	autoYes       bool
+	forceApprove  bool
 	aliveFlag     bool
+	busy          bool
+	waiting       bool
+	sendHook      func(*fakeSession, []byte) error
+	failStart     bool
+	startErr      error
 }
 
 func newFake(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
 	return &fakeSession{
-		name: name, program: program, autoYes: autoYes, aliveFlag: true,
+		name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true,
 		buf: []byte(fmt.Sprintf("[echo session %q running %q]\n", name, program)),
 	}
 }
 
-func (f *fakeSession) start() error { return nil }
+func (f *fakeSession) start() error {
+	if f.failStart {
+		if f.startErr != nil {
+			return f.startErr
+		}
+		return fmt.Errorf("fake start failure")
+	}
+	return nil
+}
 func (f *fakeSession) capture(full, withANSI bool) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -44,7 +59,11 @@ func (f *fakeSession) sendKeys(b []byte) error {
 	f.mu.Lock()
 	f.buf = append(f.buf, b...)
 	f.changed = true
+	hook := f.sendHook
 	f.mu.Unlock()
+	if hook != nil {
+		return hook(f, b)
+	}
 	return nil
 }
 func (f *fakeSession) resize(cols, rows int) error { return nil }
@@ -55,8 +74,17 @@ func (f *fakeSession) hasUpdated() (bool, bool) {
 	f.changed = false
 	return u, false
 }
-func (f *fakeSession) agentStatus() (bool, bool) { return false, false }
-func (f *fakeSession) setAutoYes(e bool)         { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
+func (f *fakeSession) agentStatus() (bool, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.busy, f.waiting
+}
+func (f *fakeSession) setAutoYes(e bool) { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
+func (f *fakeSession) setForceApprove(e bool) {
+	f.mu.Lock()
+	f.forceApprove = e
+	f.mu.Unlock()
+}
 func (f *fakeSession) info() proto.SessionInfo {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -74,6 +102,11 @@ func (f *fakeSession) unsubscribe(sub *subscriber) { close(sub.ch) }
 // startTestHost starts an in-process host on a unique pipe using the fake
 // session factory (no real processes spawned).
 func startTestHost(t *testing.T) (string, func()) {
+	pipe, _, cleanup := startTestHostWithHandle(t)
+	return pipe, cleanup
+}
+
+func startTestHostWithHandle(t *testing.T) (string, *host, func()) {
 	t.Helper()
 	pipe := fmt.Sprintf(`\\.\pipe\claudesquad-test-%d-%d`, os.Getpid(), time.Now().UnixNano())
 	sddl, err := currentUserSDDL()
@@ -86,8 +119,10 @@ func startTestHost(t *testing.T) (string, func()) {
 	}
 	h := newHost(io.Discard, time.Minute)
 	h.newSession = newFake
+	h.workspaces.bootFloor = 0   // no boot floor in tests
+	h.workspaces.submitDelay = 0 // no submit settle delay in tests
 	go h.serve(ln)
-	return pipe, func() { h.triggerShutdown() }
+	return pipe, h, func() { h.triggerShutdown() }
 }
 
 // startRealHost starts an in-process host using the real ConPTY session factory.
