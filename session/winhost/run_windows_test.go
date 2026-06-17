@@ -27,7 +27,7 @@ func TestRunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
-	defer func() { _ = c.ArchiveWorkspace(ws.ID) }()
+	defer func() { _ = c.ArchiveWorkspace(ws.ID, true) }()
 
 	const command = `echo http://localhost:5173 & ping -n 12 127.0.0.1 >NUL`
 	if err := c.StartRun(ws.ID, command); err != nil {

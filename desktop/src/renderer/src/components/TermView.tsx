@@ -37,6 +37,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const term = new Terminal({
       cols: 120,
       rows: 30,
+      scrollback: 10000, // Allow scrolling back through conversation history
       cursorBlink: true,
       fontFamily: 'Consolas, "Cascadia Mono", "Cascadia Code", monospace',
       fontSize: 13,
@@ -93,6 +94,20 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     el.addEventListener('contextmenu', onContextMenu);
 
+    // Wheel handler: scroll the terminal when in normal buffer mode.
+    // When apps use the alternate screen buffer (fullscreen TUIs) or enable
+    // mouse tracking, wheel events should pass through to the app normally.
+    const onWheel = (ev: WheelEvent): void => {
+      // Only intercept wheel events when in the normal (scrollable) buffer.
+      // Alt-buffer apps (vim, less, top) should receive wheel as mouse input.
+      if (term.buffer.active.type === 'normal') {
+        const delta = ev.deltaY > 0 ? 3 : -3;
+        term.scrollLines(delta);
+        ev.preventDefault();
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+
     const resize = (): void => {
       try {
         fit.fit();
@@ -105,7 +120,16 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
 
     const inputDisposable = term.onData((data) => window.cs.sendInput(session, data));
     const unsubData = window.cs.onData((d) => {
-      if (d.session === session) term.write(toBytes(d.chunk));
+      if (d.session === session) {
+        // "Follow mode": only auto-scroll to bottom when user is already at bottom.
+        // This preserves the user's scroll position when reviewing history.
+        const wasAtBottom =
+          term.buffer.active.baseY + term.rows >= term.buffer.active.cursorY;
+        term.write(toBytes(d.chunk));
+        if (wasAtBottom) {
+          term.scrollToBottom();
+        }
+      }
     });
     const unsubClosed = window.cs.onClosed((c) => {
       if (c.session === session) term.writeln(`\r\n\x1b[90m${endedLabel}\x1b[0m`);
@@ -129,6 +153,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
 
     return () => {
       el.removeEventListener('contextmenu', onContextMenu);
+      el.removeEventListener('wheel', onWheel);
       observer.disconnect();
       inputDisposable.dispose();
       unsubData();

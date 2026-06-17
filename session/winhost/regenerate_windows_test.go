@@ -305,7 +305,7 @@ func TestArchiveDuringRegenerateNoZombie(t *testing.T) {
 	if err := c.RegenerateAgent(w.ID, true, 80, 24); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
-	if err := c.ArchiveWorkspace(w.ID); err != nil {
+	if err := c.ArchiveWorkspace(w.ID, true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
 	h.workspaces.mu.Lock()
