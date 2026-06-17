@@ -464,3 +464,236 @@ func TestConfirmationModalVisualAppearance(t *testing.T) {
 	// Test that the danger indicator is preserved
 	assert.Contains(t, rendered, "[!")
 }
+
+// fakeAppState is an in-memory config.AppState for tests (no disk writes).
+type fakeAppState struct {
+	seen uint32
+	mode int
+}
+
+func (f *fakeAppState) GetHelpScreensSeen() uint32        { return f.seen }
+func (f *fakeAppState) SetHelpScreensSeen(s uint32) error { f.seen = s; return nil }
+func (f *fakeAppState) GetSidebarMode() int               { return f.mode }
+func (f *fakeAppState) SetSidebarMode(m int) error        { f.mode = m; return nil }
+
+func newTestHome(t *testing.T, appState config.AppState) *home {
+	t.Helper()
+	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	return &home{
+		ctx:          context.Background(),
+		state:        stateDefault,
+		appConfig:    config.DefaultConfig(),
+		appState:     appState,
+		list:         ui.NewList(&s, false),
+		menu:         ui.NewMenu(),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		errBox:       ui.NewErrBox(),
+	}
+}
+
+func TestCycleMode_AdvancesAndPersists(t *testing.T) {
+	fake := &fakeAppState{}
+	h := newTestHome(t, fake)
+
+	h.cycleMode(true)
+	require.Equal(t, ui.ModeGroupByRepo, h.list.Mode())
+	require.Equal(t, int(ui.ModeGroupByRepo), fake.mode)
+
+	h.cycleMode(true)
+	require.Equal(t, ui.ModeRecentActivity, h.list.Mode())
+	require.Equal(t, int(ui.ModeRecentActivity), fake.mode)
+
+	// Backward from Manual wraps to PinnedPending.
+	h.list.SetMode(ui.ModeManual)
+	h.cycleMode(false)
+	require.Equal(t, ui.ModePinnedPending, h.list.Mode())
+	require.Equal(t, int(ui.ModePinnedPending), fake.mode)
+}
+
+func TestReorderSelected_BlockedOutsideManualMode(t *testing.T) {
+	fake := &fakeAppState{}
+	h := newTestHome(t, fake)
+	inst, err := session.NewInstance(session.InstanceOptions{Title: "a", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	h.list.AddInstance(inst)
+	inst2, err := session.NewInstance(session.InstanceOptions{Title: "b", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	h.list.AddInstance(inst2)
+
+	// In a non-Manual mode, reorder is a no-op (and does not panic without storage).
+	h.list.SetMode(ui.ModeRecentActivity)
+	h.list.SelectInstance(inst2)
+	_, _ = h.reorderSelected(true)
+	// Order is unchanged by the blocked reorder.
+	require.Equal(t, []string{"a", "b"}, []string{h.list.GetInstances()[0].Title, h.list.GetInstances()[1].Title})
+}
+
+func addInst(t *testing.T, h *home, title string) *session.Instance {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	h.list.AddInstance(inst)
+	return inst
+}
+
+func runeMsg(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+
+func typeQuery(h *home, q string) {
+	for _, r := range q {
+		h.handleSearchKey(runeMsg(r))
+	}
+}
+
+func TestSearch_LettersAreTextNotNavigation(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	addInst(t, h, "jungle")
+	addInst(t, h, "kayak")
+	addInst(t, h, "otter")
+
+	h.enterSearch()
+	require.Equal(t, stateSearch, h.state)
+	require.True(t, h.list.Searching())
+
+	// 'j' and 'k' are appended to the query (text), they do not navigate.
+	typeQuery(h, "j")
+	require.Equal(t, "j", h.list.Filter())
+	typeQuery(h, "ungle")
+	require.Equal(t, "jungle", h.list.Filter())
+	require.Equal(t, 1, h.list.VisibleCount())
+	require.Equal(t, "jungle", h.list.GetSelectedInstance().Title)
+}
+
+func TestSearch_ArrowsNavigate(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	addInst(t, h, "a")
+	addInst(t, h, "b")
+	addInst(t, h, "c")
+
+	h.enterSearch()
+	require.Equal(t, "a", h.list.GetSelectedInstance().Title)
+	h.handleSearchKey(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, "b", h.list.GetSelectedInstance().Title)
+	h.handleSearchKey(tea.KeyMsg{Type: tea.KeyDown})
+	require.Equal(t, "c", h.list.GetSelectedInstance().Title)
+	h.handleSearchKey(tea.KeyMsg{Type: tea.KeyUp})
+	require.Equal(t, "b", h.list.GetSelectedInstance().Title)
+}
+
+func TestSearch_EscRestoresPreSearchSelection(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	addInst(t, h, "alpha")
+	beta := addInst(t, h, "beta")
+	addInst(t, h, "gamma")
+	h.list.SelectInstance(beta)
+
+	h.enterSearch()
+	typeQuery(h, "gamma") // hides beta
+	require.Equal(t, "gamma", h.list.GetSelectedInstance().Title)
+
+	h.handleSearchKey(tea.KeyMsg{Type: tea.KeyEsc})
+	require.Equal(t, stateDefault, h.state)
+	require.False(t, h.list.Searching())
+	require.Equal(t, "", h.list.Filter())
+	require.Same(t, beta, h.list.GetSelectedInstance()) // restored
+}
+
+func TestSearch_EnterKeepsFilterAndVisibleSelection(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	addInst(t, h, "alpha")
+	beta := addInst(t, h, "beta")
+	gamma := addInst(t, h, "gamma")
+	h.list.SelectInstance(beta)
+
+	h.enterSearch()
+	typeQuery(h, "gamma")
+	h.handleSearchKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	require.Equal(t, stateDefault, h.state)
+	require.Equal(t, "gamma", h.list.Filter()) // filter kept
+	require.Same(t, gamma, h.list.GetSelectedInstance())
+}
+
+func TestSearch_NoMatchesGivesEmptySelection(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	addInst(t, h, "alpha")
+	addInst(t, h, "beta")
+
+	h.enterSearch()
+	typeQuery(h, "zzz")
+	require.Equal(t, 0, h.list.VisibleCount())
+	require.Nil(t, h.list.GetSelectedInstance())
+}
+
+func TestSearch_BackspaceEditsQuery(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	addInst(t, h, "frontend")
+	addInst(t, h, "backend")
+
+	h.enterSearch()
+	typeQuery(h, "front")
+	require.Equal(t, 1, h.list.VisibleCount())
+	for i := 0; i < 5; i++ {
+		h.handleSearchKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	require.Equal(t, "", h.list.Filter())
+	require.Equal(t, 2, h.list.VisibleCount())
+}
+
+func TestNewInstance_ConcurrentStartFailureTargetsExactInstance(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+
+	inst1, err := session.NewInstance(session.InstanceOptions{Title: "one", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	h.beginNewInstance(inst1)
+	require.Same(t, inst1, h.newInstance)
+
+	// A second creation begins before inst1's async start completes.
+	inst2, err := session.NewInstance(session.InstanceOptions{Title: "two", Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	h.beginNewInstance(inst2)
+	require.Same(t, inst2, h.newInstance)
+
+	// inst1's start now fails: the exact failed instance is removed and the
+	// still-in-creation inst2 tracking is left intact (identity-exact, R3).
+	h.list.RemoveInstance(inst1)
+	h.untrackNewInstance(inst1, true)
+
+	require.Same(t, inst2, h.newInstance) // inst2 still tracked
+	require.Equal(t, 1, h.list.NumInstances())
+	require.Equal(t, "two", h.list.GetInstances()[0].Title)
+}
+
+func TestAnimation_StaleTickIgnoredAndSingleLoop(t *testing.T) {
+	h := newTestHome(t, &fakeAppState{})
+	h.list.SetSize(80, 40)
+	addInst(t, h, "a")
+	addInst(t, h, "b")
+	addInst(t, h, "c")
+	h.list.ResetMotion()
+
+	// Trigger a reorder pulse.
+	h.list.SetSelectedInstance(1)
+	require.True(t, h.list.MoveSelectedUp())
+	require.True(t, h.list.IsAnimating())
+
+	cmd := h.scheduleAnimationIfNeeded()
+	require.NotNil(t, cmd)
+	require.True(t, h.animating)
+	gen := h.animGen
+
+	// Calling schedule again must NOT start a second loop.
+	require.Nil(t, h.scheduleAnimationIfNeeded())
+	require.Equal(t, gen, h.animGen)
+
+	// A stale tick from an older generation is ignored.
+	_, _ = h.Update(animTickMsg{gen: gen - 1})
+	require.True(t, h.animating)
+
+	// Current-generation ticks advance the animation until it settles. The pulse
+	// lasts a handful of frames; iterate generously to guarantee settling.
+	for i := 0; i < 12; i++ {
+		_, _ = h.Update(animTickMsg{gen: h.animGen})
+	}
+	require.False(t, h.animating)
+	require.False(t, h.list.IsAnimating())
+}
