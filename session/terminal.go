@@ -18,6 +18,7 @@ type TerminalSession interface {
 	CapturePaneContentWithOptions(start, end string) (string, error)
 	HasUpdated() (updated bool, hasPrompt bool)
 	TapEnter() error
+	TryAutoApprove(sessionID string) bool
 	SetAutoYes(enabled bool) error
 	SendKeys(keys string) error
 	Attach() (chan struct{}, error)

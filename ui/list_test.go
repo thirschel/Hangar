@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"claude-squad/config"
 	"claude-squad/session"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -253,6 +255,10 @@ func TestListTracksReposByFullPath(t *testing.T) {
 	s := spinner.New()
 	l := NewList(&s, false)
 
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+
 	root := t.TempDir()
 	instA := newPausedTestInstance(t, "a", filepath.Join(root, "owner-a", "app"))
 	instB := newPausedTestInstance(t, "b", filepath.Join(root, "owner-b", "app"))
@@ -266,6 +272,11 @@ func TestListTracksReposByFullPath(t *testing.T) {
 func newPausedTestInstance(t *testing.T, title string, repoPath string) *session.Instance {
 	t.Helper()
 
+	configDir, err := config.GetConfigDir()
+	require.NoError(t, err)
+	worktreePath := filepath.Join(configDir, "worktrees", title)
+	require.NoError(t, os.MkdirAll(worktreePath, 0o755))
+
 	inst, err := session.FromInstanceData(session.InstanceData{
 		Title:   title,
 		Path:    repoPath,
@@ -274,7 +285,7 @@ func newPausedTestInstance(t *testing.T, title string, repoPath string) *session
 		Program: "echo",
 		Worktree: session.GitWorktreeData{
 			RepoPath:     repoPath,
-			WorktreePath: filepath.Join(t.TempDir(), title),
+			WorktreePath: worktreePath,
 			SessionName:  title,
 			BranchName:   "test-branch",
 		},

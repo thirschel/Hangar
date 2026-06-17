@@ -75,7 +75,11 @@ func respErr(r *proto.Response, err error) error {
 func (c *Client) Close() error { return c.conn.Close() }
 
 func (c *Client) Hello() (*proto.Response, error) {
-	return c.call(&proto.Request{Method: proto.MethodHello, ClientVersion: proto.Version})
+	clientNonce, err := randomNonceHex(32)
+	if err != nil {
+		return nil, err
+	}
+	return c.call(&proto.Request{Method: proto.MethodHello, ClientVersion: proto.Version, ClientNonce: clientNonce})
 }
 
 func (c *Client) CreateSession(name, program, workDir string, cols, rows int, autoYes bool) error {
@@ -258,26 +262,59 @@ func (c *Client) WorkspaceRunOutput(id string, sinceOffset int64) (data []byte, 
 	return r.Data, r.NextOffset, r.RunRunning, r.ExitCode, nil
 }
 
-// connectAndHello dials the pipe and validates the protocol version.
-func connectAndHello(pipe string, timeout time.Duration) (*Client, error) {
-	c, err := dialClient(pipe, timeout)
+// connectAndHello dials the pipe and authenticates the host using host.json.
+func connectAndHello(hi *hostInfo, timeout time.Duration) (*Client, error) {
+	c, err := dialClient(hi.PipeName, timeout)
 	if err != nil {
 		return nil, err
 	}
-	r, err := c.Hello()
+	clientNonce, err := randomNonceHex(32)
 	if err != nil {
 		c.Close()
 		return nil, err
 	}
-	if !r.OK {
+	r, err := c.call(&proto.Request{
+		Method:        proto.MethodHello,
+		ClientVersion: proto.Version,
+		ClientNonce:   clientNonce,
+	})
+	if err != nil {
 		c.Close()
-		return nil, errors.New(r.Error)
+		return nil, err
 	}
-	if r.HostVersion != proto.Version {
+	if err := verifyAuthenticatedHello(hi, clientNonce, r); err != nil {
 		c.Close()
-		return nil, &VersionMismatch{HostVersion: r.HostVersion, ClientVersion: proto.Version}
+		return nil, err
 	}
 	return c, nil
+}
+
+func pipeConnectable(pipe string, timeout time.Duration) bool {
+	conn, err := winio.DialPipe(pipe, &timeout)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+func waitForAuthenticatedHost(deadline time.Time) (*Client, error) {
+	var lastErr error
+	for time.Now().Before(deadline) {
+		hi, err := loadHostInfoForAuth()
+		if err == nil {
+			return connectAndHello(hi, 500*time.Millisecond)
+		}
+		if vm := (*VersionMismatch)(nil); errors.As(err, &vm) {
+			return nil, vm
+		}
+		lastErr = err
+		time.Sleep(150 * time.Millisecond)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("host.json not found")
+	}
+	return nil, lastErr
 }
 
 // EnsureHost connects to the running session host, spawning a detached one if
@@ -287,26 +324,31 @@ func EnsureHost() (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	if c, err := connectAndHello(pipe, 500*time.Millisecond); err == nil {
-		return c, nil
-	} else if vm := (*VersionMismatch)(nil); errors.As(err, &vm) {
-		return nil, vm
+	if hi, err := loadHostInfoForAuth(); err == nil {
+		return connectAndHello(hi, 500*time.Millisecond)
+	} else {
+		if vm := (*VersionMismatch)(nil); errors.As(err, &vm) {
+			return nil, vm
+		}
+		if pipeConnectable(pipe, 300*time.Millisecond) {
+			c, waitErr := waitForAuthenticatedHost(time.Now().Add(2 * time.Second))
+			if waitErr == nil {
+				return c, nil
+			}
+			if vm := (*VersionMismatch)(nil); errors.As(waitErr, &vm) {
+				return nil, vm
+			}
+			return nil, fmt.Errorf("%w; refusing to connect without authenticated host.json (%v)", errUnauthenticatedPipe, waitErr)
+		}
+		// Stale or malformed host.json is ignored only when the pipe is absent;
+		// the newly spawned host will publish fresh authenticated identity.
 	}
 	if err := spawnDetachedHost(); err != nil {
 		return nil, fmt.Errorf("spawn session-host: %w", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		c, err := connectAndHello(pipe, 300*time.Millisecond)
-		if err == nil {
-			return c, nil
-		}
-		if vm := (*VersionMismatch)(nil); errors.As(err, &vm) {
-			return nil, vm
-		}
-		lastErr = err
-		time.Sleep(150 * time.Millisecond)
+	c, err := waitForAuthenticatedHost(time.Now().Add(10 * time.Second))
+	if err == nil {
+		return c, nil
 	}
-	return nil, fmt.Errorf("session-host did not become ready: %w", lastErr)
+	return nil, fmt.Errorf("session-host did not publish authenticated identity: %w", err)
 }
