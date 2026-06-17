@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,6 +104,144 @@ func (m *mockTerminalSession) DetachSafely() error {
 
 func (m *mockTerminalSession) CheckAndHandleTrustPrompt() bool {
 	return false
+}
+
+func withTerminalSessionFactory(t *testing.T, factory func(name, program string) TerminalSession) {
+	t.Helper()
+
+	original := terminalSessionFactory
+	terminalSessionFactory = factory
+	t.Cleanup(func() {
+		terminalSessionFactory = original
+	})
+}
+
+func TestInstanceLaunchCommand(t *testing.T) {
+	tests := []struct {
+		name           string
+		program        string
+		agentSessionID string
+		want           string
+	}{
+		{
+			name:           "copilot with agent session id resumes",
+			program:        "copilot",
+			agentSessionID: "abc123",
+			want:           "copilot --resume=abc123",
+		},
+		{
+			name:           "empty agent session id leaves program unchanged",
+			program:        "copilot",
+			agentSessionID: "",
+			want:           "copilot",
+		},
+		{
+			name:           "non-copilot program leaves program unchanged",
+			program:        "claude",
+			agentSessionID: "abc123",
+			want:           "claude",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance := &Instance{
+				Program:        tt.program,
+				AgentSessionID: tt.agentSessionID,
+			}
+
+			assert.Equal(t, tt.want, instance.launchCommand())
+		})
+	}
+}
+
+func TestInstanceStartConstructsTerminalSessionWithResumeCommand(t *testing.T) {
+	var gotName string
+	var gotProgram string
+	withTerminalSessionFactory(t, func(name, program string) TerminalSession {
+		gotName = name
+		gotProgram = program
+		return &mockTerminalSession{}
+	})
+
+	instance, err := NewInstance(InstanceOptions{
+		Title:   "test",
+		Path:    t.TempDir(),
+		Program: "copilot",
+	})
+	require.NoError(t, err)
+	instance.AgentSessionID = "resume-123"
+
+	err = instance.Start(false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "test", gotName)
+	assert.Equal(t, "copilot --resume=resume-123", gotProgram)
+}
+
+func TestFromInstanceDataPausedConstructsTerminalSessionWithResumeCommand(t *testing.T) {
+	var gotName string
+	var gotProgram string
+	withTerminalSessionFactory(t, func(name, program string) TerminalSession {
+		gotName = name
+		gotProgram = program
+		return &mockTerminalSession{}
+	})
+
+	instance, err := FromInstanceData(InstanceData{
+		Title:          "paused-test",
+		Path:           t.TempDir(),
+		Status:         Paused,
+		Program:        "copilot",
+		AgentSessionID: "resume-456",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, "paused-test", gotName)
+	assert.Equal(t, "copilot --resume=resume-456", gotProgram)
+	assert.NotNil(t, instance.termSession)
+}
+
+func TestInstanceDataRoundTripPreservesAgentSessionAndBaseCommit(t *testing.T) {
+	withTerminalSessionFactory(t, func(name, program string) TerminalSession {
+		return &mockTerminalSession{}
+	})
+
+	instance := &Instance{
+		Title:          "round-trip",
+		Path:           t.TempDir(),
+		Status:         Paused,
+		Program:        "copilot",
+		AgentSessionID: "agent-session-789",
+		BaseCommit:     "0123456789abcdef",
+	}
+
+	jsonData, err := json.Marshal(instance.ToInstanceData())
+	require.NoError(t, err)
+
+	var data InstanceData
+	require.NoError(t, json.Unmarshal(jsonData, &data))
+
+	restored, err := FromInstanceData(data)
+	require.NoError(t, err)
+
+	assert.Equal(t, "agent-session-789", restored.AgentSessionID)
+	assert.Equal(t, "0123456789abcdef", restored.BaseCommit)
+}
+
+func TestInstanceDataBackCompatMissingAgentSessionAndBaseCommit(t *testing.T) {
+	withTerminalSessionFactory(t, func(name, program string) TerminalSession {
+		return &mockTerminalSession{}
+	})
+
+	var data InstanceData
+	require.NoError(t, json.Unmarshal([]byte(`{"title":"legacy","status":3,"program":"copilot"}`), &data))
+
+	restored, err := FromInstanceData(data)
+	require.NoError(t, err)
+
+	assert.Empty(t, restored.AgentSessionID)
+	assert.Empty(t, restored.BaseCommit)
 }
 
 func TestSetTerminalSession(t *testing.T) {

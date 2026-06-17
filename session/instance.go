@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/log"
+	"claude-squad/session/agentcmd"
 	"claude-squad/session/git"
 	"claude-squad/session/winhost"
 	"path/filepath"
@@ -40,6 +41,10 @@ type Instance struct {
 	Status Status
 	// Program is the program to run in the instance.
 	Program string
+	// AgentSessionID resumes an existing agent session when non-empty.
+	AgentSessionID string
+	// BaseCommit bases a new git branch on this commit when non-empty.
+	BaseCommit string
 	// Height is the height of the instance.
 	Height int
 	// Width is the width of the instance.
@@ -83,6 +88,8 @@ type Instance struct {
 // Tunable; resolved against real multi-agent usage.
 const recentActivityDwell = 2 * time.Second
 
+var terminalSessionFactory = NewTerminalSession
+
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
 	data := InstanceData{
@@ -96,6 +103,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		UpdatedAt:      time.Now(),
 		LastActivityAt: i.LastActivityAt,
 		Program:        i.Program,
+		AgentSessionID: i.AgentSessionID,
+		BaseCommit:     i.BaseCommit,
 		AutoYes:        i.AutoYes,
 	}
 
@@ -136,6 +145,8 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		UpdatedAt:      data.UpdatedAt,
 		LastActivityAt: data.LastActivityAt,
 		Program:        data.Program,
+		AgentSessionID: data.AgentSessionID,
+		BaseCommit:     data.BaseCommit,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -153,7 +164,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 
 	if instance.Paused() {
 		instance.started = true
-		instance.termSession = NewTerminalSession(instance.Title, instance.Program)
+		instance.termSession = terminalSessionFactory(instance.Title, instance.launchCommand())
 	} else {
 		if err := instance.Start(false); err != nil {
 			return nil, err
@@ -200,6 +211,15 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	}, nil
 }
 
+// launchCommand returns the program string to launch, injecting the resume flag
+// when this instance represents a resumed agent session.
+func (i *Instance) launchCommand() string {
+	if i.AgentSessionID != "" && agentcmd.SupportsResume(i.Program) {
+		return agentcmd.ResumeCommand(i.Program, i.AgentSessionID)
+	}
+	return i.Program
+}
+
 func (i *Instance) RepoName() (string, error) {
 	if !i.started {
 		return "", fmt.Errorf("cannot get repo name for instance that has not been started")
@@ -244,7 +264,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		termSession = i.termSession
 	} else {
 		// Create new terminal session
-		termSession = NewTerminalSession(i.Title, i.Program)
+		termSession = terminalSessionFactory(i.Title, i.launchCommand())
 	}
 	i.termSession = termSession
 
@@ -262,6 +282,9 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 				return fmt.Errorf("failed to create git worktree: %w", err)
 			}
 			i.gitWorktree = gitWorktree
+			if i.BaseCommit != "" {
+				i.gitWorktree.SetBaseCommitOverride(i.BaseCommit)
+			}
 			i.Branch = branchName
 		}
 	}

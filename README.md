@@ -191,6 +191,16 @@ The menu at the bottom of the screen shows available commands:
 - `q` - Quit the application
 - `shift-↓/↑` - scroll in diff view
 
+##### Copilot Session Browser
+- `b` - Open a full-screen browser for local GitHub Copilot CLI sessions discovered under `~/.copilot/session-state/`
+- Type to live-search session metadata and conversation text
+- `↑/↓` or `ctrl-k`/`ctrl-j` - Move selection
+- `↵` - Resume the selected conversation with `copilot --resume=<id>` in a new isolated worktree for its original repo (confirms first when crossing repos)
+- `esc` or `ctrl-c` - Close the browser
+- `ctrl-r` - Force a re-scan and rebuild the local search index
+
+The browser is read-only toward Copilot's session files. Its content search index is cached at `~/.claude-squad/copilot-index.json` and cleared by `cs reset`.
+
 ### Configuration
 
 Claude Squad stores its configuration in `~/.claude-squad/config.json`. You can find the exact path by running `cs debug`.
