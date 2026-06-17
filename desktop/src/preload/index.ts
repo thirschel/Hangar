@@ -248,8 +248,11 @@ const api = {
   onError: (callback: (info: TermError) => void): Unsubscribe => on('term:error', callback),
   onUpdateStatus: (callback: (status: UpdateStatus) => void): Unsubscribe =>
     on('cs:update-status', callback),
+  onFirstRun: (callback: () => void): Unsubscribe => on('cs:first-run', callback),
   onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe =>
     on('cs:focus-workspace', callback),
+  completeSetup: (opts: { autoUpdate: boolean }): Promise<void> =>
+    ipcRenderer.invoke('cs:complete-setup', opts),
   sendInput: (session: string, data: string): void =>
     ipcRenderer.send('term:input', { session, data }),
   resize: (session: string, cols: number, rows: number): void =>

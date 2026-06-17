@@ -14,7 +14,7 @@ import {
   type DirEntry,
   type FileContents,
 } from './host-client';
-import { getSettings, applySettings, type Settings } from './settings';
+import { getSettings, applySettings, isFirstRun, markSetupComplete, type Settings } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { log } from './logger';
@@ -165,6 +165,9 @@ function createWindow(): void {
   }
 
   mainWindow.webContents.once('did-finish-load', () => {
+    if (isFirstRun()) {
+      sendToRenderer('cs:first-run');
+    }
     getControlClient().catch((error) => {
       log.error('setup error:', error);
       sendToRenderer('term:error', String(error.message || error));
@@ -313,6 +316,11 @@ ipcMain.handle('cs:get-settings', async (): Promise<Settings> => getSettings());
 
 ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Promise<Settings> => {
   return applySettings(patch);
+});
+
+ipcMain.handle('cs:complete-setup', async (_event, opts: { autoUpdate: boolean }): Promise<void> => {
+  applySettings({ autoUpdate: opts.autoUpdate });
+  markSetupComplete();
 });
 
 ipcMain.handle(

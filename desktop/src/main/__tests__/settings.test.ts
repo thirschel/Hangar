@@ -113,6 +113,7 @@ describe('settings', () => {
       minimizeToTray: true,
       autoUpdate: false,
       uiRefreshMs: 2500,
+      setupComplete: false,
     });
     expect(result).toEqual({
       defaultProgram: 'copilot',
@@ -135,6 +136,7 @@ describe('settings', () => {
       minimizeToTray: true,
       autoUpdate: true,
       uiRefreshMs: 2000,
+      setupComplete: false,
     });
   });
 
