@@ -1264,6 +1264,13 @@ body.is-col-resizing .side-panel {
   border-color: var(--accent);
   box-shadow: var(--shadow-focus);
 }
+.field input:disabled,
+.create-form input:disabled {
+  background: var(--bg-control);
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.7;
+}
 .create-form select {
   background: var(--bg-base);
   color: var(--text);
