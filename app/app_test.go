@@ -1,14 +1,14 @@
 package app
 
 import (
+	"context"
+	"fmt"
 	"hangar/config"
 	"hangar/log"
 	"hangar/session"
 	"hangar/session/copilot"
 	"hangar/ui"
 	"hangar/ui/overlay"
-	"context"
-	"fmt"
 	"os"
 	"testing"
 

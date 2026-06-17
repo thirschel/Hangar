@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"hangar/log"
-	"hangar/session"
 	"errors"
 	"fmt"
+	"hangar/log"
+	"hangar/session"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"

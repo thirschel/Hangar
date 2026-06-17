@@ -2,12 +2,12 @@ package tmux
 
 import (
 	"bytes"
-	"hangar/cmd"
-	"hangar/log"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hangar/cmd"
+	"hangar/log"
 	"io"
 	"os"
 	"os/exec"

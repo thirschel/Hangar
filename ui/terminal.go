@@ -1,10 +1,10 @@
 package ui
 
 import (
+	"fmt"
 	"hangar/log"
 	"hangar/session"
 	"hangar/session/tmux"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
