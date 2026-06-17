@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"claude-squad/log"
-	"claude-squad/session"
 	"errors"
 	"fmt"
+	"hangar/log"
+	"hangar/session"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"

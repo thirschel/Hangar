@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"claude-squad/session"
+	"hangar/session"
 	"testing"
 
 	"github.com/stretchr/testify/require"

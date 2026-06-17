@@ -1,14 +1,14 @@
 package app
 
 import (
-	"claude-squad/config"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/copilot"
-	"claude-squad/ui"
-	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
+	"hangar/config"
+	"hangar/log"
+	"hangar/session"
+	"hangar/session/copilot"
+	"hangar/ui"
+	"hangar/ui/overlay"
 	"os"
 	"testing"
 

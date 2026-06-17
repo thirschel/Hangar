@@ -5,7 +5,7 @@ Thank you for considering contributing to our project! This document outlines th
 ## Development Setup
 
 1. Fork the repository
-2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/claude-squad.git`
+2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/Hangar.git`
 3. Add the upstream repository: `git remote add upstream https://github.com/smtg-ai/claude-squad.git`
 4. Install dependencies: `go mod download`
 
