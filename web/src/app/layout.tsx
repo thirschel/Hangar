@@ -20,20 +20,23 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "Claude Squad - Manage Multiple AI Code Assistants",
-  description: "A terminal app that manages multiple AI code assistants (Claude Code, Codex, Aider, etc.) in separate workspaces, allowing you to work on multiple tasks simultaneously.",
-  keywords: ["claude", "claude squad", "ai", "code assistant", "terminal", "tmux", "claude code", "codex", "aider"],
-  authors: [{ name: "smtg-ai" }],
+  title: "Hangar — Manage your AI coding agents on native Windows",
+  description: "The native-Windows-first manager for your AI coding agents.",
+  keywords: ["hangar", "windows", "native windows", "claude code", "codex", "gemini", "copilot cli", "aider", "tmux-free", "ai agents"],
+  authors: [{ name: "thirschel" }],
+  metadataBase: new URL("https://thirschel.github.io/Hangar/"),
   openGraph: {
-    title: "Claude Squad",
-    description: "A terminal app that manages multiple AI code assistants in separate workspaces",
-    url: "https://github.com/smtg-ai/claude-squad",
+    title: "Hangar",
+    description: "The native-Windows-first manager for your AI coding agents.",
+    url: "https://thirschel.github.io/Hangar/",
     type: "website",
+    images: [{ url: "https://thirschel.github.io/Hangar/og-hangar.png", width: 1200, height: 630 }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Claude Squad",
-    description: "A terminal app that manages multiple AI code assistants in separate workspaces",
+    title: "Hangar",
+    description: "The native-Windows-first manager for your AI coding agents.",
+    images: ["https://thirschel.github.io/Hangar/og-hangar.png"],
   },
 };
 

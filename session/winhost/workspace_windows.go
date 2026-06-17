@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"claude-squad/config"
+	"claude-squad/session/agentcmd"
 	"claude-squad/session/git"
 	"claude-squad/session/winhost/proto"
 )
@@ -213,28 +214,6 @@ func newUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
-// supportsResume reports whether we know how to give this agent a stable,
-// resumable session id. Currently only copilot (its --session-id flag both sets
-// the UUID for a new session and resumes an existing one) is verified.
-func supportsResume(program string) bool {
-	return strings.Contains(strings.ToLower(program), "copilot")
-}
-
-// agentLaunchCommand returns the command used to launch (or resume) the agent.
-// For agents that support a stable session UUID it appends the resume flag, so a
-// relaunch after a daemon restart continues the same conversation. When no
-// session id is known (unknown agent, or a workspace created before this
-// feature) the program is launched unchanged.
-func agentLaunchCommand(program, sessionID string) string {
-	if sessionID == "" {
-		return program
-	}
-	if strings.Contains(strings.ToLower(program), "copilot") {
-		return program + " --session-id=" + sessionID
-	}
-	return program
 }
 
 // defaultTitle is the placeholder name for a workspace created without a title:
@@ -466,7 +445,7 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 		m.host.killSession(sessionName)
 	}
 	cols, rows = sizeOr(cols, 120), sizeOr(rows, 30)
-	if err := m.host.startManagedSession(w.SessionName, agentLaunchCommand(w.Program, w.AgentSessionID), w.WorktreePath, cols, rows, w.AutoYes); err != nil {
+	if err := m.host.startManagedSession(w.SessionName, agentcmd.ResumeCommand(w.Program, w.AgentSessionID), w.WorktreePath, cols, rows, w.AutoYes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -825,7 +804,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 	}
 	oldName = w.SessionName
 	w.SessionName = "ws_" + id + "-" + shortRand()
-	if supportsResume(w.Program) {
+	if agentcmd.SupportsResume(w.Program) {
 		w.AgentSessionID = newUUID()
 	} else {
 		w.AgentSessionID = ""
@@ -845,7 +824,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 
 	var lastErr error
 	for attempt := 0; attempt < 8; attempt++ {
-		err := m.host.startManagedSession(newName, agentLaunchCommand(program, agentSessionID), worktree, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+		err := m.host.startManagedSession(newName, agentcmd.SeedNewCommand(program, agentSessionID), worktree, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
 		if err == nil {
 			return nil
 		}
@@ -897,7 +876,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	// Give resumable agents (copilot) a stable session UUID so a relaunch after a
 	// daemon restart continues the same conversation instead of starting fresh.
 	agentSessionID := ""
-	if supportsResume(program) {
+	if agentcmd.SupportsResume(program) {
 		agentSessionID = newUUID()
 	}
 
@@ -920,7 +899,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSession(sessionName, agentLaunchCommand(program, agentSessionID), wt.GetWorktreePath(), cols, rows, req.AutoYes); err != nil {
+	if err := m.host.startManagedSession(sessionName, agentcmd.SeedNewCommand(program, agentSessionID), wt.GetWorktreePath(), cols, rows, req.AutoYes); err != nil {
 		// Roll back the worktree so a failed create leaves no orphan.
 		_ = wt.Remove()
 		_ = wt.Prune()

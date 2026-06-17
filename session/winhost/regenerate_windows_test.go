@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"claude-squad/session/agentcmd"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,7 +34,7 @@ func injectWorkspace(t *testing.T, h *host, id, program, worktree string) *works
 		Branch: "feature", BaseSHA: "base", SessionName: "ws_" + id, AutoYes: true,
 		CreatedUnix: time.Now().Unix(),
 	}
-	if supportsResume(program) {
+	if agentcmd.SupportsResume(program) {
 		w.AgentSessionID = newUUID()
 	}
 	h.workspaces.mu.Lock()
