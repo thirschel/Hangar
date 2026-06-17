@@ -69,17 +69,6 @@ function WorkspaceRow({
       </div>
       <div className="workspace-item__actions">
         <button
-          className="icon-button workspace-settings"
-          type="button"
-          title="Workspace settings"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSettings();
-          }}
-        >
-          ⚙
-        </button>
-        <button
           className="icon-button archive"
           type="button"
           title="Archive workspace (D)"
@@ -89,6 +78,17 @@ function WorkspaceRow({
           }}
         >
           ×
+        </button>
+        <button
+          className="icon-button workspace-settings"
+          type="button"
+          title="Workspace settings"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSettings();
+          }}
+        >
+          ⚙
         </button>
       </div>
     </div>
