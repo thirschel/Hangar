@@ -7,9 +7,11 @@ import styles from "./page.module.css";
 const ThemeToggle = dynamic(() => import("./components/ThemeToggle"), {});
 const CopyButton = dynamic(() => import("./components/CopyButton"), {});
 
+const downloadUrl = "https://github.com/thirschel/Hangar/releases/latest";
 const windowsInstall = `git clone https://github.com/thirschel/Hangar.git
 cd Hangar
 build.bat`;
+const desktopBuild = "cd desktop && npm run dist";
 
 const homebrewInstall = "brew install claude-squad";
 const shellInstall = "curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash";
@@ -80,8 +82,21 @@ export default function Home() {
           <p className={styles.eyebrow}>A hangar for all your copilots.</p>
           <h1 id="hero-title">Hangar</h1>
           <p className={styles.positioning}>
-            The native-Windows-first manager for your AI coding agents.
+            The Windows desktop app for running multiple AI coding agents in parallel.
           </p>
+          <div className={styles.ctaGroup} aria-label="Primary actions">
+            <a
+              className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+              href={downloadUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Download for Windows
+            </a>
+            <a className={`${styles.ctaButton} ${styles.ctaButtonSecondary}`} href="#install">
+              Build from source
+            </a>
+          </div>
         </section>
 
         <div className={styles.demoVideo}>
@@ -118,11 +133,45 @@ export default function Home() {
             <h2 id="install-title">Install Hangar</h2>
           </div>
 
+          <article className={`${styles.installCard} ${styles.downloadCard}`}>
+            <div>
+              <p className={styles.platform}>Windows desktop app</p>
+              <h3>Download the app</h3>
+              <p>
+                Get the <code>Hangar-Setup-&lt;version&gt;.exe</code> NSIS installer from Releases. It installs
+                Hangar, supports auto-updates, and is the fastest way to start supervising agents from the desktop.
+              </p>
+            </div>
+            <div className={styles.downloadActions}>
+              <a
+                className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                href={downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Download for Windows
+              </a>
+              <p className={styles.downloadNote}>
+                The installer is currently unsigned, so Windows SmartScreen may warn. No release yet? Build from
+                source below.
+              </p>
+            </div>
+          </article>
+
+          <div className={styles.installSubhead}>
+            <p className={styles.sectionKicker}>Under the hood</p>
+            <h3>Build the daemon/CLI</h3>
+            <p>
+              Hangar is a thin Electron client over the Go <code>cs</code> core-daemon. You can build the daemon
+              and TUI from source, or package the desktop app locally.
+            </p>
+          </div>
+
           <div className={styles.installGrid}>
             <article className={styles.installCard}>
               <div>
-                <p className={styles.platform}>Native Windows (primary)</p>
-                <h3>Build this fork locally</h3>
+                <p className={styles.platform}>Windows source build</p>
+                <h3>Build the daemon and TUI</h3>
                 <p>
                   Requires Go 1.25+, git, gh, and your agent executable, such as GitHub Copilot CLI, resolvable via <code>where copilot</code>.
                 </p>
@@ -136,6 +185,15 @@ export default function Home() {
               <p className={styles.note}>
                 Then put <code>cs.exe</code> on PATH and run <code>cs</code> inside a git repo.
               </p>
+              <div className={styles.codeBlockWrapper}>
+                <pre className={styles.codeBlock}>
+                  <code>{desktopBuild}</code>
+                </pre>
+                <CopyButton textToCopy={desktopBuild} />
+              </div>
+              <p className={styles.note}>
+                Or package the Electron desktop app locally from the repository root.
+              </p>
             </article>
 
             <article className={styles.installCard}>
@@ -143,7 +201,7 @@ export default function Home() {
                 <p className={styles.platform}>Unix/macOS</p>
                 <h3>Install upstream claude-squad</h3>
                 <p>
-                  This fork ships no releases. Unix installs use the upstream binary. Prerequisites: gh and tmux on Unix/macOS/WSL.
+                  Unix installs use the upstream binary. Prerequisites: gh and tmux on Unix/macOS/WSL.
                 </p>
               </div>
               <div className={styles.codeBlockWrapper}>
