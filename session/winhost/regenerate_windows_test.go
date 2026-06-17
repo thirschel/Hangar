@@ -3,8 +3,8 @@
 package winhost
 
 import (
-	"claude-squad/session/agentcmd"
 	"encoding/json"
+	"hangar/session/agentcmd"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,7 +18,7 @@ func testHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	if err := os.MkdirAll(filepath.Join(home, ".claude-squad"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".hangar"), 0o700); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
 	return home
@@ -131,7 +131,7 @@ func TestRestartAgentRotatesSessionAndID(t *testing.T) {
 	if oldAlive || !newAlive {
 		t.Fatalf("session liveness old=%v new=%v", oldAlive, newAlive)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude-squad", "workspaces.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".hangar", "workspaces.json"))
 	if err != nil {
 		t.Fatalf("read persisted: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestArchiveDuringRegenerateNoZombie(t *testing.T) {
 	pipe, h, cleanup := startTestHostWithHandle(t)
 	defer cleanup()
 	h.workspaces.thresholds = regenThresholds{stableMs: 10000, graceMs: 10000, inactivityMs: 10000, hardCapMs: 30000}
-	w := injectWorkspace(t, h, "archive1", "copilot", filepath.Join(home, ".claude-squad", "worktrees", "wt"))
+	w := injectWorkspace(t, h, "archive1", "copilot", filepath.Join(home, ".hangar", "worktrees", "wt"))
 	c, err := dialClient(pipe, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestRegenerateStartFailureRevivable(t *testing.T) {
 		t.Fatalf("session name not rotated on failed start")
 	}
 	var persisted []*workspace
-	data, err := os.ReadFile(filepath.Join(home, ".claude-squad", "workspaces.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".hangar", "workspaces.json"))
 	if err != nil {
 		t.Fatalf("read persisted: %v", err)
 	}

@@ -18,9 +18,9 @@ func TestDiscoverWellFormedFixture(t *testing.T) {
 	t.Setenv("CS_COPILOT_SESSION_DIR", root)
 
 	writeSession(t, root, "2331de89-df3c-43cf-8ac0-2c8f0886b9a4", `id: 2331de89-df3c-43cf-8ac0-2c8f0886b9a4
-cwd: D:\dev\claude-squad
-git_root: D:\dev\claude-squad
-repository: thirschel/claude-squad
+cwd: D:\dev\hangar
+git_root: D:\dev\hangar
+repository: thirschel/hangar
 host_type: github
 branch: desktop-core-daemon
 name: Plan Session Browser Feature
@@ -36,7 +36,7 @@ updated_at: 2026-06-16T21:25:56.277Z
 	session := sessions[0]
 	require.Equal(t, "2331de89-df3c-43cf-8ac0-2c8f0886b9a4", session.ID)
 	require.Equal(t, "Plan Session Browser Feature", session.Name)
-	require.Equal(t, "thirschel/claude-squad", session.Repository)
+	require.Equal(t, "thirschel/hangar", session.Repository)
 	require.Equal(t, "desktop-core-daemon", session.Branch)
 	require.Equal(t, parseTime(t, "2026-06-16T21:15:55.071Z"), session.CreatedAt)
 	require.Equal(t, parseTime(t, "2026-06-16T21:25:56.277Z"), session.UpdatedAt)
@@ -50,10 +50,10 @@ func TestDiscoverOriginFreezeUsesSessionStart(t *testing.T) {
 	writeSession(t, root, "deadbeef-0001", `id: deadbeef-0001
 cwd: D:\rewritten\cwd
 git_root: D:\rewritten\root
-repository: thirschel/claude-squad
+repository: thirschel/hangar
 branch: rewritten-branch
 `, []string{
-		`{"type":"session.start","data":{"context":{"gitRoot":"D:\\original\\root","headCommit":"abc123","branch":"original-branch","repository":"thirschel/claude-squad"}}}`,
+		`{"type":"session.start","data":{"context":{"gitRoot":"D:\\original\\root","headCommit":"abc123","branch":"original-branch","repository":"thirschel/hangar"}}}`,
 		`{"type":"user.message","data":{"content":"hello"}}`,
 	})
 
@@ -72,7 +72,7 @@ func TestDiscoverOriginRootDoesNotFallBackToDeletedCwd(t *testing.T) {
 	writeSession(t, root, "deadbeef-0002", `id: deadbeef-0002
 cwd: D:\deleted\cwd
 git_root:
-repository: thirschel/claude-squad
+repository: thirschel/hangar
 branch: yaml-branch
 `, nil)
 

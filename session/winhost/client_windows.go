@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session/winhost/proto"
+	"hangar/session/winhost/proto"
 
 	"github.com/Microsoft/go-winio"
 )

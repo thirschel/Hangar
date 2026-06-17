@@ -1,11 +1,11 @@
 package app
 
 import (
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/ui"
-	"claude-squad/ui/overlay"
 	"fmt"
+	"hangar/log"
+	"hangar/session"
+	"hangar/ui"
+	"hangar/ui/overlay"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

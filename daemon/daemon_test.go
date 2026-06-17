@@ -11,7 +11,7 @@ import (
 // correctly identifies the current test process as *not* a Hangar daemon binary.
 //
 // The test runner binary is named something like "daemon.test[.exe]", which is
-// not in the allowed set {cs, claude-squad, hangar} (or their .exe variants).
+// not in the allowed set {cs, hangar, hangar} (or their .exe variants).
 // This guards against a blind Kill of a process that recycled a stale daemon.pid
 // (F-31).
 func TestIsDaemonProcessRejectsNonDaemon(t *testing.T) {

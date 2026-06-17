@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	cslog "claude-squad/log"
+	cslog "hangar/log"
 )
 
 type Category string

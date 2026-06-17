@@ -1,18 +1,18 @@
 package app
 
 import (
-	"claude-squad/config"
-	"claude-squad/keys"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/agentcmd"
-	"claude-squad/session/copilot"
-	"claude-squad/session/git"
-	"claude-squad/session/winhost"
-	"claude-squad/ui"
-	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
+	"hangar/config"
+	"hangar/keys"
+	"hangar/log"
+	"hangar/session"
+	"hangar/session/agentcmd"
+	"hangar/session/copilot"
+	"hangar/session/git"
+	"hangar/session/winhost"
+	"hangar/ui"
+	"hangar/ui/overlay"
 	"os"
 	"path/filepath"
 	"strings"
@@ -895,7 +895,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		// Create the push action as a tea.Cmd
 		pushAction := func() tea.Msg {
 			// Default commit message with timestamp
-			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
+			commitMsg := fmt.Sprintf("[hangar] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
 			worktree, err := selected.GetGitWorktree()
 			if err != nil {
 				return err
@@ -1395,7 +1395,7 @@ func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
 }
 
 // handleSessionRestart resumes the selected Copilot session as a new, isolated
-// claude-squad workspace launched with `copilot --resume=<id>`. The new worktree is
+// hangar workspace launched with `copilot --resume=<id>`. The new worktree is
 // created in the session's FROZEN origin repo on a new, uniquely-named branch based on
 // the session's recorded HEAD; the session's original branch is never reused, checked
 // out, or deleted. Resuming a session that is in use, or already resumed in this TUI,

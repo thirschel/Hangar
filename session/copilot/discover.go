@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"claude-squad/session/agentcmd"
+	"hangar/session/agentcmd"
 
-	cslog "claude-squad/log"
+	cslog "hangar/log"
 )
 
 // File-size and per-line limits for untrusted Copilot-owned files (F-30).

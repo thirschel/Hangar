@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/promptpolicy"
+	"hangar/session/promptpolicy"
 )
 
 func TestDetectPromptUsesPolicyClassifier(t *testing.T) {

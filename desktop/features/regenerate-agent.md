@@ -452,7 +452,7 @@ $go = "$env:TEMP\goroot125\go\bin\go.exe"; $env:GOTOOLCHAIN="local"; $env:GOFLAG
 & $go build -o dist\cs.exe .; & $go build -o cs.exe .            # rebuild daemon; stop stale cs.exe
 
 # Go (Linux verify — must also pass)
-wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/claude-squad; export GOTOOLCHAIN=local GOFLAGS=-mod=mod; /home/bendog/go125/go/bin/go build ./... && /home/bendog/go125/go/bin/go test ./...'
+wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/Hangar; export GOTOOLCHAIN=local GOFLAGS=-mod=mod; /home/bendog/go125/go/bin/go build ./... && /home/bendog/go125/go/bin/go test ./...'
 
 # App
 cd desktop; npm run lint; npm run typecheck; npm run build

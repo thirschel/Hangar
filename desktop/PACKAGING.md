@@ -1,23 +1,23 @@
 # Packaging & distribution (E6)
 
-The desktop app is packaged with [electron-builder] into a Windows **NSIS**
+The Hangar desktop app is packaged with [electron-builder] into a Windows **NSIS**
 installer that bundles the Go core-daemon (`cs.exe`).
 
 ## Prerequisites
 
-1. Build the core-daemon first so it exists at the repo root `dist/cs.exe`
+1. Build the core-daemon first so it exists at the repo root `dist\cs.exe`
    (the installer ships this verbatim — see `electron-builder.yml` → `extraResources`):
 
    ```pwsh
-   # from the repo root (D:\dev\claude-squad)
+   # from the repo root (for example D:\dev\Hangar)
    go build -o dist\cs.exe .
    ```
 
-2. (Re)generate the icons if you change `scripts/make-icons.js`:
-
-   ```pwsh
-   npm run make-icons   # writes build/icon.png (256) and build/tray.png (32)
-   ```
+2. The app icons are committed in `build/`: **`icon.ico`** (installer/exe, multi-size
+   16/32/48/64/128/256 — used by `electron-builder.yml` → `win.icon`), **`icon.png`** (256,
+   the window + notification icon), and **`tray.png`** (32) + **`tray@2x.png`** (64) for the
+   system tray. To rebrand, replace those files. `npm run make-icons` only writes a no-dep
+   **placeholder** and **no-ops when `build/icon.ico` exists**, so it won't clobber the real icons.
 
 ## Build the app
 
@@ -25,7 +25,7 @@ installer that bundles the Go core-daemon (`cs.exe`).
 cd desktop
 npm install
 npm run pack    # unpacked app in release/win-unpacked (fast smoke test)
-npm run dist    # full NSIS installer in release/claude-squad-Setup-<version>.exe
+npm run dist    # full NSIS installer in release/Hangar-Setup-<version>.exe
 ```
 
 At runtime the packaged app finds the daemon at
@@ -36,8 +36,8 @@ At runtime the packaged app finds the daemon at
 
 `electron-updater` is wired in `src/main/updater.ts` and runs **only in packaged
 builds**. The release feed is configured in `electron-builder.yml` → `publish`
-(GitHub provider). Update `owner`/`repo` to the fork that hosts your releases, then
-publish with `electron-builder --win nsis --publish always` (needs a `GH_TOKEN`).
+(GitHub provider) and should point at `thirschel/Hangar`. Publish with
+`electron-builder --win nsis --publish always` (needs a `GH_TOKEN`).
 If no release exists the updater logs and no-ops — it never crashes the app.
 
 ## Code signing (currently UNSIGNED)
@@ -56,7 +56,7 @@ over time. See the electron-builder code-signing docs for details.
 
 ## Logs
 
-The main process writes to `~/.claude-squad/desktop.log` (`src/main/logger.ts`),
+The main process writes to `~/.hangar/desktop.log` (`src/main/logger.ts`),
 including auto-updater activity and any uncaught exceptions.
 
 [electron-builder]: https://www.electron.build/
