@@ -429,10 +429,10 @@ func TestDeriveTitle(t *testing.T) {
 
 func TestDefaultTitle(t *testing.T) {
 	cases := map[string]string{
-		`C:\dev\hangar`:  "hangar",
-		`C:\dev\hangar\`: "hangar",
-		`D:\repos\my-app\`:     "my-app",
-		"":                     "workspace",
+		`C:\dev\hangar`:    "hangar",
+		`C:\dev\hangar\`:   "hangar",
+		`D:\repos\my-app\`: "my-app",
+		"":                 "workspace",
 	}
 	for in, want := range cases {
 		if got := defaultTitle(in); got != want {

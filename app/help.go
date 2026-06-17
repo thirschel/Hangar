@@ -1,11 +1,11 @@
 package app
 
 import (
+	"fmt"
 	"hangar/log"
 	"hangar/session"
 	"hangar/ui"
 	"hangar/ui/overlay"
-	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

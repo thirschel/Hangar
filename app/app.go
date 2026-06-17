@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"fmt"
 	"hangar/config"
 	"hangar/keys"
 	"hangar/log"
@@ -11,8 +13,6 @@ import (
 	"hangar/session/winhost"
 	"hangar/ui"
 	"hangar/ui/overlay"
-	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"

@@ -3,8 +3,8 @@
 package winhost
 
 import (
-	"hangar/session/agentcmd"
 	"encoding/json"
+	"hangar/session/agentcmd"
 	"os"
 	"path/filepath"
 	"regexp"
