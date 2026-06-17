@@ -17,7 +17,11 @@ type InstanceData struct {
 	Width     int       `json:"width"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	AutoYes   bool      `json:"auto_yes"`
+	// LastActivityAt is the last observed screen-change time, powering "Recent
+	// activity" mode. Back-compat: missing in older state.json -> zero -> callers
+	// fall back to UpdatedAt/CreatedAt via Instance.EffectiveActivityTime.
+	LastActivityAt time.Time `json:"last_activity_at"`
+	AutoYes        bool      `json:"auto_yes"`
 
 	Program   string          `json:"program"`
 	Worktree  GitWorktreeData `json:"worktree"`
