@@ -1219,10 +1219,11 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 	}
 
 	cfg := config.LoadConfig()
-	program := cfg.GetProgram()
-	if !agentcmd.SupportsResume(program) {
-		return proto.Errorf(req.ID, "agent %q does not support session resume", program)
-	}
+	// These are Copilot sessions — always use "copilot" for the resume command
+	// (even if the user's default program is a wrapper like "cpa"). The workspace
+	// stores the user's configured program so regenerate uses their preference.
+	resumeProgram := "copilot"
+	displayProgram := cfg.GetProgram()
 
 	shell := req.Shell
 	if shell == "" {
@@ -1250,14 +1251,14 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 	}
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.ResumeCommand(program, req.SessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.ResumeCommand(resumeProgram, req.SessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
 		_ = wt.Remove()
 		_ = wt.Prune()
 		return proto.Errorf(req.ID, "start agent: %v", err)
 	}
 
 	w := &workspace{
-		ID: id, Title: title, Program: program, RepoPath: wt.GetRepoPath(),
+		ID: id, Title: title, Program: displayProgram, RepoPath: wt.GetRepoPath(),
 		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
 		SessionName: sessionName, AutoYes: req.AutoYes,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: req.SessionID, Shell: shell,
