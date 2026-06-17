@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -335,6 +335,8 @@ ipcMain.on('term:resize', (_event, args: { session: string; cols: number; rows: 
 });
 
 app.whenReady().then(() => {
+  // Hide the default application menu bar (File / Edit / View / Window / Help).
+  Menu.setApplicationMenu(null);
   createWindow();
   createTray(() => mainWindow);
   initAutoUpdate();
