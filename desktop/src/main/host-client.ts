@@ -94,6 +94,9 @@ export interface Request {
   baseBranch?: string;
   workspaceId?: string;
   file?: string;
+  // ArchiveWorkspace: when true, also delete the worktree directory and
+  // its branch; when false (default), keep the worktree and branch on disk.
+  deleteWorktree?: boolean;
   // Run methods (v3)
   command?: string;
   sinceOffset?: number;

@@ -112,7 +112,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 	}
 
 	// Archive removes the worktree and the agent session.
-	if err := c.ArchiveWorkspace(ws.ID); err != nil {
+	if err := c.ArchiveWorkspace(ws.ID, true); err != nil {
 		t.Fatalf("ArchiveWorkspace: %v", err)
 	}
 	if _, err := os.Stat(ws.WorktreePath); !os.IsNotExist(err) {
@@ -147,7 +147,7 @@ func TestWorkspaceCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateWorkspace: %v", err)
 	}
-	defer func() { _ = c.ArchiveWorkspace(ws.ID) }()
+	defer func() { _ = c.ArchiveWorkspace(ws.ID, true) }()
 
 	if err := os.WriteFile(filepath.Join(ws.WorktreePath, "COMMIT.txt"), []byte("committed\n"), 0o644); err != nil {
 		t.Fatal(err)
