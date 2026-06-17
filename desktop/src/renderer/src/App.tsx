@@ -3,6 +3,7 @@ import { CenterPane } from './components/CenterPane';
 import { Composer } from './components/Composer';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
+import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RegenerateModal } from './components/RegenerateModal';
@@ -20,6 +21,10 @@ const SIDE_KEY = 'cs.sideWidth';
 const SIDEBAR_W = 240;
 const CENTER_MIN = 360;
 const GUTTER_W = 6;
+
+// Sidebar state persistence keys.
+const SIDEBAR_MODE_KEY = 'cs.sidebarMode';
+const SIDEBAR_ORDER_KEY = 'cs.workspaceOrder';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -68,6 +73,21 @@ export function App(): JSX.Element {
     const saved = Number(localStorage.getItem(SIDE_KEY));
     return Number.isFinite(saved) && saved >= SIDE_MIN ? saved : SIDE_DEFAULT;
   });
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
+    const saved = localStorage.getItem(SIDEBAR_MODE_KEY);
+    return SIDEBAR_MODES.includes(saved as SidebarMode) ? (saved as SidebarMode) : 'manual';
+  });
+  const [sidebarFilter, setSidebarFilter] = useState('');
+  const [sidebarSearching, setSidebarSearching] = useState(false);
+  const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem(SIDEBAR_ORDER_KEY) ?? '[]') as unknown;
+      return Array.isArray(arr) ? (arr as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [showHelp, setShowHelp] = useState(false);
   const ready = useRef(false);
   const workspacesRef = useRef<WorkspaceInfo[]>([]);
   const aliveRef = useRef<Map<string, boolean>>(new Map());
@@ -75,6 +95,7 @@ export function App(): JSX.Element {
   const regeneratingRef = useRef<Map<string, boolean>>(new Map());
   const connectionRef = useRef<ConnectionState>('connecting');
   const pendingTitlesRef = useRef<Set<string>>(loadPendingTitles());
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (): Promise<WorkspaceInfo[]> => {
     try {
@@ -171,7 +192,19 @@ export function App(): JSX.Element {
 
   // App keyboard shortcuts.
   useEffect(() => {
+    const isInputFocused = (): boolean => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea') return true;
+      // xterm terminal helper textarea
+      if (el.classList.contains('xterm-helper-textarea')) return true;
+      if (el.closest('[data-is-input]')) return true;
+      return false;
+    };
+
     const onKey = (e: KeyboardEvent): void => {
+      // Modifier shortcuts always work (even with input focused).
       if (e.ctrlKey && e.key === ',') {
         e.preventDefault();
         setShowSettings((s) => !s);
@@ -188,14 +221,184 @@ export function App(): JSX.Element {
           e.preventDefault();
           setSelectedId(w.id);
         }
+        return;
+      }
+
+      // Bare-key shortcuts only fire when no text input/terminal has focus.
+      if (isInputFocused()) return;
+
+      const ws = workspacesRef.current;
+
+      switch (e.key) {
+        case 'n':
+          e.preventDefault();
+          setShowCreate(true);
+          break;
+        case 'N':
+          e.preventDefault();
+          setShowCreate(true);
+          break;
+        case 'q':
+          e.preventDefault();
+          window.close();
+          break;
+        case '?':
+          e.preventDefault();
+          setShowHelp((h) => !h);
+          break;
+        case '/':
+          e.preventDefault();
+          setSidebarSearching(true);
+          break;
+        case 'Escape':
+          e.preventDefault();
+          if (sidebarSearching) {
+            setSidebarSearching(false);
+            setSidebarFilter('');
+          } else if (showHelp) {
+            setShowHelp(false);
+          }
+          break;
+        case 's': {
+          e.preventDefault();
+          setSidebarMode((cur) => {
+            const idx = SIDEBAR_MODES.indexOf(cur);
+            const next = SIDEBAR_MODES[(idx + 1) % SIDEBAR_MODES.length];
+            localStorage.setItem(SIDEBAR_MODE_KEY, next);
+            return next;
+          });
+          break;
+        }
+        case 'S': {
+          e.preventDefault();
+          setSidebarMode((cur) => {
+            const idx = SIDEBAR_MODES.indexOf(cur);
+            const next = SIDEBAR_MODES[(idx - 1 + SIDEBAR_MODES.length) % SIDEBAR_MODES.length];
+            localStorage.setItem(SIDEBAR_MODE_KEY, next);
+            return next;
+          });
+          break;
+        }
+        case 'j':
+        case 'ArrowDown': {
+          e.preventDefault();
+          setSelectedId((cur) => {
+            const idx = ws.findIndex((w) => w.id === cur);
+            if (idx < ws.length - 1) return ws[idx + 1].id;
+            if (idx === -1 && ws.length > 0) return ws[0].id;
+            return cur;
+          });
+          break;
+        }
+        case 'k':
+        case 'ArrowUp': {
+          e.preventDefault();
+          setSelectedId((cur) => {
+            const idx = ws.findIndex((w) => w.id === cur);
+            if (idx > 0) return ws[idx - 1].id;
+            if (idx === -1 && ws.length > 0) return ws[ws.length - 1].id;
+            return cur;
+          });
+          break;
+        }
+        case 'J': {
+          e.preventDefault();
+          if (sidebarMode !== 'manual') break;
+          setWorkspaceOrder((order) => {
+            const ids = order.length > 0 ? order : ws.map((w) => w.id);
+            const idx = ids.indexOf(selectedId ?? '');
+            if (idx < 0 || idx >= ids.length - 1) return order;
+            const next = [...ids];
+            [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
+            localStorage.setItem(SIDEBAR_ORDER_KEY, JSON.stringify(next));
+            return next;
+          });
+          break;
+        }
+        case 'K': {
+          e.preventDefault();
+          if (sidebarMode !== 'manual') break;
+          setWorkspaceOrder((order) => {
+            const ids = order.length > 0 ? order : ws.map((w) => w.id);
+            const idx = ids.indexOf(selectedId ?? '');
+            if (idx <= 0) return order;
+            const next = [...ids];
+            [next[idx], next[idx - 1]] = [next[idx - 1], next[idx]];
+            localStorage.setItem(SIDEBAR_ORDER_KEY, JSON.stringify(next));
+            return next;
+          });
+          break;
+        }
+        case 'p': {
+          e.preventDefault();
+          const sel = ws.find((w) => w.id === selectedId);
+          if (sel && (sel.added > 0 || sel.removed > 0)) {
+            void window.cs.pushWorkspace(sel.id);
+          }
+          break;
+        }
+        case 'D': {
+          e.preventDefault();
+          const sel = ws.find((w) => w.id === selectedId);
+          if (sel) setWorkspaceToRemove(sel);
+          break;
+        }
+        default:
+          break;
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [selectedId, sidebarMode, sidebarSearching, showHelp]);
 
   workspacesRef.current = workspaces;
   connectionRef.current = connection;
+
+  // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
+  const displayedWorkspaces = (() => {
+    let list = [...workspaces];
+
+    // Apply mode-based sorting.
+    switch (sidebarMode) {
+      case 'manual':
+        if (workspaceOrder.length > 0) {
+          const orderMap = new Map(workspaceOrder.map((id, i) => [id, i]));
+          list.sort((a, b) => {
+            const ai = orderMap.get(a.id) ?? Infinity;
+            const bi = orderMap.get(b.id) ?? Infinity;
+            return ai - bi;
+          });
+        }
+        break;
+      case 'group-by-repo':
+        list.sort((a, b) => a.repoPath.localeCompare(b.repoPath) || a.title.localeCompare(b.title));
+        break;
+      case 'recent-activity':
+        list.sort((a, b) => b.createdUnix - a.createdUnix);
+        break;
+      case 'pinned-pending':
+        list.sort((a, b) => {
+          const aw = a.waiting ? 0 : 1;
+          const bw = b.waiting ? 0 : 1;
+          return aw - bw || a.title.localeCompare(b.title);
+        });
+        break;
+    }
+
+    // Apply search filter.
+    if (sidebarFilter) {
+      const q = sidebarFilter.toLowerCase();
+      list = list.filter(
+        (w) => w.title.toLowerCase().includes(q) || w.branch.toLowerCase().includes(q),
+      );
+    }
+
+    return list;
+  })();
+
+  // Keep workspacesRef in sync with display order for hotkey navigation.
+  workspacesRef.current = displayedWorkspaces;
+
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
   const selectedRegenerating =
     (selected?.regenerating ?? false) ||
@@ -229,6 +432,15 @@ export function App(): JSX.Element {
     },
     [workspaces],
   );
+
+  const onCycleMode = useCallback((): void => {
+    setSidebarMode((cur) => {
+      const idx = SIDEBAR_MODES.indexOf(cur);
+      const next = SIDEBAR_MODES[(idx + 1) % SIDEBAR_MODES.length];
+      localStorage.setItem(SIDEBAR_MODE_KEY, next);
+      return next;
+    });
+  }, []);
 
   const onConfirmRemove = useCallback(
     async (deleteWorktree: boolean): Promise<void> => {
@@ -340,11 +552,17 @@ export function App(): JSX.Element {
         }}
       >
         <Sidebar
-          workspaces={workspaces}
+          workspaces={displayedWorkspaces}
           selectedId={selectedId}
           onSelect={setSelectedId}
           onArchive={onArchive}
           onNewWorkspace={() => setShowCreate(true)}
+          onCycleMode={onCycleMode}
+          sidebarMode={sidebarMode}
+          filter={sidebarFilter}
+          searching={sidebarSearching}
+          onFilterChange={setSidebarFilter}
+          searchInputRef={searchInputRef}
         />
         <CenterPane
           workspace={selected}
@@ -414,6 +632,52 @@ export function App(): JSX.Element {
           onConfirm={onConfirmRemove}
           onClose={() => setWorkspaceToRemove(null)}
         />
+      )}
+
+      {showHelp && (
+        <div className="help-overlay" onClick={() => setShowHelp(false)} role="presentation">
+          <div className="help-overlay__content" onClick={(e) => e.stopPropagation()}>
+            <h2>Keyboard Shortcuts</h2>
+            <div className="help-overlay__grid">
+              <div className="help-group">
+                <h3>Navigation</h3>
+                <dl>
+                  <dt>j / ↓</dt><dd>Select next workspace</dd>
+                  <dt>k / ↑</dt><dd>Select previous workspace</dd>
+                  <dt>Alt+1–9</dt><dd>Jump to workspace by index</dd>
+                </dl>
+              </div>
+              <div className="help-group">
+                <h3>Workspace Actions</h3>
+                <dl>
+                  <dt>n / Ctrl+N</dt><dd>New workspace</dd>
+                  <dt>p</dt><dd>Push branch</dd>
+                  <dt>D</dt><dd>Kill / archive workspace</dd>
+                </dl>
+              </div>
+              <div className="help-group">
+                <h3>Sidebar</h3>
+                <dl>
+                  <dt>s / S</dt><dd>Cycle sidebar mode ↔</dd>
+                  <dt>/</dt><dd>Search / filter workspaces</dd>
+                  <dt>J / K</dt><dd>Reorder (Manual mode only)</dd>
+                </dl>
+              </div>
+              <div className="help-group">
+                <h3>General</h3>
+                <dl>
+                  <dt>?</dt><dd>Toggle this help</dd>
+                  <dt>Ctrl+,</dt><dd>Settings</dd>
+                  <dt>q</dt><dd>Quit</dd>
+                  <dt>Esc</dt><dd>Close search / help</dd>
+                </dl>
+              </div>
+            </div>
+            <button className="help-overlay__close" type="button" onClick={() => setShowHelp(false)}>
+              Close (Esc / ?)
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
