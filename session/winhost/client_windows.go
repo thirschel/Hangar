@@ -194,6 +194,17 @@ func (c *Client) ArchiveWorkspace(id string) error {
 	return respErr(c.call(&proto.Request{Method: proto.MethodArchiveWorkspace, WorkspaceID: id}))
 }
 
+func (c *Client) RegenerateAgent(id string, handoff bool, cols, rows int) error {
+	return respErr(c.call(&proto.Request{
+		Method: proto.MethodRegenerateAgent, WorkspaceID: id, Handoff: handoff,
+		Cols: cols, Rows: rows,
+	}))
+}
+
+func (c *Client) ForceRegenerate(id string) error {
+	return respErr(c.call(&proto.Request{Method: proto.MethodForceRegenerate, WorkspaceID: id}))
+}
+
 func (c *Client) WorkspaceFiles(id string) ([]proto.FileDiffInfo, error) {
 	r, e := c.call(&proto.Request{Method: proto.MethodWorkspaceDiff, WorkspaceID: id})
 	if e != nil {

@@ -50,6 +50,7 @@ type conptySession struct {
 
 	mu           sync.Mutex
 	autoYes      bool
+	forceApprove bool
 	autoYesArmed bool // edge-trigger guard: tap Enter once per prompt appearance
 	attachedCnt  int  // >0 while a client is interactively attached (AutoYes pauses)
 	cols         int
@@ -332,6 +333,16 @@ func (s *conptySession) setAutoYes(enabled bool) {
 	s.mu.Unlock()
 }
 
+func (s *conptySession) setForceApprove(enabled bool) {
+	s.mu.Lock()
+	s.forceApprove = enabled
+	if enabled {
+		// Re-arm so an approval prompt already on screen is accepted during handoff.
+		s.autoYesArmed = true
+	}
+	s.mu.Unlock()
+}
+
 // autoYesLoop drives host-side AutoYes: it periodically checks for an approval
 // prompt and, if AutoYes is enabled and no client is attached, taps Enter once
 // per prompt appearance. Running it in the host (not the TUI) means unattended
@@ -355,15 +366,18 @@ func (s *conptySession) autoYesLoop() {
 func (s *conptySession) maybeAutoYes() {
 	s.mu.Lock()
 	enabled := s.autoYes
+	force := s.forceApprove
 	attached := s.attachedCnt > 0
 	armed := s.autoYesArmed
 	s.mu.Unlock()
+	effEnabled := enabled || force
+	effAttached := attached && !force
 	// Pause while attached so we never approve a prompt out from under the user.
 	prompt := false
-	if enabled && !attached {
+	if effEnabled && !effAttached {
 		prompt = detectPrompt(s.program, plainScreen(s.emu))
 	}
-	tap, nextArmed := autoYesDecision(enabled, attached, prompt, armed)
+	tap, nextArmed := autoYesDecision(effEnabled, effAttached, prompt, armed)
 	s.mu.Lock()
 	s.autoYesArmed = nextArmed
 	s.mu.Unlock()
