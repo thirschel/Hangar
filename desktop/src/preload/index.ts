@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
+  CopilotSessionInfo,
   DirEntry,
   FileContents,
   FileDiffInfo,
@@ -147,6 +148,24 @@ const api = {
       shell: patch.shell,
     });
     if (!r.ok || !r.workspace) throw new Error(r.error || 'UpdateWorkspace failed');
+    return r.workspace;
+  },
+  listCopilotSessions: async (): Promise<{ sessions: CopilotSessionInfo[]; skipped: number }> => {
+    const r = await rpc({ method: 'ListCopilotSessions' });
+    if (!r.ok) throw new Error(r.error || 'ListCopilotSessions failed');
+    return { sessions: r.copilotSessions ?? [], skipped: r.skipped ?? 0 };
+  },
+  resumeCopilotSession: async (
+    sessionId: string,
+    opts?: { repoPath?: string; title?: string },
+  ): Promise<WorkspaceInfo> => {
+    const r = await rpc({
+      method: 'ResumeCopilotSession',
+      sessionId,
+      repoPath: opts?.repoPath,
+      title: opts?.title,
+    });
+    if (!r.ok || !r.workspace) throw new Error(r.error || 'ResumeCopilotSession failed');
     return r.workspace;
   },
   startRun: async (id: string, command: string): Promise<void> => {

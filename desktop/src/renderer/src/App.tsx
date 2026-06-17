@@ -8,6 +8,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { RegenerateModal } from './components/RegenerateModal';
 import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
+import { SessionBrowserModal } from './components/SessionBrowserModal';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -49,6 +50,7 @@ export function App(): JSX.Element {
   const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
   const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
   const [workspaceToEdit, setWorkspaceToEdit] = useState<WorkspaceInfo | null>(null);
+  const [showBrowser, setShowBrowser] = useState(false);
   const [refreshMs, setRefreshMs] = useState(2000);
   const [sideWidth, setSideWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDE_KEY));
@@ -227,6 +229,10 @@ export function App(): JSX.Element {
         case '?':
           e.preventDefault();
           setShowHelp((h) => !h);
+          break;
+        case 'b':
+          e.preventDefault();
+          setShowBrowser(true);
           break;
         case '/':
           e.preventDefault();
@@ -620,6 +626,19 @@ export function App(): JSX.Element {
         />
       )}
 
+      {showBrowser && (
+        <SessionBrowserModal
+          onClose={() => setShowBrowser(false)}
+          onResume={async (session) => {
+            const ws = await window.cs.resumeCopilotSession(session.id, {
+              title: session.name,
+            });
+            await refresh();
+            setSelectedId(ws.id);
+          }}
+        />
+      )}
+
       {showHelp && (
         <div className="help-overlay" onClick={() => setShowHelp(false)} role="presentation">
           <div className="help-overlay__content" onClick={(e) => e.stopPropagation()}>
@@ -639,6 +658,7 @@ export function App(): JSX.Element {
                   <dt>n / Ctrl+N</dt><dd>New workspace</dd>
                   <dt>p</dt><dd>Push branch</dd>
                   <dt>D</dt><dd>Kill / archive workspace</dd>
+                  <dt>b</dt><dd>Browse Copilot sessions</dd>
                 </dl>
               </div>
               <div className="help-group">

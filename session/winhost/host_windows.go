@@ -268,6 +268,10 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.workspaces.forceRegenerate(req)
 	case proto.MethodUpdateWorkspace:
 		return h.workspaces.updateWorkspace(req)
+	case proto.MethodListCopilotSessions:
+		return h.workspaces.listCopilotSessions(req)
+	case proto.MethodResumeCopilotSession:
+		return h.workspaces.resumeCopilotSession(req)
 	default:
 		return proto.Errorf(req.ID, "unknown method %q", req.Method)
 	}
