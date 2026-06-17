@@ -1,6 +1,6 @@
-# claude-squad Desktop — Handoff
+# Hangar Desktop — Handoff
 
-A pick-up-and-go guide for the **Windows desktop app** (a Conductor-like GUI for running parallel
+A pick-up-and-go guide for **Hangar Desktop**, the **Windows desktop app** (a Conductor-like GUI for running parallel
 coding agents in isolated git worktrees) and its **Go core-daemon**. Read this first; it complements:
 
 - **`docs/native-windows.md`** — the lower-level native-Windows **session-host / daemon** model (ConPTY,
@@ -29,12 +29,12 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 ```
   Electron app (desktop/, Windows)                     core daemon = cs.exe (Go session-host)
   ┌───────────────────────────────┐                    ┌──────────────────────────────────────────┐
-  │ renderer (React + xterm.js)   │  preload  ipcMain  │ control pipe  \\.\pipe\claudesquad-host-<SID>
+  │ renderer (React + xterm.js)   │  preload  ipcMain  │ control pipe  \\.\pipe\hangar-host-<SID>
   │  Sidebar / CenterPane(tabs)   │◄────────►│ host-   │   length-prefixed JSON RPC (proto v3)      │
   │  Review / Run panels          │          │ client  │ ── workspaces: worktree+branch+session     │
   └───────────────────────────────┘          │ (TS)    │ ── ConPTY sessions + x/vt emulator         │
             ▲  per-session attach streams ─────────────│ ── git diff/commit/push, run processes     │
-            └───────── \\.\pipe\claudesquad-att-… ──────│ ── AutoYes, persistence, status sampling   │
+            └───────── \\.\pipe\hangar-att-… ──────│ ── AutoYes, persistence, status sampling   │
                                                         └──────────────────────────────────────────┘
 ```
 
@@ -104,7 +104,7 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 | `attach_windows.go` | Client-side console hand-off for the TUI's `cs attach` (Ctrl-Q detaches). |
 | `client_windows.go` | Go `Client` (used by tests + the TUI). |
 | `noconsole_windows.go` | `hideConsole(cmd)` — `CREATE_NO_WINDOW`. **Use on every console child.** |
-| `lock_windows.go` / `paths.go` | Singleton host lock; `~/.claude-squad` path helpers; host.json discovery. |
+| `lock_windows.go` / `paths.go` | Singleton host lock; `~/.hangar` path helpers; host.json discovery. |
 
 **Desktop main process (`desktop/src/main/`):**
 | File | Responsibility |
@@ -148,7 +148,7 @@ $env:GOTOOLCHAIN = "local"; $env:GOFLAGS = "-mod=mod"
 
 **Go — Linux verify (must ALSO pass; use the hardcoded path, do NOT munge PATH):**
 ```pwsh
-wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/claude-squad; export GOTOOLCHAIN=local GOFLAGS=-mod=mod; /home/bendog/go125/go/bin/go build ./... && /home/bendog/go125/go/bin/go test ./...'
+wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/Hangar; export GOTOOLCHAIN=local GOFLAGS=-mod=mod; /home/bendog/go125/go/bin/go build ./... && /home/bendog/go125/go/bin/go test ./...'
 ```
 > **Rule:** keep `go build/test ./...` green on **Windows AND Linux** for every change. Windows-only code
 > goes in `*_windows.go`; provide a `!windows` stub when a symbol is referenced cross-platform
@@ -156,7 +156,7 @@ wsl -d Ubuntu bash -lc 'cd /mnt/d/dev/claude-squad; export GOTOOLCHAIN=local GOF
 
 **Rebuild the daemon binary the app launches** (after any Go change):
 ```pwsh
-& $go build -o dist\cs.exe .    # the app spawns D:\dev\claude-squad\dist\cs.exe (packaged: resources\dist\cs.exe)
+& $go build -o dist\cs.exe .    # the app spawns D:\dev\Hangar\dist\cs.exe (packaged: resources\dist\cs.exe)
 & $go build -o cs.exe .         # the root binary too, to avoid version skew
 ```
 
@@ -181,7 +181,7 @@ app + daemon (freeing the pipe), and launches `npm run dev` with `CS_EXE` pinned
 ```
 Run it from an **external** terminal, not an agent terminal: it restarts the daemon (interrupting live
 agent sessions, which auto-revive) and refuses if it detects it's running inside a daemon ConPTY
-(override `-Force`). Verify: status bar reads `Protocol v5`. State (`~/.claude-squad/`) is global per
+(override `-Force`). Verify: status bar reads `Protocol v5`. State (`~/.hangar/`) is global per
 user, not per worktree.
 
 ---
@@ -206,7 +206,7 @@ user, not per worktree.
   **auto-reconnects** when the pipe drops (`ControlClient.isClosed()` + `cs:call` retry), so killing the
   daemon no longer strands the UI — but the **terminal** still needs a workspace re-click to re-attach.
 - **Tests must isolate `HOME` AND `USERPROFILE`.** Windows `os.UserHomeDir()` reads `USERPROFILE`, not
-  `HOME`. Early config tests set only `HOME` and **overwrote the real `~/.claude-squad/config.json`**
+  `HOME`. Early config tests set only `HOME` and **overwrote the real `~/.hangar/config.json`**
   (corrupting `default_program`). Fixed in `5171152`; any test touching config/worktrees must
   `t.Setenv` **both**.
 - **Never `git worktree prune` from Windows.** The user has a WSL worktree whose path isn't visible to
@@ -224,16 +224,16 @@ user, not per worktree.
   kept alive while the app runs (re-open re-attaches the same shell), and killed on **archive + app quit**.
   They are **not** persisted/revived across a daemon restart (only the agent conversation resumes).
 - **Invisible panics → logs.** The detached daemon's stderr is discarded; panics were silent. Recovered
-  panics now go to **`~/.claude-squad/host.log`**; the app logs to **`~/.claude-squad/desktop.log`**
+  panics now go to **`~/.hangar/host.log`**; the app logs to **`~/.hangar/desktop.log`**
   (incl. uncaught exceptions and updater activity). Check these first when debugging.
 - **npm-audit advisories.** `react-diff-view` (runtime, dev-flagged) and `electron-builder` (build-time)
   add advisories. Review before any public release; they are not shipped in the app runtime path.
-- **One host per user.** SID-named singleton pipe `\\.\pipe\claudesquad-host-<SID>`; the TUI and the app
+- **One host per user.** SID-named singleton pipe `\\.\pipe\hangar-host-<SID>`; the TUI and the app
   share it. `host.lock` is an OS lock released on process exit (a stale lock doesn't block relaunch).
 
 ---
 
-## 6. On-disk state (`~/.claude-squad/`, i.e. `%USERPROFILE%\.claude-squad`)
+## 6. On-disk state (`~/.hangar/`, i.e. `%USERPROFILE%\.hangar`)
 
 | Path | Owner | Contents |
 |---|---|---|
@@ -257,8 +257,8 @@ user, not per worktree.
   state per workspace (today only "agent finished" fires). `detectWaiting` already exists to build on.
 - **Multi-window pop-out** (E5 deferred).
 - **E6 signing & updater** — the installer is **unsigned** (no EV cert); set `CSC_LINK`/`CSC_KEY_PASSWORD`
-  or Azure Trusted Signing (`PACKAGING.md`). The updater `publish` owner/repo is a placeholder — point it
-  at the real release fork before shipping.
+  or Azure Trusted Signing (`PACKAGING.md`). The updater `publish` owner/repo should point to `thirschel/Hangar`
+  before shipping.
 - **Files tab editing** — read-only this round; a Monaco editor with save is the natural next step.
 - **Resume for non-copilot agents** — verify claude/codex/aider/gemini resume flags, then extend
   `supportsResume`/`agentLaunchCommand`.

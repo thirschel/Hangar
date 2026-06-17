@@ -7,7 +7,7 @@
 >
 > **Status:** Reviewed by three models (GPT-5.5, Gemini 3.1 Pro, Claude Opus 4.8) and revised — see
 > Appendix B. Rebranded to **"Hangar"** for repo **`thirschel/Hangar`**. **Scope:** marketing-page
-> branding and repo/Page URLs only; the Go module (`claude-squad`) and `cs` binary are **not** renamed
+> branding and repo/Page URLs only; the Go module (`hangar`) and `cs` binary are **not** renamed
 > in this feature (see Appendix A).
 
 ---
@@ -28,7 +28,7 @@ is a **content + branding overhaul**, not a greenfield build.
 This fork's headline differentiator is **native Windows support** (no WSL, no tmux). But the only
 public-facing surface — the marketing site in `web/` — does not reflect that:
 
-- It is branded **"claude squad"** and links to upstream **`smtg-ai/claude-squad`** everywhere
+- It is branded **"Hangar"** and links to upstream **`smtg-ai/claude-squad`** everywhere
   (`web/src/app/page.tsx`, `web/src/app/layout.tsx`).
 - Its install section shows **only Unix paths** (Homebrew, `install.sh`) and lists prerequisites as
   "tmux, gh" — both wrong/misleading for the native-Windows audience this fork targets.
@@ -50,7 +50,7 @@ tmux. We need a landing page that sells *this* project to *its* audience.
 - Reuse the existing `web/` Next.js app, static export, and Pages deploy workflow.
 
 **Non-goals (this feature)**
-- Deep code rename: the Go module path, `cs` binary, install scripts, and internal package/string references remain `claude-squad` (tracked separately — Appendix A).
+- Deep code rename: the Go module path and internal package/string references are now `hangar`; the `cs` binary and upstream install scripts stay unchanged (covered by the rename contract).
 - Multi-page docs site, blog, or CMS.
 - Backend/server features; the site stays a **static export** (`output: "export"`).
 - Custom domain setup (can be a follow-up).
@@ -59,7 +59,7 @@ tmux. We need a landing page that sells *this* project to *its* audience.
 
 | Aspect | Decision |
 |--------|----------|
-| **Name** | **Hangar** (brand and repo name; Go module/binary stay `claude-squad` / `cs`). |
+| **Name** | **Hangar** (brand and repo name; Go module/binary are `hangar` / `cs`). |
 | **Tagline (working)** | *"A hangar for all your copilots."* |
 | **Tagline alternatives** | "Where your copilots land." · "A home base for every AI copilot." · "One hangar for every AI agent." |
 | **Voice** | Developer-direct, concise, slightly playful; same tone as the README. |
@@ -128,7 +128,7 @@ A reviewer can check each of these as pass/fail:
 
 **Branding & content**
 - [ ] The page `<h1>`, browser tab title, and `metadata` all read **"Hangar"** (no visible
-      "claude squad" except where attributing upstream).
+      "Hangar" except where attributing upstream).
 - [ ] A tagline is present in the hero.
 - [ ] Native-Windows support is the **first** feature shown and is described accurately
       (session host, no WSL/tmux).
@@ -149,7 +149,7 @@ A reviewer can check each of these as pass/fail:
 - [ ] A Hangar-branded **OpenGraph/Twitter image** exists (e.g. `web/public/og-hangar.png`,
       1200×630) and is referenced in `metadata.openGraph.images` and `metadata.twitter.images`
       (the card is `summary_large_image`, which renders broken without an image).
-- [ ] Any remaining use of the literal `claude-squad` is limited to technical install/repo/binary
+- [ ] Any remaining use of the literal `Hangar` is limited to technical install/repo/binary
       context or upstream attribution (not user-facing branding).
 - [ ] No broken internal links; external links use `target="_blank" rel="noopener noreferrer"`.
 
@@ -249,7 +249,7 @@ Files in `web/` to change (no new app scaffolding required):
   performance weight — factor it into the Lighthouse perf budget.
 - **Analytics:** none in this pass (explicit decision) unless requested.
 - **Deep code rename:** repo and Pages paths now use Hangar, but the Go module, `cs` binary, and
-  installer/release plumbing still use `claude-squad`; defer that larger rename to Appendix A.
+  installer/release plumbing still use `Hangar`; defer that larger rename to Appendix A.
 - **Tagline:** final wording TBD; candidates in §3.
 - **404 page:** brand a `not-found.tsx`, or accept the default Next 404? (Default is acceptable for a
   first pass.)
@@ -258,7 +258,7 @@ Files in `web/` to change (no new app scaffolding required):
 ## Appendix A — Future work: deep code rename (out of scope here)
 
 The repo and public brand are now **Hangar** (`thirschel/Hangar`, Pages `basePath` `/Hangar`).
-Deferred work is limited to the deeper code/distribution rename: Go module path `claude-squad`, the
+Deferred distribution work is limited to installer/release plumbing; Go module path `hangar` and the
 `cs` binary name, install scripts (`install.sh`, `install.ps1`, `install.bat`, Homebrew formula),
 in-code/string references, and release config (`.goreleaser.yaml`). The upstream Unix installer
 references stay `smtg-ai/claude-squad` until this fork publishes its own releases.

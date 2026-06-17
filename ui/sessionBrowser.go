@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"claude-squad/session/copilot"
+	"hangar/session/copilot"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"

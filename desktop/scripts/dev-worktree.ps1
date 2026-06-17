@@ -1,21 +1,21 @@
 <#
 .SYNOPSIS
-  Build and run the claude-squad desktop app + Go daemon from THIS worktree.
+  Build and run the Hangar desktop app + Go daemon from THIS worktree.
 
 .DESCRIPTION
   The daemon (cs.exe) is a per-user *singleton*: the desktop app connects to
-  whichever daemon already owns the named pipe (\\.\pipe\claudesquad-host-<SID>).
+  whichever daemon already owns the named pipe (\\.\pipe\hangar-host-<SID>).
   When you work across multiple git worktrees, a stale daemon/app from another
   checkout gets reused, so you end up testing the WRONG code — e.g. the banner
   "daemon is v4 — the desktop app needs v5".
 
   This script makes the *current worktree* authoritative:
     1. Rebuilds this worktree's dist\cs.exe (+ root cs.exe) from Go source.
-    2. Stops any running claude-squad desktop app instances (any checkout).
+    2. Stops any running Hangar desktop app instances (any checkout).
     3. Stops the running session-host daemon, freeing the singleton pipe.
     4. Launches `npm run dev` from this worktree with CS_EXE pinned to its binary.
 
-  IMPORTANT: run this from a NORMAL terminal, not from inside a claude-squad
+  IMPORTANT: run this from a NORMAL terminal, not from inside a Hangar
   agent terminal. Step 3 restarts the daemon and briefly interrupts every live
   agent session (they auto-revive on next attach). The script refuses to run if
   it detects it is itself running inside a daemon-owned ConPTY (override: -Force).
@@ -31,7 +31,7 @@
   ($env:TEMP\goroot125\go\bin\go.exe), then falls back to `go` on PATH.
 
 .PARAMETER Force
-  Proceed even if the script appears to be running inside a claude-squad agent
+  Proceed even if the script appears to be running inside a Hangar agent
   terminal (i.e. killing the daemon would kill this very terminal).
 
 .EXAMPLE
@@ -109,16 +109,16 @@ if ($SkipBuild -and -not (Test-Path $csExe)) {
 
 # --- 4. Safety: don't kill the daemon if it hosts THIS terminal ---------------
 if ((Test-InsideDaemon) -and -not $Force) {
-  throw ("This terminal is running inside a claude-squad agent session, so stopping " +
+  throw ("This terminal is running inside a Hangar agent session, so stopping " +
          "the daemon would kill it. Re-run from an external PowerShell, or pass -Force.")
 }
 
-# --- 5. Stop existing claude-squad desktop app instances (any checkout) -------
-Write-Step "Stopping running claude-squad app instances ..."
+# --- 5. Stop existing Hangar desktop app instances (any checkout) -------
+Write-Step "Stopping running Hangar app instances ..."
 $apps = @()
 $apps += Get-CimInstance Win32_Process -Filter "Name='electron.exe'" -ErrorAction SilentlyContinue |
-          Where-Object { $_.CommandLine -and $_.CommandLine -like '*claude-squad*' }
-$apps += Get-CimInstance Win32_Process -Filter "Name='claude-squad.exe'" -ErrorAction SilentlyContinue
+          Where-Object { $_.CommandLine -and $_.CommandLine -like '*Hangar*' }
+$apps += Get-CimInstance Win32_Process -Filter "Name='Hangar.exe'" -ErrorAction SilentlyContinue
 $killedApp = $false
 foreach ($p in ($apps | Sort-Object ProcessId -Unique)) {
   try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $killedApp = $true } catch { }
@@ -130,7 +130,7 @@ Write-Step "Stopping the session-host daemon (frees the pipe) ..."
 $daemonPids = @()
 $daemonPids += (Get-CimInstance Win32_Process -Filter "Name='cs.exe'" -ErrorAction SilentlyContinue |
                  Where-Object { $_.CommandLine -and $_.CommandLine -like '*session-host*' }).ProcessId
-$hostJson = Join-Path $env:USERPROFILE '.claude-squad\host.json'
+$hostJson = Join-Path $env:USERPROFILE '.hangar\host.json'
 if (Test-Path $hostJson) {
   try { $daemonPids += (Get-Content $hostJson -Raw | ConvertFrom-Json).pid } catch { }
 }

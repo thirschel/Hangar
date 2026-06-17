@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"claude-squad/log"
+	"hangar/log"
 	"os"
 	"testing"
 )

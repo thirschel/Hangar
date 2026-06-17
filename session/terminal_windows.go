@@ -3,8 +3,8 @@
 package session
 
 import (
-	"claude-squad/cmd"
-	"claude-squad/session/winhost"
+	"hangar/cmd"
+	"hangar/session/winhost"
 )
 
 // NewTerminalSession creates a new terminal session for the current platform.

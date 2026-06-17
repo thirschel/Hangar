@@ -1,9 +1,9 @@
 package config
 
 import (
-	"claude-squad/log"
 	"encoding/json"
 	"fmt"
+	"hangar/log"
 	"os"
 	"os/exec"
 	"os/user"
@@ -24,7 +24,7 @@ func GetConfigDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get config home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".claude-squad"), nil
+	return filepath.Join(homeDir, ".hangar"), nil
 }
 
 // Profile represents a named program configuration

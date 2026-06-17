@@ -1,9 +1,9 @@
 {
-  "name": "claude-squad-desktop",
+  "name": "hangar-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron + TypeScript + React desktop app for claude-squad (Windows core-daemon thin client).",
-  "author": "claude-squad",
+  "description": "Electron + TypeScript + React desktop app for Hangar (Windows core-daemon thin client).",
+  "author": "Hangar",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

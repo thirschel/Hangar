@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/copilot"
+	"hangar/session/copilot"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stretchr/testify/require"
@@ -80,7 +80,7 @@ func TestSessionBrowserStringZeroSizeAndMissingEventsPreview(t *testing.T) {
 	b := NewSessionBrowser()
 	b.SetSessions([]copilot.Session{{
 		ID:         "missing-events",
-		Dir:        "C:\\definitely-does-not-exist\\claude-squad-browser-test",
+		Dir:        "C:\\definitely-does-not-exist\\hangar-browser-test",
 		Name:       "Missing Events",
 		Repository: "repo",
 		Branch:     "main",

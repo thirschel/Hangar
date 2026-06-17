@@ -1,9 +1,9 @@
 package session
 
 import (
-	"claude-squad/config"
 	"encoding/json"
 	"fmt"
+	"hangar/config"
 	"time"
 )
 

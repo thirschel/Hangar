@@ -34,7 +34,7 @@ func TestSetupFromExistingBranch_RemovesOrphanedDirectory(t *testing.T) {
 	mustRunGit(t, repoPath, "commit", "-m", "initial")
 	mustRunGit(t, repoPath, "branch", "feature/test")
 
-	worktreePath := filepath.Join(tempHome, ".claude-squad", "worktrees", "feature-test")
+	worktreePath := filepath.Join(tempHome, ".hangar", "worktrees", "feature-test")
 	if err := os.MkdirAll(worktreePath, 0755); err != nil {
 		t.Fatalf("mkdir orphaned worktree: %v", err)
 	}

@@ -3,8 +3,8 @@
 package winhost
 
 import (
-	"claude-squad/session/agentcmd"
 	"encoding/json"
+	"hangar/session/agentcmd"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,7 +18,7 @@ func testHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
-	if err := os.MkdirAll(filepath.Join(home, ".claude-squad"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(home, ".hangar"), 0o700); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
 	return home
@@ -131,7 +131,7 @@ func TestRestartAgentRotatesSessionAndID(t *testing.T) {
 	if oldAlive || !newAlive {
 		t.Fatalf("session liveness old=%v new=%v", oldAlive, newAlive)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude-squad", "workspaces.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".hangar", "workspaces.json"))
 	if err != nil {
 		t.Fatalf("read persisted: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestRegenerateStartFailureRevivable(t *testing.T) {
 		t.Fatalf("session name not rotated on failed start")
 	}
 	var persisted []*workspace
-	data, err := os.ReadFile(filepath.Join(home, ".claude-squad", "workspaces.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".hangar", "workspaces.json"))
 	if err != nil {
 		t.Fatalf("read persisted: %v", err)
 	}
