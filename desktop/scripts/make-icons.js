@@ -5,6 +5,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 
+// If a real committed icon (build/icon.ico) exists, keep it: do not overwrite the
+// committed icon/tray PNGs with the placeholder. This script is a no-dep fallback.
+if (fs.existsSync(path.resolve(__dirname, '..', 'build', 'icon.ico'))) {
+  console.log('build/icon.ico present — keeping committed icons; skipping placeholder generation.');
+  process.exit(0);
+}
+
 function crc32(buf) {
   let c = ~0;
   for (let i = 0; i < buf.length; i++) {
