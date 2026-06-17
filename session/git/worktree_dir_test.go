@@ -15,7 +15,7 @@ func TestGetWorktreeDirectory_Override(t *testing.T) {
 	t.Setenv("HOME", tempHome)
 	t.Setenv("USERPROFILE", tempHome)
 
-	csDir := filepath.Join(tempHome, ".claude-squad")
+	csDir := filepath.Join(tempHome, ".hangar")
 	if err := os.MkdirAll(csDir, 0755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}

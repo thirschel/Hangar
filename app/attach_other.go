@@ -3,7 +3,7 @@
 package app
 
 import (
-	"claude-squad/session"
+	"hangar/session"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

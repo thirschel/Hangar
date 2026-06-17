@@ -3,11 +3,11 @@ package winhost
 import (
 	"path/filepath"
 
-	"claude-squad/config"
+	"hangar/config"
 )
 
-// Host state files live alongside the rest of claude-squad's state in
-// ~/.claude-squad. These helpers are platform-neutral; the host itself is
+// Host state files live alongside the rest of hangar's state in
+// ~/.hangar. These helpers are platform-neutral; the host itself is
 // Windows-only.
 const (
 	hostLockName = "host.lock"

@@ -15,7 +15,7 @@ if %errorlevel% equ 0 (
     exit /b 1
 )
 
-echo Building claude-squad...
+echo Building Hangar...
 "%GO%" build -o cs.exe .
 if %errorlevel% neq 0 (
     echo Build failed.

@@ -503,7 +503,7 @@ export function App(): JSX.Element {
   return (
     <div className="app-shell">
       <header className="top-bar">
-        <div className="brand">claude-squad</div>
+        <div className="brand">Hangar</div>
         <div className="breadcrumb">
           {selected ? (
             <>

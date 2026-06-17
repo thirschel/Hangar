@@ -14,13 +14,13 @@ var (
 	ErrorLog   *log.Logger
 )
 
-var logFileName = filepath.Join(os.TempDir(), "claudesquad.log")
+var logFileName = filepath.Join(os.TempDir(), "hangar.log")
 
 var globalLogFile *os.File
 
 var initialized bool
 
-// LogFileName returns the absolute path of the log file claude-squad writes to.
+// LogFileName returns the absolute path of the log file hangar writes to.
 func LogFileName() string {
 	return logFileName
 }

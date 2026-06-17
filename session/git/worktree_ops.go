@@ -1,7 +1,7 @@
 package git
 
 import (
-	"claude-squad/log"
+	"hangar/log"
 	"fmt"
 	"os"
 	"os/exec"

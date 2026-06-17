@@ -3,8 +3,8 @@
 package session
 
 import (
-	"claude-squad/cmd"
-	"claude-squad/session/tmux"
+	"hangar/cmd"
+	"hangar/session/tmux"
 )
 
 // NewTerminalSession creates a new terminal session for the current platform.
@@ -18,7 +18,7 @@ func NewTerminalSessionWithDeps(name, program string, ptyFactory tmux.PtyFactory
 	return tmux.NewTmuxSessionWithDeps(name, program, ptyFactory, cmdExec)
 }
 
-// CleanupTerminalSessions cleans up all terminal sessions created by claude-squad.
+// CleanupTerminalSessions cleans up all terminal sessions created by hangar.
 func CleanupTerminalSessions(cmdExec cmd.Executor) error {
 	return tmux.CleanupSessions(cmdExec)
 }

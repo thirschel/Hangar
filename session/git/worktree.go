@@ -1,8 +1,8 @@
 package git
 
 import (
-	"claude-squad/config"
-	"claude-squad/log"
+	"hangar/config"
+	"hangar/log"
 	"fmt"
 	"path/filepath"
 	"strings"
