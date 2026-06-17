@@ -41,7 +41,7 @@ const APP_DEFAULTS: AppSettings = {
 };
 
 function csDir(): string {
-  return path.join(os.homedir(), '.claude-squad');
+  return path.join(os.homedir(), '.hangar');
 }
 
 function configPath(): string {

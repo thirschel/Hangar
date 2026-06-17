@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	cslog "claude-squad/log"
+	cslog "hangar/log"
 )
 
 const inUseFreshness = 5 * time.Minute

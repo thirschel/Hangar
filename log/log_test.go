@@ -6,7 +6,7 @@ import (
 )
 
 func TestLogFileName(t *testing.T) {
-	if !strings.HasSuffix(LogFileName(), "claudesquad.log") {
+	if !strings.HasSuffix(LogFileName(), "hangar.log") {
 		t.Fatalf("unexpected log file name: %s", LogFileName())
 	}
 }

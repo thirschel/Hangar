@@ -19,11 +19,11 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/config"
-	"claude-squad/session/agentcmd"
-	"claude-squad/session/copilot"
-	"claude-squad/session/git"
-	"claude-squad/session/winhost/proto"
+	"hangar/config"
+	"hangar/session/agentcmd"
+	"hangar/session/copilot"
+	"hangar/session/git"
+	"hangar/session/winhost/proto"
 )
 
 // workspace is a unit of parallel agent work: a git worktree + branch plus an
@@ -74,7 +74,7 @@ func newWorkspaceManager(h *host) *workspaceManager {
 	return m
 }
 
-// --- persistence (workspaces.json next to the rest of ~/.claude-squad state) ---
+// --- persistence (workspaces.json next to the rest of ~/.hangar state) ---
 
 func workspacesPath() (string, error) {
 	dir, err := config.GetConfigDir()

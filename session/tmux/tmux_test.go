@@ -1,7 +1,7 @@
 package tmux
 
 import (
-	cmd2 "claude-squad/cmd"
+	cmd2 "hangar/cmd"
 	"fmt"
 	"math/rand"
 	"os"
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"claude-squad/cmd/cmd_test"
+	"hangar/cmd/cmd_test"
 
 	"github.com/stretchr/testify/require"
 )
@@ -77,9 +77,9 @@ func TestStartTmuxSession(t *testing.T) {
 	err := session.Start(workdir)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(ptyFactory.cmds))
-	require.Equal(t, fmt.Sprintf("tmux new-session -d -s claudesquad_test-session -c %s claude", workdir),
+	require.Equal(t, fmt.Sprintf("tmux new-session -d -s hangar_test-session -c %s claude", workdir),
 		cmd2.ToString(ptyFactory.cmds[0]))
-	require.Equal(t, "tmux attach-session -t claudesquad_test-session",
+	require.Equal(t, "tmux attach-session -t hangar_test-session",
 		cmd2.ToString(ptyFactory.cmds[1]))
 
 	require.Equal(t, 2, len(ptyFactory.files))
@@ -94,7 +94,7 @@ func TestStartTmuxSession(t *testing.T) {
 
 func TestDiagnoseProgramNotOnPath(t *testing.T) {
 	lp := func(string) (string, error) { return "", fmt.Errorf("not found") }
-	err := diagnoseProgram("copilot", lp, "linux", func() string { return "" }, "/tmp/claudesquad.log")
+	err := diagnoseProgram("copilot", lp, "linux", func() string { return "" }, "/tmp/hangar.log")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found on PATH")
 }
@@ -120,10 +120,10 @@ func TestDiagnoseProgramSurfacesProbeOutput(t *testing.T) {
 
 func TestDiagnoseProgramGenericHint(t *testing.T) {
 	lp := func(string) (string, error) { return "/usr/local/bin/copilot", nil }
-	err := diagnoseProgram("copilot", lp, "linux", func() string { return "" }, "/tmp/claudesquad.log")
+	err := diagnoseProgram("copilot", lp, "linux", func() string { return "" }, "/tmp/hangar.log")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "verify it runs standalone")
-	require.Contains(t, err.Error(), "/tmp/claudesquad.log")
+	require.Contains(t, err.Error(), "/tmp/hangar.log")
 }
 
 func TestDiagnoseProgramEmpty(t *testing.T) {
@@ -134,7 +134,7 @@ func TestDiagnoseProgramEmpty(t *testing.T) {
 
 func TestAnnotateCaptureErrorAddsHintOnDeadPane(t *testing.T) {
 	err := annotateCaptureError("error capturing pane content",
-		fmt.Errorf("exit status 1: can't find pane: claudesquad_x"))
+		fmt.Errorf("exit status 1: can't find pane: hangar_x"))
 	require.Contains(t, err.Error(), "agent process appears to have exited")
 }
 

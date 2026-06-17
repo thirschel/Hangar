@@ -1,7 +1,7 @@
 package session
 
 // Program name suffixes for agents that have a startup trust/confirmation
-// prompt claude-squad knows how to dismiss.
+// prompt hangar knows how to dismiss.
 const (
 	ProgramClaude = "claude"
 	ProgramAider  = "aider"

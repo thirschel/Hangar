@@ -268,7 +268,7 @@ export function currentUserSid(): string {
 }
 
 export function controlPipeName(): string {
-  return `\\\\.\\pipe\\claudesquad-host-${currentUserSid()}`;
+  return `\\\\.\\pipe\\hangar-host-${currentUserSid()}`;
 }
 
 export function connectPipe(pipeName: string, timeoutMs = 2000): Promise<net.Socket> {

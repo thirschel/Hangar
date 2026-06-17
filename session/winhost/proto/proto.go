@@ -1,4 +1,4 @@
-// Package proto defines the wire protocol between the claude-squad TUI (client)
+// Package proto defines the wire protocol between the hangar TUI (client)
 // and the native-Windows session-host daemon. It is intentionally
 // platform-neutral (no Windows imports) so it can be unit-tested anywhere and
 // shared by both the client and the host.

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"claude-squad/session/winhost/proto"
+	"hangar/session/winhost/proto"
 )
 
 // SessionHostCmd is the hidden cobra subcommand that runs the native Windows

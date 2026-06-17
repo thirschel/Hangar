@@ -3,7 +3,7 @@ set -e
 
 cd "$(dirname "$0")"
 
-echo "Building claude-squad..."
+echo "Building Hangar..."
 go build -o cs .
 
 echo "Build successful: $(pwd)/cs"
