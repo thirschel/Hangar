@@ -98,8 +98,10 @@ type List struct {
 	renderer      *InstanceRenderer
 	autoyes       bool
 
-	// repos maps repo name to instance count, used only for the legacy
+	// repos maps repo path to instance count, used only for the legacy
 	// "show repo only when multiple repos" display rule outside Group-by-repo mode.
+	// Keyed by path (not name) so distinct repos sharing a basename are counted
+	// separately.
 	repos map[string]int
 }
 
@@ -539,13 +541,13 @@ func (l *List) RemoveInstance(target *session.Instance) {
 		return
 	}
 
-	// Unregister the repo name. Unstarted instances have no repo yet, so skip them
+	// Unregister the repo path. Unstarted instances have no repo yet, so skip them
 	// silently rather than logging an expected error.
 	if target.Started() {
-		if repoName, err := target.RepoName(); err != nil {
-			log.ErrorLog.Printf("could not get repo name: %v", err)
+		if repoPath, err := target.RepoPath(); err != nil {
+			log.ErrorLog.Printf("could not get repo path: %v", err)
 		} else {
-			l.rmRepo(repoName)
+			l.rmRepo(repoPath)
 		}
 	}
 
@@ -606,15 +608,15 @@ func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 		l.selected = instance
 	}
 	l.recompute()
-	// The finalizer registers the repo name once the instance is started.
+	// The finalizer registers the repo path once the instance is started.
 	return func() {
-		repoName, err := instance.RepoName()
+		repoPath, err := instance.RepoPath()
 		if err != nil {
-			log.ErrorLog.Printf("could not get repo name: %v", err)
+			log.ErrorLog.Printf("could not get repo path: %v", err)
 			return
 		}
 
-		l.addRepo(repoName)
+		l.addRepo(repoPath)
 		l.recompute()
 	}
 }
