@@ -60,8 +60,20 @@ describe('settings', () => {
       workspaceDir: '',
       notifications: true,
       minimizeToTray: true,
+      autoUpdate: false,
       uiRefreshMs: 2000,
     });
+  });
+
+  it('getSettings returns autoUpdate default of false', () => {
+    const missingFile = () => {
+      const error = new Error('ENOENT');
+      Object.assign(error, { code: 'ENOENT' });
+      throw error;
+    };
+    fsMock.readFileSync.mockImplementationOnce(missingFile).mockImplementationOnce(missingFile);
+
+    expect(getSettings().autoUpdate).toBe(false);
   });
 
   it('applySettings merges daemon and app config correctly', () => {
@@ -82,6 +94,7 @@ describe('settings', () => {
       workspaceDir: '  C:\\worktrees  ',
       notifications: true,
       minimizeToTray: true,
+      autoUpdate: false,
       uiRefreshMs: 2500,
     });
 
@@ -98,7 +111,9 @@ describe('settings', () => {
     expect(readWrittenJson(appSettingsPath)).toEqual({
       notifications: true,
       minimizeToTray: true,
+      autoUpdate: false,
       uiRefreshMs: 2500,
+      setupComplete: false,
     });
     expect(result).toEqual({
       defaultProgram: 'copilot',
@@ -108,7 +123,20 @@ describe('settings', () => {
       workspaceDir: 'C:\\worktrees',
       notifications: true,
       minimizeToTray: true,
+      autoUpdate: false,
       uiRefreshMs: 2500,
+    });
+  });
+
+  it('applySettings persists autoUpdate flag', () => {
+    applySettings({ autoUpdate: true });
+
+    expect(readWrittenJson(appSettingsPath)).toEqual({
+      notifications: true,
+      minimizeToTray: true,
+      autoUpdate: true,
+      uiRefreshMs: 2000,
+      setupComplete: false,
     });
   });
 

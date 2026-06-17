@@ -20,6 +20,8 @@ export type AppSettings = {
   notifications: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
+  autoUpdate: boolean;
+  setupComplete: boolean;
 };
 
 // The merged, flat view the renderer's Settings UI works with.
@@ -32,12 +34,15 @@ export type Settings = {
   notifications: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
+  autoUpdate: boolean;
 };
 
 const APP_DEFAULTS: AppSettings = {
   notifications: true,
   minimizeToTray: true,
   uiRefreshMs: 2000,
+  autoUpdate: false,
+  setupComplete: false,
 };
 
 function csDir(): string {
@@ -64,6 +69,17 @@ export function readDaemonConfig(): DaemonConfig {
   return readJson<DaemonConfig>(configPath(), {});
 }
 
+export function isFirstRun(): boolean {
+  return !readAppSettings().setupComplete;
+}
+
+export function markSetupComplete(): void {
+  mkdirSync(csDir(), { recursive: true });
+  const app = readAppSettings();
+  app.setupComplete = true;
+  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n');
+}
+
 export function readAppSettings(): AppSettings {
   return readJson<AppSettings>(appSettingsPath(), { ...APP_DEFAULTS });
 }
@@ -80,6 +96,7 @@ export function getSettings(): Settings {
     notifications: app.notifications,
     minimizeToTray: app.minimizeToTray,
     uiRefreshMs: app.uiRefreshMs,
+    autoUpdate: app.autoUpdate,
   };
 }
 
@@ -105,6 +122,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
   const app = readAppSettings();
   if (patch.notifications !== undefined) app.notifications = patch.notifications;
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
+  if (patch.autoUpdate !== undefined) app.autoUpdate = patch.autoUpdate;
   if (patch.uiRefreshMs !== undefined) {
     const n = Number(patch.uiRefreshMs);
     app.uiRefreshMs = Number.isFinite(n)
