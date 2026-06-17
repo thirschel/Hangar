@@ -1,4 +1,7 @@
+import { useEffect, useRef } from 'react';
+import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
+import { MODE_LABELS, type SidebarMode } from './sidebar-modes';
 
 type SidebarProps = {
   workspaces: WorkspaceInfo[];
@@ -6,6 +9,12 @@ type SidebarProps = {
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
   onNewWorkspace: () => void;
+  onCycleMode: () => void;
+  sidebarMode: SidebarMode;
+  filter: string;
+  searching: boolean;
+  onFilterChange: (value: string) => void;
+  searchInputRef?: RefObject<HTMLInputElement>;
 };
 
 export function Sidebar({
@@ -14,26 +23,75 @@ export function Sidebar({
   onSelect,
   onArchive,
   onNewWorkspace,
+  onCycleMode,
+  sidebarMode,
+  filter,
+  searching,
+  onFilterChange,
+  searchInputRef,
 }: SidebarProps): JSX.Element {
+  const internalRef = useRef<HTMLInputElement>(null);
+  const inputRef = searchInputRef ?? internalRef;
+
+  // Auto-focus the search input when searching becomes true.
+  useEffect(() => {
+    if (searching && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [searching, inputRef]);
+
   return (
     <aside className="sidebar">
       <div className="panel-header">
-        Workspaces
-        <button
-          className="icon-button"
-          type="button"
-          title="New workspace (Ctrl+N)"
-          onClick={onNewWorkspace}
-        >
-          +
-        </button>
+        <span className="sidebar__title">
+          Workspaces
+          <span className="sidebar__mode-label">{MODE_LABELS[sidebarMode]}</span>
+        </span>
+        <div className="panel-header__actions">
+          <button
+            className="icon-button"
+            type="button"
+            title={`Sort: ${MODE_LABELS[sidebarMode]} (s)`}
+            onClick={onCycleMode}
+          >
+            ⇅
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            title="New workspace (n)"
+            onClick={onNewWorkspace}
+          >
+            +
+          </button>
+        </div>
       </div>
 
+      {searching && (
+        <div className="sidebar-search">
+          <input
+            ref={inputRef}
+            className="sidebar-search__input"
+            type="text"
+            placeholder="Filter workspaces…"
+            value={filter}
+            onChange={(e) => onFilterChange(e.target.value)}
+            data-is-input="true"
+          />
+        </div>
+      )}
+
       <nav className="workspace-list" aria-label="Workspaces">
-        {workspaces.length === 0 && (
+        {workspaces.length === 0 && !filter && (
           <div className="empty-state">
             <div className="empty-state__title">No workspaces yet</div>
             <p>Click + to start a parallel agent in its own git worktree.</p>
+          </div>
+        )}
+        {workspaces.length === 0 && filter && (
+          <div className="empty-state">
+            <div className="empty-state__title">No matches</div>
+            <p>No workspaces match &ldquo;{filter}&rdquo;</p>
           </div>
         )}
         {workspaces.map((w) => {
@@ -82,7 +140,7 @@ export function Sidebar({
               <button
                 className="icon-button archive"
                 type="button"
-                title="Archive workspace"
+                title="Archive workspace (D)"
                 onClick={(e) => {
                   e.stopPropagation();
                   void onArchive(w.id);
