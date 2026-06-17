@@ -4,6 +4,7 @@ import (
 	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/session/copilot"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
@@ -28,6 +29,160 @@ func TestMain(m *testing.M) {
 
 	// Exit with the same code as the tests
 	os.Exit(exitCode)
+}
+
+func newTestHomeForKeyHandling() *home {
+	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	return &home{
+		ctx:               context.Background(),
+		state:             stateDefault,
+		appConfig:         config.DefaultConfig(),
+		list:              ui.NewList(&sp, false),
+		menu:              ui.NewMenu(),
+		tabbedWindow:      ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		sessionBrowser:    ui.NewSessionBrowser(),
+		errBox:            ui.NewErrBox(),
+		resumedSessionIDs: make(map[string]bool),
+	}
+}
+
+func TestSessionBrowserStateTransitions(t *testing.T) {
+	t.Run("b opens browse state from default", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")}
+
+		// First press highlights/resends the menu key; second handles the resent key.
+		_, _ = h.handleKeyPress(keyMsg)
+		model, _ := h.handleKeyPress(keyMsg)
+		homeModel, ok := model.(*home)
+		require.True(t, ok)
+
+		assert.Equal(t, stateBrowse, homeModel.state)
+		assert.Equal(t, "", homeModel.sessionBrowser.Query())
+	})
+
+	t.Run("q edits browse search instead of quitting", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.state = stateBrowse
+		h.menu.SetState(ui.StateBrowse)
+
+		model, _ := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+		homeModel, ok := model.(*home)
+		require.True(t, ok)
+
+		assert.Equal(t, stateBrowse, homeModel.state)
+		assert.Equal(t, "q", homeModel.sessionBrowser.Query())
+	})
+
+	t.Run("esc closes browse state", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.state = stateBrowse
+		h.menu.SetState(ui.StateBrowse)
+
+		model, _ := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+		homeModel, ok := model.(*home)
+		require.True(t, ok)
+
+		assert.Equal(t, stateDefault, homeModel.state)
+	})
+}
+
+func TestBuildResumeInstance(t *testing.T) {
+	h := newTestHomeForKeyHandling()
+	h.program = "claude" // non-copilot program must fall back to "copilot" for --resume
+
+	sel := &copilot.Session{
+		ID:         "abcdef1234567890",
+		Name:       "Plan The Feature",
+		OriginRoot: t.TempDir(),
+		OriginHead: "deadbeefcafe",
+	}
+
+	inst, err := h.buildResumeInstance(sel, sel.OriginRoot)
+	require.NoError(t, err)
+	require.NotNil(t, inst)
+	assert.Equal(t, "Plan The Feature (resume abcdef)", inst.Title)
+	assert.Equal(t, "abcdef1234567890", inst.AgentSessionID)
+	assert.Equal(t, "deadbeefcafe", inst.BaseCommit)
+	assert.Equal(t, "copilot", inst.Program)
+
+	// A copilot-based program keeps its custom args.
+	h.program = "copilot --banner"
+	inst2, err := h.buildResumeInstance(sel, sel.OriginRoot)
+	require.NoError(t, err)
+	assert.Equal(t, "copilot --banner", inst2.Program)
+}
+
+func TestSessionRestartGuards(t *testing.T) {
+	t.Run("nil session is a no-op", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		model, cmd := h.handleSessionRestart(nil)
+		require.NotNil(t, model)
+		assert.Nil(t, cmd)
+		assert.Equal(t, 0, h.list.NumInstances())
+	})
+
+	t.Run("in-use session is blocked", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.state = stateBrowse
+		sel := &copilot.Session{ID: "id-in-use", Name: "Busy", InUse: true}
+
+		_, _ = h.handleSessionRestart(sel)
+
+		assert.Equal(t, 0, h.list.NumInstances(), "no workspace should be created for an in-use session")
+		assert.False(t, h.resumedSessionIDs["id-in-use"])
+	})
+
+	t.Run("already-resumed session is blocked", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.resumedSessionIDs["already"] = true
+		sel := &copilot.Session{ID: "already", Name: "Dup"}
+
+		model, _ := h.handleSessionRestart(sel)
+		require.NotNil(t, model)
+
+		assert.Equal(t, stateDefault, h.state)
+		assert.Equal(t, 0, h.list.NumInstances(), "no second workspace for an already-resumed session")
+	})
+
+	t.Run("instance limit is enforced", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		for i := 0; i < GlobalInstanceLimit; i++ {
+			inst, err := session.NewInstance(session.InstanceOptions{
+				Title:   fmt.Sprintf("ws-%d", i),
+				Path:    ".",
+				Program: "copilot",
+			})
+			require.NoError(t, err)
+			h.list.AddInstance(inst)
+		}
+		sel := &copilot.Session{ID: "over-limit", Name: "X"}
+
+		_, _ = h.handleSessionRestart(sel)
+
+		assert.Equal(t, GlobalInstanceLimit, h.list.NumInstances(), "no workspace beyond the instance limit")
+	})
+}
+
+func TestSessionsLoadedTriggersIndexBuild(t *testing.T) {
+	h := newTestHomeForKeyHandling()
+	// The returned cmd builds the content index off-thread; we only assert it is
+	// scheduled (executing it would touch the on-disk index).
+	model, cmd := h.Update(sessionsLoadedMsg{sessions: []copilot.Session{{ID: "x"}}})
+	require.NotNil(t, model)
+	require.NotNil(t, cmd, "discovery should schedule a content-index build")
+}
+
+func TestIndexReadyWiresFilter(t *testing.T) {
+	h := newTestHomeForKeyHandling()
+	idx, err := copilot.OpenIndex() // read-only; empty index when no file exists
+	require.NoError(t, err)
+	require.NotNil(t, idx)
+
+	model, _ := h.Update(indexReadyMsg{index: idx})
+	hm, ok := model.(*home)
+	require.True(t, ok)
+	assert.Same(t, idx, hm.copilotIndex, "index-ready should store the index for content search")
 }
 
 // TestConfirmationModalStateTransitions tests state transitions without full instance setup

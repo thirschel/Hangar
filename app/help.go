@@ -58,6 +58,7 @@ func (h helpTypeGeneral) toContent() string {
 		headerStyle.Render("Other:"),
 		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
+		keyStyle.Render("b")+descStyle.Render("         - Browse & resume Copilot sessions"),
 		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
 		"",
 		descStyle.Render("Sidebar rows animate when they move; set ")+keyStyle.Render("disable_sidebar_motion")+descStyle.Render(" in config to turn it off."),

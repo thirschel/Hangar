@@ -7,6 +7,7 @@ import (
 	"claude-squad/daemon"
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/session/copilot"
 	"claude-squad/session/git"
 	"claude-squad/session/winhost"
 	"context"
@@ -103,6 +104,13 @@ var (
 				return fmt.Errorf("failed to cleanup worktrees: %w", err)
 			}
 			fmt.Println("Worktrees have been cleaned up")
+
+			if path, err := copilot.IndexPath(); err == nil {
+				if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+					return fmt.Errorf("failed to remove copilot index: %w", rmErr)
+				}
+			}
+			fmt.Println("Copilot session index has been cleared")
 
 			// Kill any daemon that's running.
 			if err := daemon.StopDaemon(); err != nil {
