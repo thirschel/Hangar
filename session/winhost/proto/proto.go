@@ -19,7 +19,10 @@ import (
 // v2 adds the workspace methods (the desktop "core daemon" surface).
 // v3 adds per-workspace run process control and output polling.
 // v4 adds agent-generated workspace titles (GenerateWorkspaceTitle).
-const Version = 4
+// v5 adds Regenerate/ForceRegenerate (kill the current agent and start a fresh
+// one in the same worktree, optionally seeded from a HANDOFF.md) plus additive
+// WorkspaceInfo regenerate-status fields.
+const Version = 5
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
 // whole scrollback, so this is generous but still guards against abuse/OOM.
@@ -56,6 +59,11 @@ const (
 
 	// Title generation (v4): summarize the first message into a workspace title.
 	MethodGenerateWorkspaceTitle = "GenerateWorkspaceTitle"
+
+	// Regenerate (v5): kill the current agent session and start a fresh one in the
+	// same worktree/branch, optionally seeding it from an agent-written HANDOFF.md.
+	MethodRegenerateAgent = "RegenerateAgent"
+	MethodForceRegenerate = "ForceRegenerate"
 )
 
 // Capture modes for MethodCapturePane.
@@ -100,6 +108,10 @@ type Request struct {
 	Message     string `json:"message,omitempty"`
 	Command     string `json:"command,omitempty"`
 	SinceOffset int64  `json:"sinceOffset,omitempty"`
+
+	// Regenerate (v5): when true the regenerate first asks the live agent to write
+	// HANDOFF.md and seeds the fresh agent with it. Reuses Cols/Rows for the PTY.
+	Handoff bool `json:"handoff,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -129,6 +141,10 @@ type WorkspaceInfo struct {
 	PreviewURL   string `json:"previewUrl"`
 	Busy         bool   `json:"busy"`    // agent is actively producing output
 	Waiting      bool   `json:"waiting"` // agent is at a prompt awaiting input
+	// Regenerate (v5): a regenerate is in progress for this workspace and its
+	// current phase ("" | "handoff" | "restarting" | "seeding").
+	Regenerating bool   `json:"regenerating"`
+	RegenPhase   string `json:"regenPhase,omitempty"`
 }
 
 // FileDiffInfo is a per-file change summary in a WorkspaceDiff response.

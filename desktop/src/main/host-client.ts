@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
 
-export const PROTO_VERSION = 4;
+export { PROTO_VERSION } from '../shared/proto-version';
 const MAX_FRAME = 16 << 20;
 
 export interface SessionInfo {
@@ -29,6 +29,8 @@ export interface WorkspaceInfo {
   previewUrl: string;
   busy: boolean;
   waiting: boolean;
+  regenerating: boolean;
+  regenPhase?: string;
 }
 
 export interface FileDiffInfo {
@@ -71,6 +73,8 @@ export interface Request {
     | 'StopRun'
     | 'WorkspaceRunOutput'
     | 'GenerateWorkspaceTitle'
+    | 'RegenerateAgent'
+    | 'ForceRegenerate'
     | string;
   session?: string;
   program?: string;
@@ -93,6 +97,8 @@ export interface Request {
   // Run methods (v3)
   command?: string;
   sinceOffset?: number;
+  // Regenerate (v5)
+  handoff?: boolean;
 }
 
 export interface Response {

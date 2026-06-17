@@ -86,6 +86,38 @@ func TestReadFrameTruncatedBodyErrors(t *testing.T) {
 	}
 }
 
+func TestRegenerateFieldsRoundTrip(t *testing.T) {
+	if Version != 5 {
+		t.Fatalf("Version = %d, want 5", Version)
+	}
+	var buf bytes.Buffer
+	req := &Request{ID: 1, Method: MethodRegenerateAgent, WorkspaceID: "ws1", Handoff: true, Cols: 100, Rows: 40}
+	if err := WriteFrame(&buf, req); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	got, err := ReadRequest(&buf)
+	if err != nil {
+		t.Fatalf("ReadRequest: %v", err)
+	}
+	if got.Method != MethodRegenerateAgent || got.WorkspaceID != "ws1" || !got.Handoff ||
+		got.Cols != 100 || got.Rows != 40 {
+		t.Fatalf("request round-trip mismatch: %+v", got)
+	}
+
+	buf.Reset()
+	resp := &Response{ID: 2, OK: true, Workspace: &WorkspaceInfo{ID: "ws1", Regenerating: true, RegenPhase: "handoff"}}
+	if err := WriteFrame(&buf, resp); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	gotResp, err := ReadResponse(&buf)
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	if gotResp.Workspace == nil || !gotResp.Workspace.Regenerating || gotResp.Workspace.RegenPhase != "handoff" {
+		t.Fatalf("response round-trip mismatch: %+v", gotResp.Workspace)
+	}
+}
+
 func TestErrorfBuildsFailedResponse(t *testing.T) {
 	r := Errorf(9, "bad %s", "thing")
 	if r.ID != 9 || r.OK || r.Error != "bad thing" {

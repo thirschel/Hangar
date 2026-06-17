@@ -5,8 +5,10 @@ import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
 import { SettingsModal } from './components/SettingsModal';
+import { RegenerateModal } from './components/RegenerateModal';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
+import { PROTO_VERSION } from '../../shared/proto-version';
 
 type ConnectionState = 'connecting' | 'connected' | 'error';
 
@@ -57,6 +59,8 @@ export function App(): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
+  const [showRegen, setShowRegen] = useState(false);
+  const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
   const [refreshMs, setRefreshMs] = useState(2000);
   const [sideWidth, setSideWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(SIDE_KEY));
@@ -65,6 +69,8 @@ export function App(): JSX.Element {
   const ready = useRef(false);
   const workspacesRef = useRef<WorkspaceInfo[]>([]);
   const aliveRef = useRef<Map<string, boolean>>(new Map());
+  const sessionNameRef = useRef<Map<string, string>>(new Map());
+  const regeneratingRef = useRef<Map<string, boolean>>(new Map());
   const connectionRef = useRef<ConnectionState>('connecting');
   const pendingTitlesRef = useRef<Set<string>>(loadPendingTitles());
 
@@ -72,17 +78,30 @@ export function App(): JSX.Element {
     try {
       const list = await window.cs.listWorkspaces();
       // Notify when an agent session goes alive -> not alive (i.e. it exited).
-      const prev = aliveRef.current;
-      if (prev.size > 0) {
+      const prevAlive = aliveRef.current;
+      const prevSessionName = sessionNameRef.current;
+      const prevRegenerating = regeneratingRef.current;
+      if (prevAlive.size > 0) {
         for (const w of list) {
-          if (prev.get(w.id) === true && !w.alive) {
+          const sessionChanged =
+            prevSessionName.has(w.id) && prevSessionName.get(w.id) !== w.sessionName;
+          const inRegenWindow = w.regenerating || prevRegenerating.get(w.id) === true;
+          if (prevAlive.get(w.id) === true && !w.alive && !sessionChanged && !inRegenWindow) {
             void window.cs.notify({ title: 'Agent finished', body: w.title, workspaceId: w.id });
           }
         }
       }
-      const next = new Map<string, boolean>();
-      for (const w of list) next.set(w.id, w.alive);
-      aliveRef.current = next;
+      const nextAlive = new Map<string, boolean>();
+      const nextSessionName = new Map<string, string>();
+      const nextRegenerating = new Map<string, boolean>();
+      for (const w of list) {
+        nextAlive.set(w.id, w.alive);
+        nextSessionName.set(w.id, w.sessionName);
+        nextRegenerating.set(w.id, w.regenerating);
+      }
+      aliveRef.current = nextAlive;
+      sessionNameRef.current = nextSessionName;
+      regeneratingRef.current = nextRegenerating;
       setWorkspaces(list);
       // Recover the status banner if a previous poll had errored (e.g. the daemon
       // restarted and the control pipe reconnected).
@@ -102,14 +121,14 @@ export function App(): JSX.Element {
     let active = true;
     void (async () => {
       try {
-        const hello = await window.cs.call({ method: 'Hello', clientVersion: 4 });
+        const hello = await window.cs.call({ method: 'Hello', clientVersion: PROTO_VERSION });
         if (!active) return;
         const hv = hello.hostVersion ?? 0;
         setHostVersion(hv);
-        if (hv < 4) {
+        if (hv < PROTO_VERSION) {
           setConnection('error');
           setStatusText(
-            `daemon is v${hv} — the desktop app needs v4. Run \`cs reset\`, then relaunch.`,
+            `daemon is v${hv} — the desktop app needs v${PROTO_VERSION}. Run \`cs reset\`, then relaunch.`,
           );
           return;
         }
@@ -176,6 +195,13 @@ export function App(): JSX.Element {
   workspacesRef.current = workspaces;
   connectionRef.current = connection;
   const selected = workspaces.find((w) => w.id === selectedId) ?? null;
+  const selectedRegenerating =
+    (selected?.regenerating ?? false) ||
+    (optimisticRegenId !== null && optimisticRegenId === selected?.id);
+
+  useEffect(() => {
+    if (!selected) setShowRegen(false);
+  }, [selected]);
 
   const onCreate = useCallback(
     async (args: CreateWorkspaceArgs): Promise<void> => {
@@ -307,7 +333,13 @@ export function App(): JSX.Element {
         <CenterPane
           workspace={selected}
           onToggleAutoYes={toggleAutoYes}
-          composer={<Composer disabled={!selected} onSend={sendInput} />}
+          onRegenerate={() => setShowRegen(true)}
+          regenerating={selectedRegenerating}
+          regenPhase={selected?.regenPhase}
+          onKillNow={() => {
+            if (selected) void window.cs.forceRegenerate(selected.id);
+          }}
+          composer={<Composer disabled={!selected || selectedRegenerating} onSend={sendInput} />}
         />
         <div
           className="col-gutter"
@@ -337,6 +369,25 @@ export function App(): JSX.Element {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           onSaved={(s) => setRefreshMs(s.uiRefreshMs)}
+        />
+      )}
+
+      {showRegen && selected && (
+        <RegenerateModal
+          workspace={selected}
+          onConfirm={(handoff) => {
+            const id = selected.id;
+            setOptimisticRegenId(id);
+            // The banner is driven by the polled `regenerating` flag, but a fast
+            // (no-handoff) restart can finish between 2s polls, so show it
+            // optimistically right away and let the poll take over / clear it.
+            window.setTimeout(
+              () => setOptimisticRegenId((cur) => (cur === id ? null : cur)),
+              2500,
+            );
+            void window.cs.regenerateAgent(id, handoff);
+          }}
+          onClose={() => setShowRegen(false)}
         />
       )}
     </div>
