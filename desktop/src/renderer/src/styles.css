@@ -535,6 +535,32 @@ body.is-col-resizing .side-panel {
   background: transparent;
 }
 
+/* Workspace item actions (gear + archive) */
+.workspace-item__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+}
+.icon-button.workspace-settings {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0;
+  font-size: 12px;
+  transition:
+    opacity var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.workspace-item:hover .icon-button.workspace-settings {
+  opacity: 1;
+}
+.icon-button.workspace-settings:hover {
+  color: var(--accent);
+  border-color: transparent;
+  background: transparent;
+}
+
 /* Sidebar header action buttons (sort + new) */
 .panel-header__actions {
   display: flex;

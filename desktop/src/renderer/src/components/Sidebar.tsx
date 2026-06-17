@@ -8,6 +8,7 @@ type SidebarProps = {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
+  onSettings: (id: string) => void;
   onNewWorkspace: () => void;
   onNewAtRepo: (repoPath: string) => void;
   onCycleMode: () => void;
@@ -22,11 +23,13 @@ function WorkspaceRow({
   selected,
   onSelect,
   onArchive,
+  onSettings,
 }: {
   w: WorkspaceInfo;
   selected: boolean;
   onSelect: () => void;
   onArchive: () => void;
+  onSettings: () => void;
 }): JSX.Element {
   const status = !w.alive ? 'exited' : w.waiting ? 'waiting' : w.busy ? 'busy' : 'idle';
   const statusTitle =
@@ -64,17 +67,30 @@ function WorkspaceRow({
           )}
         </div>
       </div>
-      <button
-        className="icon-button archive"
-        type="button"
-        title="Archive workspace (D)"
-        onClick={(e) => {
-          e.stopPropagation();
-          void onArchive();
-        }}
-      >
-        ×
-      </button>
+      <div className="workspace-item__actions">
+        <button
+          className="icon-button workspace-settings"
+          type="button"
+          title="Workspace settings"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSettings();
+          }}
+        >
+          ⚙
+        </button>
+        <button
+          className="icon-button archive"
+          type="button"
+          title="Archive workspace (D)"
+          onClick={(e) => {
+            e.stopPropagation();
+            void onArchive();
+          }}
+        >
+          ×
+        </button>
+      </div>
     </div>
   );
 }
@@ -110,6 +126,7 @@ function buildGroupedList(
   selectedId: string | null,
   onSelect: (id: string) => void,
   onArchive: (id: string) => void,
+  onSettings: (id: string) => void,
   onNewAtRepo?: (repoPath: string) => void,
 ): ReactNode[] {
   if (mode === 'group-by-repo') {
@@ -138,6 +155,7 @@ function buildGroupedList(
             selected={w.id === selectedId}
             onSelect={() => onSelect(w.id)}
             onArchive={() => onArchive(w.id)}
+            onSettings={() => onSettings(w.id)}
           />,
         );
       }
@@ -159,6 +177,7 @@ function buildGroupedList(
             selected={w.id === selectedId}
             onSelect={() => onSelect(w.id)}
             onArchive={() => onArchive(w.id)}
+            onSettings={() => onSettings(w.id)}
           />,
         );
       }
@@ -173,6 +192,7 @@ function buildGroupedList(
             selected={w.id === selectedId}
             onSelect={() => onSelect(w.id)}
             onArchive={() => onArchive(w.id)}
+            onSettings={() => onSettings(w.id)}
           />,
         );
       }
@@ -188,6 +208,7 @@ function buildGroupedList(
       selected={w.id === selectedId}
       onSelect={() => onSelect(w.id)}
       onArchive={() => onArchive(w.id)}
+      onSettings={() => onSettings(w.id)}
     />
   ));
 }
@@ -197,6 +218,7 @@ export function Sidebar({
   selectedId,
   onSelect,
   onArchive,
+  onSettings,
   onNewWorkspace,
   onNewAtRepo,
   onCycleMode,
@@ -261,7 +283,7 @@ export function Sidebar({
           </div>
         )}
         {workspaces.length > 0 &&
-          buildGroupedList(workspaces, sidebarMode, selectedId, onSelect, onArchive, onNewAtRepo)}
+          buildGroupedList(workspaces, sidebarMode, selectedId, onSelect, onArchive, onSettings, onNewAtRepo)}
       </nav>
     </aside>
   );

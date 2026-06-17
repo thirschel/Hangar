@@ -64,6 +64,9 @@ const (
 	// same worktree/branch, optionally seeding it from an agent-written HANDOFF.md.
 	MethodRegenerateAgent = "RegenerateAgent"
 	MethodForceRegenerate = "ForceRegenerate"
+
+	// UpdateWorkspace (v6): update mutable workspace fields (title, program, shell).
+	MethodUpdateWorkspace = "UpdateWorkspace"
 )
 
 // Capture modes for MethodCapturePane.
@@ -153,6 +156,7 @@ type WorkspaceInfo struct {
 	// current phase ("" | "handoff" | "restarting" | "seeding").
 	Regenerating bool   `json:"regenerating"`
 	RegenPhase   string `json:"regenPhase,omitempty"`
+	Shell        string `json:"shell,omitempty"`
 }
 
 // FileDiffInfo is a per-file change summary in a WorkspaceDiff response.
