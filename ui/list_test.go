@@ -2,6 +2,7 @@ package ui
 
 import (
 	"claude-squad/session"
+	"path/filepath"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -246,4 +247,39 @@ func TestString_RendersAllModesSearchAndEmptyWithoutPanic(t *testing.T) {
 	// No-match state.
 	l.SetFilter("zzzzz")
 	require.Contains(t, l.String(), "no matches")
+}
+
+func TestListTracksReposByFullPath(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s, false)
+
+	root := t.TempDir()
+	instA := newPausedTestInstance(t, "a", filepath.Join(root, "owner-a", "app"))
+	instB := newPausedTestInstance(t, "b", filepath.Join(root, "owner-b", "app"))
+
+	l.AddInstance(instA)()
+	l.AddInstance(instB)()
+
+	require.Len(t, l.repos, 2)
+}
+
+func newPausedTestInstance(t *testing.T, title string, repoPath string) *session.Instance {
+	t.Helper()
+
+	inst, err := session.FromInstanceData(session.InstanceData{
+		Title:   title,
+		Path:    repoPath,
+		Branch:  "test-branch",
+		Status:  session.Paused,
+		Program: "echo",
+		Worktree: session.GitWorktreeData{
+			RepoPath:     repoPath,
+			WorktreePath: filepath.Join(t.TempDir(), title),
+			SessionName:  title,
+			BranchName:   "test-branch",
+		},
+	})
+	require.NoError(t, err)
+
+	return inst
 }
