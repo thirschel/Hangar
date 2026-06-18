@@ -56,6 +56,8 @@ function mockSettings(autoUpdate: boolean) {
     minimizeToTray: true,
     uiRefreshMs: 2000,
     autoUpdate,
+    terminalProfiles: [],
+    defaultTerminalProfileId: 'pwsh',
   };
 }
 
