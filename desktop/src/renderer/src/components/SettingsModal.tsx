@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal, type ModalHandle } from './Modal';
-import type { Settings } from '../../../main/settings';
+import type { Settings, ShellProfile } from '../../../main/settings';
 
 type AppInfo = {
   version: string;
@@ -20,6 +20,8 @@ type UpdateStatusInfo = {
   error?: string;
 };
 
+type SettingsTab = 'general' | 'terminal';
+
 type CsApiWithUpdates = typeof window.cs & {
   getAppInfo?: () => Promise<AppInfo>;
   checkForUpdate?: () => Promise<UpdateStatusInfo>;
@@ -37,9 +39,31 @@ type SettingsModalProps = {
   onSaved?: (next: Settings) => void;
 };
 
+function splitArgs(value: string): string[] | undefined {
+  const args = value.split(/\s+/).filter(Boolean);
+  return args.length > 0 ? args : undefined;
+}
+
+function normalizeTerminalDefaults(
+  terminalProfiles: ShellProfile[],
+  defaultTerminalProfileId: string,
+): Pick<Settings, 'terminalProfiles' | 'defaultTerminalProfileId'> {
+  const hasDefault = terminalProfiles.some((profile) => profile.id === defaultTerminalProfileId);
+  return {
+    terminalProfiles,
+    defaultTerminalProfileId: hasDefault ? defaultTerminalProfileId : (terminalProfiles[0]?.id ?? ''),
+  };
+}
+
+function profileInputId(profileId: string, field: string): string {
+  return `terminal-profile-${profileId}-${field}`;
+}
+
 export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Element {
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [busy, setBusy] = useState(false);
+  const [detectingShells, setDetectingShells] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [updateStatus, setUpdateStatus] = useState<string>('idle');
@@ -78,6 +102,13 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
   }, []);
 
   const patch = (p: Partial<Settings>): void => setSettings((s) => (s ? { ...s, ...p } : s));
+
+  const patchTerminalProfiles = (
+    terminalProfiles: ShellProfile[],
+    defaultTerminalProfileId = settings?.defaultTerminalProfileId ?? '',
+  ): void => {
+    patch(normalizeTerminalDefaults(terminalProfiles, defaultTerminalProfileId));
+  };
 
   const browseWorkspaceDir = async (): Promise<void> => {
     const dir = await window.cs.pickFolder();
@@ -131,6 +162,53 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
     await getCsApi().installUpdate?.();
   };
 
+  const addTerminalProfile = (): void => {
+    if (!settings) return;
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? `custom-${crypto.randomUUID()}`
+        : `custom-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const nextProfiles = [
+      ...settings.terminalProfiles,
+      { id, label: 'Custom shell', command: '', args: undefined },
+    ];
+    patchTerminalProfiles(nextProfiles, settings.defaultTerminalProfileId || id);
+  };
+
+  const updateTerminalProfile = (id: string, partial: Partial<ShellProfile>): void => {
+    if (!settings) return;
+    patchTerminalProfiles(
+      settings.terminalProfiles.map((profile) =>
+        profile.id === id ? { ...profile, ...partial } : profile,
+      ),
+    );
+  };
+
+  const removeTerminalProfile = (id: string): void => {
+    if (!settings) return;
+    const nextProfiles = settings.terminalProfiles.filter((profile) => profile.id !== id);
+    patchTerminalProfiles(nextProfiles, settings.defaultTerminalProfileId);
+  };
+
+  const detectShellProfiles = async (): Promise<void> => {
+    if (!settings) return;
+    setDetectingShells(true);
+    setError(null);
+    try {
+      const detected = await window.cs.detectShells();
+      const existingIds = new Set(settings.terminalProfiles.map((profile) => profile.id));
+      const merged = [
+        ...settings.terminalProfiles,
+        ...detected.filter((profile) => !existingIds.has(profile.id)),
+      ];
+      patchTerminalProfiles(merged, settings.defaultTerminalProfileId || merged[0]?.id || '');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDetectingShells(false);
+    }
+  };
+
   return (
     <Modal
       ref={modalRef}
@@ -138,6 +216,7 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
       onClose={onClose}
       busy={busy}
       error={error}
+      className="modal--settings"
       footer={
         <>
           <button type="button" onClick={() => modalRef.current?.close()} disabled={busy}>
@@ -158,183 +237,309 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
         <div>Loading…</div>
       ) : (
         <>
-          <label className="field">
-            <span>Default agent</span>
-            <input
-              value={settings.defaultProgram}
-              spellCheck={false}
-              onChange={(e) => patch({ defaultProgram: e.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Shell</span>
-            <select
-              value={settings.defaultShell}
-              onChange={(e) => patch({ defaultShell: e.target.value })}
+          <div className="settings-tabs" role="tablist" aria-label="Settings sections">
+            <button
+              id="settings-tab-general"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'general'}
+              aria-controls="settings-panel-general"
+              className={activeTab === 'general' ? 'settings-tab settings-tab--active' : 'settings-tab'}
+              onClick={() => setActiveTab('general')}
             >
-              <option value="cmd">cmd.exe</option>
-              <option value="powershell">PowerShell 5 (powershell.exe)</option>
-              <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Branch prefix</span>
-            <input
-              value={settings.branchPrefix}
-              spellCheck={false}
-              placeholder="username/"
-              onChange={(e) => patch({ branchPrefix: e.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>Default workspace location</span>
-            <div className="field__pick">
-              <input
-                value={settings.workspaceDir}
-                spellCheck={false}
-                placeholder="~/.hangar/worktrees (default)"
-                onChange={(e) => patch({ workspaceDir: e.target.value })}
-              />
-              <button type="button" onClick={() => void browseWorkspaceDir()}>
-                Browse…
-              </button>
-            </div>
-          </label>
-          <label className="field field--row">
-            <input
-              type="checkbox"
-              checked={settings.autoYes}
-              onChange={(e) => patch({ autoYes: e.target.checked })}
-            />
-            <span>Default Auto-Yes for new workspaces</span>
-          </label>
-          <label className="field field--row">
-            <input
-              type="checkbox"
-              checked={settings.notifications}
-              onChange={(e) => patch({ notifications: e.target.checked })}
-            />
-            <span>Desktop notifications</span>
-          </label>
-          <label className="field field--row">
-            <input
-              type="checkbox"
-              checked={settings.notificationSound}
-              onChange={(e) => patch({ notificationSound: e.target.checked })}
-            />
-            <span>Notification sound</span>
-          </label>
-          <label className="field field--row">
-            <input
-              type="checkbox"
-              checked={settings.minimizeToTray}
-              onChange={(e) => patch({ minimizeToTray: e.target.checked })}
-            />
-            <span>Minimize to tray on close</span>
-          </label>
-          <label className="field">
-            <span>UI refresh interval (ms)</span>
-            <input
-              type="number"
-              min={500}
-              max={60000}
-              step={500}
-              value={settings.uiRefreshMs}
-              onChange={(e) => patch({ uiRefreshMs: Number(e.target.value) })}
-            />
-          </label>
-          <div className="settings-divider" />
-
-          <label className="field field--row">
-            <input
-              type="checkbox"
-              checked={settings.autoUpdate}
-              onChange={(e) => patch({ autoUpdate: e.target.checked })}
-            />
-            <span>Auto-update (download updates automatically)</span>
-          </label>
-
-          <div className="field">
-            <span>Updates</span>
-            <div className="update-controls">
-              <button
-                type="button"
-                className="update-btn"
-                onClick={() => void handleCheckForUpdate()}
-                disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
-              >
-                {updateStatus === 'checking' ? 'Checking…' : 'Check for Updates'}
-              </button>
-              {updateVersion && updateStatus === 'available' && (
-                <button
-                  type="button"
-                  className="update-btn modal__primary"
-                  onClick={() => void handleDownloadUpdate()}
-                >
-                  Download v{updateVersion}
-                </button>
-              )}
-              {updateStatus === 'downloading' && (
-                <span className="update-progress">
-                  Downloading…{updateProgress != null ? ` ${Math.round(updateProgress)}%` : ''}
-                </span>
-              )}
-              {updateStatus === 'downloaded' && updateVersion && (
-                <button
-                  type="button"
-                  className="update-btn modal__primary"
-                  onClick={() => void handleInstallUpdate()}
-                >
-                  Install v{updateVersion} & Restart
-                </button>
-              )}
-              {updateStatus === 'not-available' && (
-                <span className="update-status">Up to date</span>
-              )}
-              {updateStatus === 'error' && updateError && (
-                <span className="update-status update-status--error">{updateError}</span>
-              )}
-            </div>
+              General
+            </button>
+            <button
+              id="settings-tab-terminal"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'terminal'}
+              aria-controls="settings-panel-terminal"
+              className={activeTab === 'terminal' ? 'settings-tab settings-tab--active' : 'settings-tab'}
+              onClick={() => setActiveTab('terminal')}
+            >
+              Terminal
+            </button>
           </div>
 
-          <div className="settings-divider" />
-
-          <div className="about-section">
-            <div className="about-row">
-              <span className="about-label">Version</span>
-              <span className="about-value">{appInfo?.version ?? '…'}</span>
-            </div>
-            <div className="about-row">
-              <span className="about-label">Electron</span>
-              <span className="about-value">
-                {appInfo ? `${appInfo.electronVersion} · Node ${appInfo.nodeVersion}` : '…'}
-              </span>
-            </div>
-            <div className="about-row">
-              <span className="about-label">Platform</span>
-              <span className="about-value">
-                {appInfo ? `${appInfo.platform} (${appInfo.arch})` : '…'}
-              </span>
-            </div>
-            <div className="about-row">
-              <span className="about-label">GitHub</span>
-              <span className="about-value">
-                <a
-                  href="#"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    if (appInfo?.githubUrl) void window.cs.openExternal(appInfo.githubUrl);
-                  }}
+          {activeTab === 'general' ? (
+            <div
+              id="settings-panel-general"
+              role="tabpanel"
+              aria-labelledby="settings-tab-general"
+              className="settings-tab-panel"
+            >
+              <label className="field">
+                <span>Default agent</span>
+                <input
+                  value={settings.defaultProgram}
+                  spellCheck={false}
+                  onChange={(e) => patch({ defaultProgram: e.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>Shell</span>
+                <select
+                  value={settings.defaultShell}
+                  onChange={(e) => patch({ defaultShell: e.target.value })}
                 >
-                  {appInfo?.githubUrl ?? '…'}
-                </a>
-              </span>
+                  <option value="cmd">cmd.exe</option>
+                  <option value="powershell">PowerShell 5 (powershell.exe)</option>
+                  <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Branch prefix</span>
+                <input
+                  value={settings.branchPrefix}
+                  spellCheck={false}
+                  placeholder="username/"
+                  onChange={(e) => patch({ branchPrefix: e.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>Default workspace location</span>
+                <div className="field__pick">
+                  <input
+                    value={settings.workspaceDir}
+                    spellCheck={false}
+                    placeholder="~/.hangar/worktrees (default)"
+                    onChange={(e) => patch({ workspaceDir: e.target.value })}
+                  />
+                  <button type="button" onClick={() => void browseWorkspaceDir()}>
+                    Browse…
+                  </button>
+                </div>
+              </label>
+              <label className="field field--row">
+                <input
+                  type="checkbox"
+                  checked={settings.autoYes}
+                  onChange={(e) => patch({ autoYes: e.target.checked })}
+                />
+                <span>Default Auto-Yes for new workspaces</span>
+              </label>
+              <label className="field field--row">
+                <input
+                  type="checkbox"
+                  checked={settings.notifications}
+                  onChange={(e) => patch({ notifications: e.target.checked })}
+                />
+                <span>Desktop notifications</span>
+              </label>
+              <label className="field field--row">
+                <input
+                  type="checkbox"
+                  checked={settings.notificationSound}
+                  onChange={(e) => patch({ notificationSound: e.target.checked })}
+                />
+                <span>Notification sound</span>
+              </label>
+              <label className="field field--row">
+                <input
+                  type="checkbox"
+                  checked={settings.minimizeToTray}
+                  onChange={(e) => patch({ minimizeToTray: e.target.checked })}
+                />
+                <span>Minimize to tray on close</span>
+              </label>
+              <label className="field">
+                <span>UI refresh interval (ms)</span>
+                <input
+                  type="number"
+                  min={500}
+                  max={60000}
+                  step={500}
+                  value={settings.uiRefreshMs}
+                  onChange={(e) => patch({ uiRefreshMs: Number(e.target.value) })}
+                />
+              </label>
+              <div className="settings-divider" />
+
+              <label className="field field--row">
+                <input
+                  type="checkbox"
+                  checked={settings.autoUpdate}
+                  onChange={(e) => patch({ autoUpdate: e.target.checked })}
+                />
+                <span>Auto-update (download updates automatically)</span>
+              </label>
+
+              <div className="field">
+                <span>Updates</span>
+                <div className="update-controls">
+                  <button
+                    type="button"
+                    className="update-btn"
+                    onClick={() => void handleCheckForUpdate()}
+                    disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+                  >
+                    {updateStatus === 'checking' ? 'Checking…' : 'Check for Updates'}
+                  </button>
+                  {updateVersion && updateStatus === 'available' && (
+                    <button
+                      type="button"
+                      className="update-btn modal__primary"
+                      onClick={() => void handleDownloadUpdate()}
+                    >
+                      Download v{updateVersion}
+                    </button>
+                  )}
+                  {updateStatus === 'downloading' && (
+                    <span className="update-progress">
+                      Downloading…{updateProgress != null ? ` ${Math.round(updateProgress)}%` : ''}
+                    </span>
+                  )}
+                  {updateStatus === 'downloaded' && updateVersion && (
+                    <button
+                      type="button"
+                      className="update-btn modal__primary"
+                      onClick={() => void handleInstallUpdate()}
+                    >
+                      Install v{updateVersion} & Restart
+                    </button>
+                  )}
+                  {updateStatus === 'not-available' && (
+                    <span className="update-status">Up to date</span>
+                  )}
+                  {updateStatus === 'error' && updateError && (
+                    <span className="update-status update-status--error">{updateError}</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="settings-divider" />
+
+              <div className="about-section">
+                <div className="about-row">
+                  <span className="about-label">Version</span>
+                  <span className="about-value">{appInfo?.version ?? '…'}</span>
+                </div>
+                <div className="about-row">
+                  <span className="about-label">Electron</span>
+                  <span className="about-value">
+                    {appInfo ? `${appInfo.electronVersion} · Node ${appInfo.nodeVersion}` : '…'}
+                  </span>
+                </div>
+                <div className="about-row">
+                  <span className="about-label">Platform</span>
+                  <span className="about-value">
+                    {appInfo ? `${appInfo.platform} (${appInfo.arch})` : '…'}
+                  </span>
+                </div>
+                <div className="about-row">
+                  <span className="about-label">GitHub</span>
+                  <span className="about-value">
+                    <a
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (appInfo?.githubUrl) void window.cs.openExternal(appInfo.githubUrl);
+                      }}
+                    >
+                      {appInfo?.githubUrl ?? '…'}
+                    </a>
+                  </span>
+                </div>
+                <div className="about-row">
+                  <span className="about-label">Author</span>
+                  <span className="about-value">{appInfo?.author ?? '…'}</span>
+                </div>
+              </div>
             </div>
-            <div className="about-row">
-              <span className="about-label">Author</span>
-              <span className="about-value">{appInfo?.author ?? '…'}</span>
+          ) : (
+            <div
+              id="settings-panel-terminal"
+              role="tabpanel"
+              aria-labelledby="settings-tab-terminal"
+              className="settings-tab-panel"
+            >
+              <div className="terminal-profiles__header">
+                <div>
+                  <div className="terminal-profiles__title">Terminal profiles</div>
+                  <div className="terminal-profiles__hint">
+                    Configure shells for the terminal dock. The selected default opens first.
+                  </div>
+                </div>
+                <div className="terminal-profiles__actions">
+                  <button type="button" onClick={addTerminalProfile}>
+                    Add profile
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void detectShellProfiles()}
+                    disabled={detectingShells}
+                  >
+                    {detectingShells ? 'Detecting…' : 'Auto-detect'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="terminal-profiles" aria-label="Terminal shell profiles">
+                {settings.terminalProfiles.length === 0 ? (
+                  <div className="terminal-profiles__empty">
+                    No terminal profiles yet. Add one manually or auto-detect installed shells.
+                  </div>
+                ) : (
+                  settings.terminalProfiles.map((profile) => (
+                    <div className="terminal-profile-row" key={profile.id}>
+                      <label className="terminal-profile-row__default">
+                        <input
+                          type="radio"
+                          name="default-terminal-profile"
+                          checked={settings.defaultTerminalProfileId === profile.id}
+                          onChange={() => patch({ defaultTerminalProfileId: profile.id })}
+                        />
+                        <span>Default</span>
+                      </label>
+                      <label className="field terminal-profile-row__field">
+                        <span>Label</span>
+                        <input
+                          id={profileInputId(profile.id, 'label')}
+                          value={profile.label}
+                          aria-label={`${profile.label || profile.id} label`}
+                          spellCheck={false}
+                          onChange={(e) => updateTerminalProfile(profile.id, { label: e.target.value })}
+                        />
+                      </label>
+                      <label className="field terminal-profile-row__field terminal-profile-row__command">
+                        <span>Command/exe</span>
+                        <input
+                          id={profileInputId(profile.id, 'command')}
+                          value={profile.command}
+                          aria-label={`${profile.label || profile.id} command`}
+                          spellCheck={false}
+                          onChange={(e) =>
+                            updateTerminalProfile(profile.id, { command: e.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="field terminal-profile-row__field">
+                        <span>Args</span>
+                        <input
+                          id={profileInputId(profile.id, 'args')}
+                          value={profile.args?.join(' ') ?? ''}
+                          aria-label={`${profile.label || profile.id} args`}
+                          spellCheck={false}
+                          placeholder="-NoLogo"
+                          onChange={(e) =>
+                            updateTerminalProfile(profile.id, { args: splitArgs(e.target.value) })
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        className="terminal-profile-row__remove"
+                        onClick={() => removeTerminalProfile(profile.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </>
       )}
     </Modal>

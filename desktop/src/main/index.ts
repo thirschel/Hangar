@@ -16,7 +16,15 @@ import {
   type DirEntry,
   type FileContents,
 } from './host-client';
-import { getSettings, applySettings, isFirstRun, markSetupComplete, type Settings } from './settings';
+import {
+  getSettings,
+  applySettings,
+  detectShells,
+  isFirstRun,
+  markSetupComplete,
+  type Settings,
+  type ShellProfile,
+} from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { log } from './logger';
@@ -58,6 +66,7 @@ const attachments = new Map<string, net.Socket>();
 // Shell sessions (sh_<workspaceId>) this app run created, for cleanup on archive
 // and quit so no orphan PowerShell is left in the daemon.
 const shellSessions = new Set<string>();
+const shellSessionPrograms = new Map<string, string>();
 let setupPromise: Promise<ControlClient> | null = null;
 let isQuitting = false;
 
@@ -141,6 +150,23 @@ function detachSession(sessionName: string): void {
 function detachAll(): void {
   for (const socket of attachments.values()) socket.destroy();
   attachments.clear();
+}
+
+function quoteProgramPart(part: string): string {
+  return /\s/.test(part) ? `"${part.replace(/"/g, '\\"')}"` : part;
+}
+
+function profileProgram(profile: ShellProfile): string {
+  return [profile.command, ...(profile.args ?? [])].map(quoteProgramPart).join(' ');
+}
+
+function defaultShellProgram(): string {
+  const settings = getSettings();
+  const profiles = settings.terminalProfiles ?? [];
+  const profile =
+    profiles.find((candidate) => candidate.id === settings.defaultTerminalProfileId) ??
+    profiles[0];
+  return profile ? profileProgram(profile) : 'cmd.exe';
 }
 
 function createWindow(): void {
@@ -261,25 +287,44 @@ ipcMain.handle(
   },
 );
 
-// Ensure a PowerShell session running in the workspace's worktree exists, and
+// Ensure a shell session running in the workspace's worktree exists, and
 // return its session name. Lazily created on first Terminal-tab open; kept alive
 // in the daemon so re-opening re-attaches the same shell (cwd/history preserved).
 ipcMain.handle(
   'cs:ensure-shell',
-  async (_event, args: { workspaceId: string; worktreePath: string; cols?: number; rows?: number }): Promise<string> => {
+  async (
+    _event,
+    args: { workspaceId: string; worktreePath: string; cols?: number; rows?: number; program?: string },
+  ): Promise<string> => {
     const session = `sh_${args.workspaceId}`;
+    const program = args.program?.trim() || defaultShellProgram();
     const client = await getControlClient();
     const has = await client.call({ method: 'HasSession', session });
-    if (!has.ok || !has.exists) {
+    const tracked = shellSessionPrograms.get(session);
+    // Only respawn when we KNOW the running shell differs from the requested one.
+    // An untracked-but-alive session (e.g. reattaching to a daemon-persisted shell
+    // after an app restart) is left intact so its history/processes survive.
+    const programChanged = tracked !== undefined && tracked !== program;
+    if (has.ok && has.exists && programChanged) {
+      detachSession(session);
+      const killed = await client.call({ method: 'KillSession', session });
+      if (!killed.ok) throw new Error(killed.error || 'failed to restart shell');
+    }
+    if (!has.ok || !has.exists || programChanged) {
       const created = await client.call({
         method: 'CreateSession',
         session,
-        program: 'powershell.exe -NoLogo',
+        program,
         workDir: args.worktreePath,
         cols: args.cols ?? DEFAULT_COLS,
         rows: args.rows ?? DEFAULT_ROWS,
       });
       if (!created.ok) throw new Error(created.error || 'failed to start shell');
+      shellSessionPrograms.set(session, program);
+    } else if (tracked === undefined) {
+      // Reattached to a pre-existing session; record its assumed program so a
+      // later explicit shell switch still triggers a respawn.
+      shellSessionPrograms.set(session, program);
     }
     shellSessions.add(session);
     return session;
@@ -291,6 +336,7 @@ ipcMain.handle('cs:close-shell', async (_event, workspaceId: string): Promise<vo
   const session = `sh_${workspaceId}`;
   detachSession(session);
   shellSessions.delete(session);
+  shellSessionPrograms.delete(session);
   try {
     const client = await getControlClient();
     await client.call({ method: 'KillSession', session });
@@ -374,6 +420,8 @@ ipcMain.handle('cs:get-settings', async (): Promise<Settings> => getSettings());
 ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Promise<Settings> => {
   return applySettings(patch);
 });
+
+ipcMain.handle('cs:detect-shells', async (): Promise<ShellProfile[]> => detectShells());
 
 ipcMain.handle('cs:complete-setup', async (_event, opts: { autoUpdate: boolean }): Promise<void> => {
   applySettings({ autoUpdate: opts.autoUpdate });
