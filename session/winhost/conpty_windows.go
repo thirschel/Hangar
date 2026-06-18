@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os/exec"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +50,13 @@ type conptySession struct {
 	// non-duplicated live stream.
 	subMu sync.Mutex
 	subs  map[*subscriber]struct{}
+	// decModes tracks the agent's active DEC private modes (alt-screen, mouse
+	// tracking, bracketed paste, ...) parsed from its output stream, so subscribe
+	// can replay them to a freshly attaching client whose xterm would otherwise
+	// miss the modes the agent set at startup. modeTail buffers a mode sequence
+	// split across reads. Both are guarded by subMu.
+	decModes map[int]bool
+	modeTail []byte
 
 	mu           sync.Mutex
 	autoYes      bool
@@ -86,6 +95,7 @@ func newConptySession(name, program, workDir, shell string, cols, rows int, auto
 		autoYesArmed: true,
 		emu:          vt.NewSafeEmulator(cols, rows),
 		subs:         make(map[*subscriber]struct{}),
+		decModes:     make(map[int]bool),
 		autoYesStop:  make(chan struct{}),
 	}
 }
@@ -141,6 +151,7 @@ func (s *conptySession) drain() {
 			data := buf[:n]
 			s.subMu.Lock()
 			_, _ = s.emu.Write(data) // SafeEmulator is internally locked
+			s.trackModesLocked(data)
 			s.mu.Lock()
 			s.rawRing = appendRing(s.rawRing, data, rawRingMax)
 			s.mu.Unlock()
@@ -181,10 +192,142 @@ func (s *conptySession) subscribe(cols, rows int) ([]byte, *subscriber) {
 	s.subMu.Lock()
 	defer s.subMu.Unlock()
 	// Clear+home, then the rendered screen, so the client repaints cleanly.
-	snap := append([]byte("\x1b[2J\x1b[H"), []byte(s.emu.Render())...)
+	// Replay the agent's terminal modes (alt-screen, mouse tracking, bracketed
+	// paste, ...) before the rendered screen so the client's xterm enters the same
+	// state the agent set at startup. Without this, an alt-screen TUI is repainted
+	// into xterm's normal buffer (frames accumulate) and wheel/mouse never reach it.
+	snap := s.replayModesLocked()
+	snap = append(snap, "\x1b[2J\x1b[H"...)
+	snap = append(snap, []byte(s.emu.Render())...)
 	sub := &subscriber{ch: make(chan []byte, 1024)}
 	s.subs[sub] = struct{}{}
 	return snap, sub
+}
+
+// modeReplayDeny lists DEC private modes we never replay to the client's xterm.
+// 9001 is ConPTY/Windows-Terminal win32-input-mode, which xterm does not use.
+var modeReplayDeny = map[int]bool{9001: true}
+
+// altScreenModes are replayed first so the snapshot's clear/home/render lands in
+// the alternate buffer rather than the normal buffer.
+var altScreenModes = []int{47, 1047, 1049}
+
+// trackModesLocked updates the active DEC private mode set from a chunk of agent
+// output. It recognizes CSI ? <params> h|l (set/reset), where params may list
+// several modes (e.g. ESC[?1002;1006h). A sequence split across reads is buffered
+// in modeTail and re-scanned with the next chunk. Caller must hold subMu.
+func (s *conptySession) trackModesLocked(data []byte) {
+	buf := data
+	if len(s.modeTail) > 0 {
+		buf = append(s.modeTail, data...)
+		s.modeTail = nil
+	}
+	for i := 0; i < len(buf); {
+		if buf[i] != 0x1b {
+			i++
+			continue
+		}
+		// Possible CSI private-mode sequence starting at ESC (buf[i]).
+		j := i + 1
+		if j >= len(buf) {
+			s.bufferTailLocked(buf, i)
+			return
+		}
+		if buf[j] != '[' {
+			i++
+			continue
+		}
+		j++
+		if j >= len(buf) {
+			s.bufferTailLocked(buf, i)
+			return
+		}
+		if buf[j] != '?' {
+			i++
+			continue
+		}
+		j++
+		start := j
+		for j < len(buf) && (buf[j] == ';' || (buf[j] >= '0' && buf[j] <= '9')) {
+			j++
+		}
+		if j >= len(buf) {
+			s.bufferTailLocked(buf, i)
+			return
+		}
+		if final := buf[j]; final == 'h' || final == 'l' {
+			set := final == 'h'
+			for _, m := range splitModeParams(buf[start:j]) {
+				if m == 0 {
+					continue
+				}
+				if set {
+					s.decModes[m] = true
+				} else {
+					delete(s.decModes, m)
+				}
+			}
+		}
+		i = j + 1
+	}
+}
+
+// bufferTailLocked stores an incomplete mode sequence (from buf[from:]) to be
+// re-scanned with the next chunk, bounded so malformed input can't grow it.
+func (s *conptySession) bufferTailLocked(buf []byte, from int) {
+	if len(buf)-from <= 64 {
+		s.modeTail = append([]byte(nil), buf[from:]...)
+	}
+}
+
+// splitModeParams parses a ';'-separated list of decimal mode numbers. Empty or
+// non-numeric segments are skipped.
+func splitModeParams(b []byte) []int {
+	if len(b) == 0 {
+		return nil
+	}
+	parts := strings.Split(string(b), ";")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(p); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// replayModesLocked builds the DEC private mode SET sequences that restore the
+// agent's terminal state on a freshly attaching client. Alt-screen modes are
+// emitted first; the rest are emitted in a deterministic order. Caller must hold
+// subMu.
+func (s *conptySession) replayModesLocked() []byte {
+	if len(s.decModes) == 0 {
+		return nil
+	}
+	var b []byte
+	emit := func(m int) { b = append(b, []byte(fmt.Sprintf("\x1b[?%dh", m))...) }
+	isAlt := make(map[int]bool, len(altScreenModes))
+	for _, m := range altScreenModes {
+		isAlt[m] = true
+		if s.decModes[m] && !modeReplayDeny[m] {
+			emit(m)
+		}
+	}
+	rest := make([]int, 0, len(s.decModes))
+	for m := range s.decModes {
+		if isAlt[m] || modeReplayDeny[m] {
+			continue
+		}
+		rest = append(rest, m)
+	}
+	sort.Ints(rest)
+	for _, m := range rest {
+		emit(m)
+	}
+	return b
 }
 
 // unsubscribe removes a subscriber and resizes back to the detached/preview size.
@@ -272,6 +415,16 @@ func (s *conptySession) capture(full, withANSI bool) string {
 		return scr
 	}
 	return sb + "\n" + scr
+}
+
+func (s *conptySession) captureHistory(includeScreen bool) (ansi string, altScreen bool, lines int) {
+	ansi = scrollbackANSI(s.emu)
+	if includeScreen {
+		ansi += s.emu.Render()
+	}
+	altScreen = s.emu.IsAltScreen()
+	lines = s.emu.ScrollbackLen()
+	return ansi, altScreen, lines
 }
 
 func (s *conptySession) hasUpdated() (bool, bool) {
@@ -469,6 +622,67 @@ func scrollbackPlain(se *vt.SafeEmulator) string {
 		lines = append(lines, strings.TrimRight(rowText(se, y, true, w), " "))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func scrollbackANSI(se *vt.SafeEmulator) string {
+	n := se.ScrollbackLen()
+	if n == 0 {
+		return ""
+	}
+	w := se.Width()
+	var b strings.Builder
+	for y := 0; y < n; y++ {
+		renderScrollbackANSIRow(&b, se, y, w)
+		b.WriteString("\r\n")
+	}
+	return b.String()
+}
+
+func renderScrollbackANSIRow(b *strings.Builder, se *vt.SafeEmulator, y, w int) {
+	var pen uv.Style
+	var pending strings.Builder
+	for x := 0; x < w; {
+		c := se.ScrollbackCellAt(x, y)
+		if c == nil {
+			pending.WriteByte(' ')
+			x++
+			continue
+		}
+		if c.IsZero() {
+			x++
+			continue
+		}
+		if c.Equal(&uv.EmptyCell) {
+			if !pen.IsZero() {
+				b.WriteString("\x1b[0m")
+				pen = uv.Style{}
+			}
+			pending.WriteByte(' ')
+			x++
+			continue
+		}
+		if pending.Len() > 0 {
+			b.WriteString(pending.String())
+			pending.Reset()
+		}
+		if c.Style.IsZero() && !pen.IsZero() {
+			b.WriteString("\x1b[0m")
+			pen = uv.Style{}
+		}
+		if !c.Style.Equal(&pen) {
+			b.WriteString(c.Style.Diff(&pen))
+			pen = c.Style
+		}
+		b.WriteString(c.Content)
+		if c.Width > 1 {
+			x += c.Width
+		} else {
+			x++
+		}
+	}
+	if !pen.IsZero() {
+		b.WriteString("\x1b[0m")
+	}
 }
 
 func rowText(se *vt.SafeEmulator, y int, scrollback bool, w int) string {
