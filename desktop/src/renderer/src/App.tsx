@@ -10,6 +10,13 @@ import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import { SessionBrowserModal } from './components/SessionBrowserModal';
 import { WelcomeModal } from './components/WelcomeModal';
+import {
+  countByStatus,
+  filterByStatus,
+  isStatusFilter,
+  nextStatusFilter,
+  type StatusFilter,
+} from './components/workspace-status';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -27,6 +34,7 @@ const GUTTER_W = 6;
 // Sidebar state persistence keys.
 const SIDEBAR_MODE_KEY = 'cs.sidebarMode';
 const SIDEBAR_ORDER_KEY = 'cs.workspaceOrder';
+const STATUS_FILTER_KEY = 'cs.statusFilter';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -61,6 +69,10 @@ export function App(): JSX.Element {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(() => {
     const saved = localStorage.getItem(SIDEBAR_MODE_KEY);
     return SIDEBAR_MODES.includes(saved as SidebarMode) ? (saved as SidebarMode) : 'manual';
+  });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    const saved = localStorage.getItem(STATUS_FILTER_KEY);
+    return isStatusFilter(saved) ? saved : 'all';
   });
   const [sidebarFilter, setSidebarFilter] = useState('');
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => {
@@ -280,6 +292,15 @@ export function App(): JSX.Element {
           e.preventDefault();
           searchInputRef.current?.focus();
           break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          setStatusFilter((cur) => {
+            const next = nextStatusFilter(cur);
+            localStorage.setItem(STATUS_FILTER_KEY, next);
+            return next;
+          });
+          break;
         case 'Escape':
           e.preventDefault();
           if (document.activeElement === searchInputRef.current) {
@@ -383,6 +404,7 @@ export function App(): JSX.Element {
 
   workspacesRef.current = workspaces;
   connectionRef.current = connection;
+  const statusCounts = countByStatus(workspaces);
 
   // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
   const displayedWorkspaces = (() => {
@@ -422,6 +444,7 @@ export function App(): JSX.Element {
         (w) => w.title.toLowerCase().includes(q) || w.branch.toLowerCase().includes(q),
       );
     }
+    list = filterByStatus(list, statusFilter);
 
     return list;
   })();
@@ -465,6 +488,11 @@ export function App(): JSX.Element {
       localStorage.setItem(SIDEBAR_MODE_KEY, next);
       return next;
     });
+  }, []);
+
+  const onStatusFilterChange = useCallback((value: StatusFilter): void => {
+    localStorage.setItem(STATUS_FILTER_KEY, value);
+    setStatusFilter(value);
   }, []);
 
   const onConfirmRemove = useCallback(
@@ -579,6 +607,9 @@ export function App(): JSX.Element {
           sidebarMode={sidebarMode}
           filter={sidebarFilter}
           onFilterChange={setSidebarFilter}
+          statusFilter={statusFilter}
+          counts={statusCounts}
+          onStatusFilterChange={onStatusFilterChange}
           searchInputRef={searchInputRef}
         />
         <CenterPane
@@ -727,6 +758,7 @@ export function App(): JSX.Element {
                 <h3>Sidebar</h3>
                 <dl>
                   <dt>s / S</dt><dd>Cycle sidebar mode ↔</dd>
+                  <dt>f</dt><dd>Filter by status</dd>
                   <dt>/</dt><dd>Search / filter workspaces</dd>
                   <dt>J / K</dt><dd>Reorder (Manual mode only)</dd>
                 </dl>
@@ -736,6 +768,7 @@ export function App(): JSX.Element {
                 <dl>
                   <dt>?</dt><dd>Toggle this help</dd>
                   <dt>Ctrl+,</dt><dd>Settings</dd>
+                  <dt>Ctrl+F</dt><dd>Find in terminal</dd>
                   <dt>q</dt><dd>Quit</dd>
                   <dt>Esc</dt><dd>Close search / help</dd>
                 </dl>

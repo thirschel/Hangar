@@ -55,7 +55,7 @@ type Menu struct {
 	keyDown keys.KeyName
 }
 
-var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyBrowse, keys.KeyHelp, keys.KeyQuit}
+var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyBrowse, keys.KeyStatusFilter, keys.KeyHelp, keys.KeyQuit}
 var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var searchMenuOptions = []keys.KeyName{keys.KeySearchCancel, keys.KeySearchApply}
@@ -152,7 +152,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// System group (includes sidebar view controls)
-	systemGroup := []keys.KeyName{keys.KeySearch, keys.KeyModeCycle, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeySearch, keys.KeyStatusFilter, keys.KeyModeCycle, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
 	// Combine all groups
 	options = append(options, actionGroup...)

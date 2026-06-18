@@ -1,6 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
+import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import { Terminal } from '@xterm/xterm';
-import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { isAtBottom, normalizeHistory, shouldReconcile } from './termHistory';
 import { appHandlesWheel, encodeWheelSgr } from './termWheel';
@@ -17,6 +18,15 @@ export type TermViewHandle = {
   refit: () => void;
 };
 
+const SEARCH_OPTIONS = {
+  decorations: {
+    matchBackground: '#4b3f22',
+    matchOverviewRuler: '#e0af68',
+    activeMatchBackground: '#875f00',
+    activeMatchColorOverviewRuler: '#ffd166',
+  },
+} satisfies Pick<ISearchOptions, 'decorations'>;
+
 // TermView is a reusable xterm bound to one daemon session via the session-scoped
 // attach IPC, so the agent and an in-worktree shell can stream concurrently. It
 // keeps copy/paste (Ctrl+Shift+C / Ctrl+C-with-selection / Ctrl+Shift+V / right
@@ -27,8 +37,98 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
 ): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const refitRef = useRef<() => void>(() => {});
+  const termRef = useRef<Terminal | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const openFindRef = useRef<() => void>(() => {});
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState('');
+  const [findCaseSensitive, setFindCaseSensitive] = useState(false);
+  const [findResults, setFindResults] = useState({ resultIndex: -1, resultCount: 0 });
 
   useImperativeHandle(ref, () => ({ refit: () => refitRef.current() }), []);
+
+  const focusFindInput = useCallback((): void => {
+    window.setTimeout(() => {
+      findInputRef.current?.focus();
+      findInputRef.current?.select();
+    }, 0);
+  }, []);
+
+  const openFind = useCallback((): void => {
+    setFindOpen(true);
+    focusFindInput();
+  }, [focusFindInput]);
+
+  useEffect(() => {
+    openFindRef.current = openFind;
+  }, [openFind]);
+
+  const searchOptions = useCallback(
+    (incremental = false): ISearchOptions => ({
+      ...SEARCH_OPTIONS,
+      caseSensitive: findCaseSensitive,
+      incremental,
+    }),
+    [findCaseSensitive],
+  );
+
+  const clearFind = useCallback((): void => {
+    searchAddonRef.current?.clearDecorations();
+    termRef.current?.clearSelection();
+    setFindResults({ resultIndex: -1, resultCount: 0 });
+  }, []);
+
+  const runFindNext = useCallback(
+    (query = findQuery, incremental = false): void => {
+      if (!query) {
+        clearFind();
+        return;
+      }
+      searchAddonRef.current?.findNext(query, searchOptions(incremental));
+    },
+    [clearFind, findQuery, searchOptions],
+  );
+
+  const runFindPrevious = useCallback((): void => {
+    if (!findQuery) {
+      clearFind();
+      return;
+    }
+    searchAddonRef.current?.findPrevious(findQuery, searchOptions());
+  }, [clearFind, findQuery, searchOptions]);
+
+  const closeFind = useCallback((): void => {
+    setFindOpen(false);
+    clearFind();
+    termRef.current?.focus();
+  }, [clearFind]);
+
+  const onFindQueryChange = useCallback(
+    (value: string): void => {
+      setFindQuery(value);
+      if (!value) {
+        clearFind();
+        return;
+      }
+      searchAddonRef.current?.findNext(value, searchOptions(true));
+    },
+    [clearFind, searchOptions],
+  );
+
+  const toggleFindCase = useCallback((): void => {
+    setFindCaseSensitive((cur) => {
+      const next = !cur;
+      if (findQuery) {
+        searchAddonRef.current?.findNext(findQuery, {
+          ...SEARCH_OPTIONS,
+          caseSensitive: next,
+          incremental: true,
+        });
+      }
+      return next;
+    });
+  }, [findQuery]);
 
   useEffect(() => {
     if (!containerRef.current || !sessionName) {
@@ -57,7 +157,12 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       },
     } as ConstructorParameters<typeof Terminal>[0]);
     const fit = new FitAddon();
+    const search = new SearchAddon();
     term.loadAddon(fit);
+    term.loadAddon(search);
+    termRef.current = term;
+    searchAddonRef.current = search;
+    const searchResultsDisposable = search.onDidChangeResults((results) => setFindResults(results));
     term.open(containerRef.current);
 
     const termIsAtBottom = (): boolean =>
@@ -106,6 +211,11 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           term.clearSelection();
           return false;
         }
+      }
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && key === 'f') {
+        e.preventDefault();
+        openFindRef.current();
+        return false;
       }
       return true;
     });
@@ -289,10 +399,14 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       observer.disconnect();
       scrollDisposable.dispose();
       inputDisposable.dispose();
+      searchResultsDisposable.dispose();
       unsubData();
       unsubClosed();
       window.cs.detachSession(session);
+      search.dispose();
       term.dispose();
+      if (termRef.current === term) termRef.current = null;
+      if (searchAddonRef.current === search) searchAddonRef.current = null;
       refitRef.current = () => {};
     };
   }, [sessionName, endedLabel]);
@@ -307,7 +421,73 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       </div>
     );
   }
-  return <div ref={containerRef} className="agent-terminal" />;
+  const findCounter =
+    findQuery && findResults.resultCount > 0 && findResults.resultIndex >= 0
+      ? `${findResults.resultIndex + 1} / ${findResults.resultCount}`
+      : findQuery
+        ? 'No results'
+        : '';
+
+  return (
+    <div className="agent-terminal agent-terminal--find-host">
+      <div ref={containerRef} className="agent-terminal__xterm" />
+      {findOpen && (
+        <div className="term-find" role="search" onWheel={(e) => e.stopPropagation()}>
+          <input
+            ref={findInputRef}
+            className="term-find__input"
+            type="text"
+            placeholder="Find…"
+            value={findQuery}
+            onChange={(e) => onFindQueryChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (e.shiftKey) runFindPrevious();
+                else runFindNext();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                closeFind();
+              }
+              e.stopPropagation();
+            }}
+            data-is-input="true"
+          />
+          <span className="term-find__counter" aria-live="polite">
+            {findCounter}
+          </span>
+          <button
+            className="term-find__button"
+            type="button"
+            title="Previous match (Shift+Enter)"
+            onClick={runFindPrevious}
+          >
+            ↑
+          </button>
+          <button
+            className="term-find__button"
+            type="button"
+            title="Next match (Enter)"
+            onClick={() => runFindNext()}
+          >
+            ↓
+          </button>
+          <button
+            className={`term-find__button${findCaseSensitive ? ' is-active' : ''}`}
+            type="button"
+            title="Match case"
+            aria-pressed={findCaseSensitive}
+            onClick={toggleFindCase}
+          >
+            Aa
+          </button>
+          <button className="term-find__button" type="button" title="Close (Esc)" onClick={closeFind}>
+            ×
+          </button>
+        </div>
+      )}
+    </div>
+  );
 });
 
 function toBytes(chunk: Uint8Array): Uint8Array {
