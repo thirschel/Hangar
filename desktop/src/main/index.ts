@@ -156,6 +156,11 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // Let the renderer play the notification chime without a prior user
+      // gesture, and keep it responsive while hidden/minimized to the tray so
+      // the sound fires even when the window isn't focused.
+      autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false,
     },
   });
 
@@ -406,8 +411,17 @@ ipcMain.handle('cs:install-update', async () => {
 ipcMain.handle(
   'cs:notify',
   async (_event, n: { title: string; body: string; workspaceId?: string }): Promise<void> => {
-    if (!getSettings().notifications || !Notification.isSupported()) return;
-    const notification = new Notification({ title: n.title, body: n.body, icon: buildAsset('icon.png') });
+    const settings = getSettings();
+    if (!settings.notifications || !Notification.isSupported()) return;
+    // Suppress the OS default chime: when the user enabled the in-app sound we
+    // play our own (below), and when they muted it there should be no sound at
+    // all. Either way the native ding would double up, so silence it here.
+    const notification = new Notification({
+      title: n.title,
+      body: n.body,
+      icon: buildAsset('icon.png'),
+      silent: true,
+    });
     notification.on('click', () => {
       if (mainWindow) {
         if (mainWindow.isMinimized()) mainWindow.restore();
@@ -417,6 +431,7 @@ ipcMain.handle(
       if (n.workspaceId) sendToRenderer('cs:focus-workspace', n.workspaceId);
     });
     notification.show();
+    if (settings.notificationSound) sendToRenderer('cs:play-notification-sound');
   },
 );
 

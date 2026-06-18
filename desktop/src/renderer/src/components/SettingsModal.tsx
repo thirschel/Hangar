@@ -219,6 +219,14 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
           <label className="field field--row">
             <input
               type="checkbox"
+              checked={settings.notificationSound}
+              onChange={(e) => patch({ notificationSound: e.target.checked })}
+            />
+            <span>Notification sound</span>
+          </label>
+          <label className="field field--row">
+            <input
+              type="checkbox"
               checked={settings.minimizeToTray}
               onChange={(e) => patch({ minimizeToTray: e.target.checked })}
             />

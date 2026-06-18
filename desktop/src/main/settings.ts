@@ -18,6 +18,7 @@ export type DaemonConfig = {
 // daemon's config keys (the daemon rewrites config.json and would lose unknowns).
 export type AppSettings = {
   notifications: boolean;
+  notificationSound: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
   autoUpdate: boolean;
@@ -32,6 +33,7 @@ export type Settings = {
   branchPrefix: string;
   workspaceDir: string;
   notifications: boolean;
+  notificationSound: boolean;
   minimizeToTray: boolean;
   uiRefreshMs: number;
   autoUpdate: boolean;
@@ -39,6 +41,7 @@ export type Settings = {
 
 const APP_DEFAULTS: AppSettings = {
   notifications: true,
+  notificationSound: true,
   minimizeToTray: true,
   uiRefreshMs: 2000,
   autoUpdate: false,
@@ -94,6 +97,7 @@ export function getSettings(): Settings {
     branchPrefix: (cfg.branch_prefix as string) || '',
     workspaceDir: (cfg.worktree_dir as string) || '',
     notifications: app.notifications,
+    notificationSound: app.notificationSound,
     minimizeToTray: app.minimizeToTray,
     uiRefreshMs: app.uiRefreshMs,
     autoUpdate: app.autoUpdate,
@@ -121,6 +125,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
 
   const app = readAppSettings();
   if (patch.notifications !== undefined) app.notifications = patch.notifications;
+  if (patch.notificationSound !== undefined) app.notificationSound = patch.notificationSound;
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
   if (patch.autoUpdate !== undefined) app.autoUpdate = patch.autoUpdate;
   if (patch.uiRefreshMs !== undefined) {

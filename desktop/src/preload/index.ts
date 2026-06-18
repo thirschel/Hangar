@@ -263,6 +263,8 @@ const api = {
   onFirstRun: (callback: () => void): Unsubscribe => on('cs:first-run', callback),
   onFocusWorkspace: (callback: (workspaceId: string) => void): Unsubscribe =>
     on('cs:focus-workspace', callback),
+  onPlayNotificationSound: (callback: () => void): Unsubscribe =>
+    on('cs:play-notification-sound', callback),
   completeSetup: (opts: { autoUpdate: boolean }): Promise<void> =>
     ipcRenderer.invoke('cs:complete-setup', opts),
   sendInput: (session: string, data: string): void =>
