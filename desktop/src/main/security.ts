@@ -9,6 +9,12 @@ import path from 'node:path';
 
 const isWindows = process.platform === 'win32';
 
+// A filesystem path canonicaliser (e.g. fs.realpathSync.native). Injected rather
+// than imported so this module stays pure and unit-testable with a fake.
+export type RealpathFn = (p: string) => string;
+
+const identityRealpath: RealpathFn = (p) => p;
+
 function segEqual(a: string, b: string): boolean {
   return isWindows ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
@@ -47,14 +53,62 @@ export function isStrictlyUnder(base: string, target: string): boolean {
   return true;
 }
 
+// canonicalize resolves p to an absolute path and then, best-effort, through the
+// filesystem (realpath) so symlinks, Windows junctions and 8.3 short names are
+// collapsed to their real target. It mirrors the Go daemon's canonicalizePath
+// (session/git/pathsafe.go): if realpath fails (e.g. the path does not exist yet)
+// it falls back to the lexical absolute path, exactly like EvalSymlinks-on-error.
+export function canonicalize(p: string, realpath: RealpathFn = identityRealpath): string {
+  const abs = path.resolve(p);
+  try {
+    return realpath(abs);
+  } catch {
+    return abs;
+  }
+}
+
 // assertAuthorizedWorktree throws unless worktreePath is a managed worktree (a path
-// strictly under base). The renderer supplies worktreePath to the filesystem/shell
-// IPC handlers; without this gate a compromised renderer could point it at any
-// directory (arbitrary file read, or a shell spawned in an arbitrary cwd) — F-23.
-export function assertAuthorizedWorktree(base: string, worktreePath: string): void {
-  if (typeof worktreePath !== 'string' || worktreePath.length === 0 || !isStrictlyUnder(base, worktreePath)) {
+// strictly under base, after both are canonicalised). The renderer supplies
+// worktreePath to the filesystem/shell IPC handlers; without this gate a compromised
+// renderer could point it at any directory (arbitrary file read, or a shell spawned
+// in an arbitrary cwd) — F-23. Canonicalising defeats a symlink/junction inside the
+// worktrees root that lexically appears contained but resolves elsewhere. Returns
+// the canonical worktree root for the caller to resolve relative paths against.
+export function assertAuthorizedWorktree(
+  base: string,
+  worktreePath: string,
+  realpath: RealpathFn = identityRealpath,
+): string {
+  if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
     throw new Error('worktreePath is not an authorized workspace');
   }
+  const canonicalBase = canonicalize(base, realpath);
+  const canonicalWorktree = canonicalize(worktreePath, realpath);
+  if (!isStrictlyUnder(canonicalBase, canonicalWorktree)) {
+    throw new Error('worktreePath is not an authorized workspace');
+  }
+  return canonicalWorktree;
+}
+
+// resolveWithinWorktree resolves a renderer-supplied relative path against an
+// already-canonical worktree root and returns the absolute target, rejecting both
+// lexical traversal (../) and symlink/junction escape (a link inside the worktree —
+// e.g. planted by a malicious cloned repo — that resolves outside it). The canonical
+// containment re-check is what closes the F-23 read-outside-the-worktree vector.
+export function resolveWithinWorktree(
+  canonicalRoot: string,
+  rel: string,
+  realpath: RealpathFn = identityRealpath,
+): string {
+  const target = path.resolve(canonicalRoot, rel || '.');
+  if (target !== canonicalRoot && !target.startsWith(canonicalRoot + path.sep)) {
+    throw new Error('path is outside the worktree');
+  }
+  const canonicalTarget = canonicalize(target, realpath);
+  if (canonicalTarget !== canonicalRoot && !isStrictlyUnder(canonicalRoot, canonicalTarget)) {
+    throw new Error('path is outside the worktree');
+  }
+  return target;
 }
 
 // classifyWindowOpen decides what to do with a renderer window-open request: only
@@ -86,6 +140,10 @@ export function isAllowedNavigationUrl(appUrl: string, targetUrl: string): boole
   }
   if (appU.protocol !== target.protocol) return false;
   if (appU.protocol === 'file:') {
+    // file: URLs must be local. A non-empty host means a UNC/SMB target
+    // (file://server/share) that Chromium would load from a remote machine, so
+    // require the host to match the app's (empty for a normal local file: URL).
+    if (target.hostname !== appU.hostname) return false;
     // Allow only navigation within the renderer's own directory. file: URLs have
     // a "null" origin, so compare the directory prefix of the pathname instead.
     const dir = appU.pathname.slice(0, appU.pathname.lastIndexOf('/') + 1);
