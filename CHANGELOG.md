@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.2.0](https://github.com/thirschel/Hangar/compare/v1.1.1...v1.2.0) (2026-06-18)
+
+### Features
+
+* **desktop:** add copy-to-clipboard tooltips to breadcrumbs ([#46](https://github.com/thirschel/Hangar/issues/46)) ([1f37e25](https://github.com/thirschel/Hangar/commit/1f37e250c4e531ad52f1cae34b86360b35135b8b))
+
 ## [1.1.1](https://github.com/thirschel/Hangar/compare/v1.1.0...v1.1.1) (2026-06-18)
 
 ### Bug Fixes
