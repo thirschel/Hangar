@@ -3,6 +3,7 @@ import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
+import { BreadcrumbCopy } from './components/BreadcrumbCopy';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
 import { SettingsModal } from './components/SettingsModal';
 import { RegenerateModal } from './components/RegenerateModal';
@@ -528,13 +529,21 @@ export function App(): JSX.Element {
   return (
     <div className="app-shell">
       <header className="top-bar">
-        <div className="brand">Hangar</div>
         <div className="breadcrumb">
           {selected ? (
             <>
-              <span>{selected.title}</span>
+              <BreadcrumbCopy
+                label={selected.title}
+                path={selected.repoPath}
+                tipAriaLabel="Copy repo path"
+              />
               <span className="breadcrumb__sep">▸</span>
-              <span className="breadcrumb__branch">{selected.branch}</span>
+              <BreadcrumbCopy
+                label={selected.branch}
+                path={selected.worktreePath}
+                className="breadcrumb__branch"
+                tipAriaLabel="Copy workspace path"
+              />
             </>
           ) : (
             <span>Workspaces</span>
