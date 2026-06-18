@@ -49,6 +49,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
   const [findQuery, setFindQuery] = useState('');
   const [findCaseSensitive, setFindCaseSensitive] = useState(false);
   const [findResults, setFindResults] = useState({ resultIndex: -1, resultCount: 0 });
+  // True when the live buffer is the alternate screen (fullscreen TUIs like the
+  // copilot/Claude agents). The alt-screen keeps no scrollback, so find can only
+  // match the visible screen — we surface that in the find box.
+  const [findAltScreen, setFindAltScreen] = useState(false);
 
   useImperativeHandle(
     ref,
@@ -63,10 +67,15 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     }, 0);
   }, []);
 
+  const refreshFindAltScreen = useCallback((): void => {
+    setFindAltScreen(termRef.current?.buffer.active.type === 'alternate');
+  }, []);
+
   const openFind = useCallback((): void => {
     setFindOpen(true);
+    refreshFindAltScreen();
     focusFindInput();
-  }, [focusFindInput]);
+  }, [focusFindInput, refreshFindAltScreen]);
 
   useEffect(() => {
     openFindRef.current = openFind;
@@ -89,22 +98,24 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
 
   const runFindNext = useCallback(
     (query = findQuery, incremental = false): void => {
+      refreshFindAltScreen();
       if (!query) {
         clearFind();
         return;
       }
       searchAddonRef.current?.findNext(query, searchOptions(incremental));
     },
-    [clearFind, findQuery, searchOptions],
+    [clearFind, findQuery, searchOptions, refreshFindAltScreen],
   );
 
   const runFindPrevious = useCallback((): void => {
+    refreshFindAltScreen();
     if (!findQuery) {
       clearFind();
       return;
     }
     searchAddonRef.current?.findPrevious(findQuery, searchOptions());
-  }, [clearFind, findQuery, searchOptions]);
+  }, [clearFind, findQuery, searchOptions, refreshFindAltScreen]);
 
   const closeFind = useCallback((): void => {
     setFindOpen(false);
@@ -115,13 +126,14 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
   const onFindQueryChange = useCallback(
     (value: string): void => {
       setFindQuery(value);
+      refreshFindAltScreen();
       if (!value) {
         clearFind();
         return;
       }
       searchAddonRef.current?.findNext(value, searchOptions(true));
     },
-    [clearFind, searchOptions],
+    [clearFind, searchOptions, refreshFindAltScreen],
   );
 
   const toggleFindCase = useCallback((): void => {
@@ -151,7 +163,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const term = new Terminal({
       cols: 120,
       rows: 30,
-      scrollback: 10000, // Allow scrolling back through conversation history
+      scrollback: 50000, // Allow scrolling/searching back through long histories
       cursorBlink: true,
       fontFamily: 'Consolas, "Cascadia Mono", "Cascadia Code", monospace',
       fontSize: 13,
@@ -441,57 +453,72 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       <div ref={containerRef} className="agent-terminal__xterm" />
       {findOpen && (
         <div className="term-find" role="search" onWheel={(e) => e.stopPropagation()}>
-          <input
-            ref={findInputRef}
-            className="term-find__input"
-            type="text"
-            placeholder="Find…"
-            value={findQuery}
-            onChange={(e) => onFindQueryChange(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault();
-                if (e.shiftKey) runFindPrevious();
-                else runFindNext();
-              } else if (e.key === 'Escape') {
-                e.preventDefault();
-                closeFind();
-              }
-              e.stopPropagation();
-            }}
-            data-is-input="true"
-          />
-          <span className="term-find__counter" aria-live="polite">
-            {findCounter}
-          </span>
-          <button
-            className="term-find__button"
-            type="button"
-            title="Previous match (Shift+Enter)"
-            onClick={runFindPrevious}
-          >
-            ↑
-          </button>
-          <button
-            className="term-find__button"
-            type="button"
-            title="Next match (Enter)"
-            onClick={() => runFindNext()}
-          >
-            ↓
-          </button>
-          <button
-            className={`term-find__button${findCaseSensitive ? ' is-active' : ''}`}
-            type="button"
-            title="Match case"
-            aria-pressed={findCaseSensitive}
-            onClick={toggleFindCase}
-          >
-            Aa
-          </button>
-          <button className="term-find__button" type="button" title="Close (Esc)" onClick={closeFind}>
-            ×
-          </button>
+          <div className="term-find__row">
+            <input
+              ref={findInputRef}
+              className="term-find__input"
+              type="text"
+              placeholder="Find…"
+              value={findQuery}
+              onChange={(e) => onFindQueryChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (e.shiftKey) runFindPrevious();
+                  else runFindNext();
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  closeFind();
+                }
+                e.stopPropagation();
+              }}
+              data-is-input="true"
+            />
+            <span className="term-find__counter" aria-live="polite">
+              {findCounter}
+            </span>
+            <button
+              className="term-find__button"
+              type="button"
+              title="Previous match (Shift+Enter)"
+              onClick={runFindPrevious}
+            >
+              ↑
+            </button>
+            <button
+              className="term-find__button"
+              type="button"
+              title="Next match (Enter)"
+              onClick={() => runFindNext()}
+            >
+              ↓
+            </button>
+            <button
+              className={`term-find__button${findCaseSensitive ? ' is-active' : ''}`}
+              type="button"
+              title="Match case"
+              aria-pressed={findCaseSensitive}
+              onClick={toggleFindCase}
+            >
+              Aa
+            </button>
+            <button
+              className="term-find__button"
+              type="button"
+              title="Close (Esc)"
+              onClick={closeFind}
+            >
+              ×
+            </button>
+          </div>
+          {findAltScreen && (
+            <div
+              className="term-find__note"
+              title="This agent runs full-screen and manages its own scrollback, so find can only match the visible screen."
+            >
+              Visible screen only — this agent manages its own scrollback.
+            </div>
+          )}
         </div>
       )}
     </div>
