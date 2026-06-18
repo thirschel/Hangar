@@ -1,6 +1,13 @@
 package git
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestParseNumstat(t *testing.T) {
 	tests := []struct {
@@ -56,4 +63,31 @@ func TestParseNumstat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDiffNumstatTimeout(t *testing.T) {
+	tempHome := t.TempDir()
+	t.Setenv("HOME", tempHome)
+	t.Setenv("USERPROFILE", tempHome)
+
+	repoPath, _, firstSHA, _ := setupTwoCommitRepo(t)
+
+	worktree, _, err := NewGitWorktree(repoPath, "difftimeouttest")
+	require.NoError(t, err)
+	worktree.SetBaseCommitOverride(firstSHA)
+	require.NoError(t, worktree.Setup())
+	defer func() { require.NoError(t, worktree.Cleanup()) }()
+
+	// Add an untracked two-line file; `git add -N .` should fold it into numstat.
+	added := filepath.Join(worktree.GetWorktreePath(), "added.txt")
+	require.NoError(t, os.WriteFile(added, []byte("line1\nline2\n"), 0644))
+
+	// Happy path: a generous timeout returns the real counts with no error.
+	stats := worktree.DiffNumstatTimeout(15 * time.Second)
+	require.NoError(t, stats.Error)
+	require.GreaterOrEqual(t, stats.Added, 2)
+
+	// An already-expired deadline must surface an error rather than blocking.
+	expired := worktree.DiffNumstatTimeout(time.Nanosecond)
+	require.Error(t, expired.Error)
 }
