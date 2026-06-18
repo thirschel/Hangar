@@ -130,11 +130,13 @@ npm run dist
 
 The packaged installer is written to `desktop\release\Hangar-Setup-<version>.exe`. See [`desktop/PACKAGING.md`](desktop/PACKAGING.md) for packaging details.
 
-#### Unix/macOS/WSL upstream installs
+#### Unix/macOS/WSL standalone release installs
 
-The commands below install the **upstream `cs` binary**. Use them when you want the upstream Unix/macOS/WSL package rather than the native-Windows Hangar desktop app or fork build.
+The scripts below install the Hangar fork's standalone `cs` daemon/CLI from [`thirschel/Hangar`](https://github.com/thirschel/Hangar). Before extracting or running the downloaded archive, they fetch `checksums.txt`, `checksums.txt.sig`, and `checksums.txt.pem`; verify the checksum file with `cosign` when available; then require the archive SHA256 to match `checksums.txt`. If `cosign` is not installed, the scripts abort unless you explicitly acknowledge checksum-only verification with `--skip-signature-check` or `-SkipSignatureCheck`.
 
 ##### Homebrew
+
+The Homebrew formula currently installs the upstream `claude-squad` package, not the Hangar fork:
 
 ```bash
 brew install claude-squad
@@ -144,7 +146,7 @@ ln -s "$(brew --prefix)/bin/claude-squad" "$(brew --prefix)/bin/cs"
 ##### Shell script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/thirschel/Hangar/main/install.sh | bash
 ```
 
 This puts the `cs` binary in `~/.local/bin`.
@@ -152,7 +154,14 @@ This puts the `cs` binary in `~/.local/bin`.
 To use a custom name for the binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
+curl -fsSL https://raw.githubusercontent.com/thirschel/Hangar/main/install.sh | bash -s -- --name <your-binary-name>
+```
+
+PowerShell performs the same verify-then-run flow for the Windows standalone CLI:
+
+```powershell
+iwr https://raw.githubusercontent.com/thirschel/Hangar/main/install.ps1 -OutFile install.ps1
+.\install.ps1
 ```
 
 ## The underlying daemon (`cs`)
