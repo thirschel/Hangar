@@ -204,6 +204,27 @@ ipcMain.handle('cs:detach-session', async (_event, sessionName: string) => {
   detachSession(sessionName);
 });
 
+ipcMain.handle(
+  'cs:get-history',
+  async (
+    _event,
+    args: { session: string; includeScreen?: boolean },
+  ): Promise<{ ansi: string; altScreen: boolean; scrollbackLines: number }> => {
+    const client = await getControlClient();
+    const r = await client.call({
+      method: 'CaptureHistory',
+      session: args.session,
+      includeScreen: args.includeScreen ?? false,
+    });
+    if (!r.ok) throw new Error(r.error || 'CaptureHistory failed');
+    return {
+      ansi: r.content ?? '',
+      altScreen: r.altScreen ?? false,
+      scrollbackLines: r.scrollbackLines ?? 0,
+    };
+  },
+);
+
 // Ensure a PowerShell session running in the workspace's worktree exists, and
 // return its session name. Lazily created on first Terminal-tab open; kept alive
 // in the daemon so re-opening re-attaches the same shell (cwd/history preserved).

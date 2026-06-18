@@ -33,6 +33,7 @@ const bodyReadTimeout = 15 * time.Second
 type managedSession interface {
 	start() error
 	capture(full, withANSI bool) string
+	captureHistory(includeScreen bool) (string, bool, int)
 	sendKeys(b []byte) error
 	resize(cols, rows int) error
 	hasUpdated() (updated, hasPrompt bool)
@@ -199,6 +200,13 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
 		return &proto.Response{ID: req.ID, OK: true, Content: s.capture(req.Mode == proto.CaptureFull, req.WithANSI)}
+	case proto.MethodCaptureHistory:
+		s, ok := h.getSession(req.Session)
+		if !ok {
+			return proto.Errorf(req.ID, "no such session: %s", req.Session)
+		}
+		ansi, altScreen, lines := s.captureHistory(req.IncludeScreen)
+		return &proto.Response{ID: req.ID, OK: true, Content: ansi, AltScreen: altScreen, ScrollbackLines: lines}
 	case proto.MethodSendKeys:
 		s, ok := h.getSession(req.Session)
 		if !ok {
@@ -306,7 +314,12 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 	if _, exists := h.sessions[name]; exists {
 		return fmt.Errorf("session already exists: %s", name)
 	}
-	s := newConptySession(name, program, workDir, shell, cols, rows, autoYes)
+	var s managedSession
+	if shell == "cmd" {
+		s = h.newSession(name, program, workDir, cols, rows, autoYes)
+	} else {
+		s = newConptySession(name, program, workDir, shell, cols, rows, autoYes)
+	}
 	if err := s.start(); err != nil {
 		return fmt.Errorf("start session: %w", err)
 	}
