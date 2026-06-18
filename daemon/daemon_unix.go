@@ -19,7 +19,7 @@ func getSysProcAttr() *syscall.SysProcAttr {
 }
 
 // isDaemonProcess returns true if the process at pid is a Hangar daemon binary
-// (cs, hangar, or hangar).  Returns (false, nil) when the process is gone
+// (cs or hangar).  Returns (false, nil) when the process is gone
 // or is not a Hangar binary.  Returns (false, err) only for unexpected errors.
 func isDaemonProcess(pid int) (bool, error) {
 	// On Linux, /proc is available and gives us a reliable exe path.
@@ -40,7 +40,7 @@ func isDaemonProcessLinux(pid int) (bool, error) {
 		return false, err
 	}
 	base := strings.ToLower(filepath.Base(exePath))
-	return base == "cs" || base == "hangar" || base == "hangar", nil
+	return base == "cs" || base == "hangar", nil
 }
 
 // isDaemonProcessPS uses ps(1) to look up the process name — works on macOS and
@@ -52,5 +52,5 @@ func isDaemonProcessPS(pid int) (bool, error) {
 		return false, nil
 	}
 	base := strings.ToLower(strings.TrimSpace(string(out)))
-	return base == "cs" || base == "hangar" || base == "hangar", nil
+	return base == "cs" || base == "hangar", nil
 }

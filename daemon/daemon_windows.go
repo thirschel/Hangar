@@ -18,7 +18,7 @@ func getSysProcAttr() *syscall.SysProcAttr {
 }
 
 // isDaemonProcess returns true if the process at pid is a Hangar daemon binary
-// (cs.exe, hangar.exe, or hangar.exe).
+// (cs.exe or hangar.exe).
 // Returns (false, nil) when the process is gone, belongs to another user, or is
 // not a Hangar binary.  Returns (false, err) only for unexpected system errors.
 func isDaemonProcess(pid int) (bool, error) {
