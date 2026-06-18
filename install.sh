@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 
 set -e
+set -o pipefail
+
+REPO_OWNER="thirschel"
+REPO_NAME="Hangar"
+PROJECT_NAME="Hangar"
+RELEASE_BINARY_NAME="claude-squad"
+CHECKSUMS_NAME="checksums.txt"
+CHECKSUMS_SIGNATURE_NAME="${CHECKSUMS_NAME}.sig"
+CHECKSUMS_CERTIFICATE_NAME="${CHECKSUMS_NAME}.pem"
+# The issuer check below limits this to GitHub Actions OIDC; this regex scopes
+# the signing identity to workflows/refs in the thirschel/Hangar repository.
+COSIGN_CERTIFICATE_IDENTITY_REGEXP='^https://github.com/thirschel/Hangar/'
+COSIGN_CERTIFICATE_OIDC_ISSUER='https://token.actions.githubusercontent.com'
 
 setup_shell_and_path() {
     BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
@@ -59,7 +72,7 @@ detect_platform_and_arch() {
 
 get_latest_version() {
     # Get latest version from GitHub API, including prereleases
-    API_RESPONSE=$(curl -sS "https://api.github.com/repos/smtg-ai/claude-squad/releases")
+    API_RESPONSE=$(curl -sS "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases")
     if [ $? -ne 0 ]; then
         echo "Failed to connect to GitHub API"
         exit 1
@@ -80,17 +93,26 @@ get_latest_version() {
     echo "$LATEST_VERSION"
 }
 
+download_file() {
+    local url=$1
+    local output_path=$2
+    local description=$3
+
+    echo "Downloading ${description} from ${url}"
+    if ! curl -fsSL "$url" -o "$output_path"; then
+        echo "Error: Failed to download ${description}"
+        echo "URL attempted: ${url}"
+        return 1
+    fi
+}
+
 download_release() {
     local version=$1
     local binary_url=$2
     local archive_name=$3
     local tmp_dir=$4
 
-    echo "Downloading binary from $binary_url"
-    DOWNLOAD_OUTPUT=$(curl -sS -L -f -w '%{http_code}' "$binary_url" -o "${tmp_dir}/${archive_name}" 2>&1)
-    HTTP_CODE=$?
-    
-    if [ $HTTP_CODE -ne 0 ]; then
+    if ! download_file "$binary_url" "${tmp_dir}/${archive_name}" "release asset"; then
         echo "Error: Failed to download release asset"
         echo "This could be because:"
         echo "1. The release ${version} doesn't have assets uploaded yet"
@@ -108,6 +130,112 @@ download_release() {
         rm -rf "$tmp_dir"
         exit 1
     fi
+}
+
+download_and_verify_release_metadata() {
+    local release_url=$1
+    local archive_name=$2
+    local tmp_dir=$3
+
+    if ! download_file "${release_url}/${CHECKSUMS_NAME}" "${tmp_dir}/${CHECKSUMS_NAME}" "${CHECKSUMS_NAME}"; then
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    if command -v cosign > /dev/null 2>&1; then
+        if ! download_file "${release_url}/${CHECKSUMS_SIGNATURE_NAME}" "${tmp_dir}/${CHECKSUMS_SIGNATURE_NAME}" "${CHECKSUMS_SIGNATURE_NAME}"; then
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
+        if ! download_file "${release_url}/${CHECKSUMS_CERTIFICATE_NAME}" "${tmp_dir}/${CHECKSUMS_CERTIFICATE_NAME}" "${CHECKSUMS_CERTIFICATE_NAME}"; then
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
+        echo "Verifying ${CHECKSUMS_NAME} signature with cosign"
+        if ! cosign verify-blob \
+            --certificate "${tmp_dir}/${CHECKSUMS_CERTIFICATE_NAME}" \
+            --signature "${tmp_dir}/${CHECKSUMS_SIGNATURE_NAME}" \
+            --certificate-identity-regexp "$COSIGN_CERTIFICATE_IDENTITY_REGEXP" \
+            --certificate-oidc-issuer "$COSIGN_CERTIFICATE_OIDC_ISSUER" \
+            "${tmp_dir}/${CHECKSUMS_NAME}"; then
+            echo "Error: cosign verification failed; aborting install"
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
+    else
+        if [ "$SKIP_SIGNATURE_CHECK" != true ]; then
+            echo "Error: cosign is not installed, so the release signature cannot be verified."
+            echo "Install cosign and retry, or rerun with --skip-signature-check to acknowledge checksum-only verification."
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
+        echo "WARNING: cosign is not installed; skipping signature verification because --skip-signature-check was provided." >&2
+        echo "WARNING: Continuing with SHA256 verification against unsigned ${CHECKSUMS_NAME} only." >&2
+    fi
+
+    verify_archive_checksum "$archive_name" "$tmp_dir"
+}
+
+verify_archive_checksum() {
+    local archive_name=$1
+    local tmp_dir=$2
+    local checksums_path="${tmp_dir}/${CHECKSUMS_NAME}"
+    local archive_path="${tmp_dir}/${archive_name}"
+    local expected_checksum
+    local actual_checksum
+
+    expected_checksum=$(awk -v file="$archive_name" '
+        {
+            name=$2
+            sub(/^\*/, "", name)
+            sub(/^\.\//, "", name)
+            if (name == file) {
+                print tolower($1)
+                exit
+            }
+        }
+    ' "$checksums_path")
+
+    if [ -z "$expected_checksum" ]; then
+        echo "Error: ${CHECKSUMS_NAME} does not contain an entry for ${archive_name}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    if command -v sha256sum > /dev/null 2>&1; then
+        actual_checksum=$(sha256sum "$archive_path" | awk '{print tolower($1)}')
+    elif command -v shasum > /dev/null 2>&1; then
+        actual_checksum=$(shasum -a 256 "$archive_path" | awk '{print tolower($1)}')
+    else
+        echo "Error: neither sha256sum nor shasum is available to verify ${archive_name}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    if [ "$actual_checksum" != "$expected_checksum" ]; then
+        echo "Error: SHA256 mismatch for ${archive_name}"
+        echo "Expected: ${expected_checksum}"
+        echo "Actual:   ${actual_checksum}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
+    echo "Verified SHA256 checksum for ${archive_name}"
+}
+
+find_release_binary() {
+    local tmp_dir=$1
+    local extension=$2
+    local candidate
+
+    for candidate in "${RELEASE_BINARY_NAME}${extension}" "cs${extension}" "hangar${extension}"; do
+        if [ -f "${tmp_dir}/${candidate}" ]; then
+            printf '%s\n' "${tmp_dir}/${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
 }
 
 extract_and_install() {
@@ -142,8 +270,15 @@ extract_and_install() {
         rm -f "$bin_dir/$INSTALL_NAME${extension}"
     fi
 
+    local source_binary
+    if ! source_binary=$(find_release_binary "$tmp_dir" "$extension"); then
+        echo "Installation failed, archive did not contain ${RELEASE_BINARY_NAME}${extension}, cs${extension}, or hangar${extension}"
+        rm -rf "$tmp_dir"
+        exit 1
+    fi
+
     # Install binary with desired name
-    mv "${tmp_dir}/claude-squad${extension}" "$bin_dir/$INSTALL_NAME${extension}"
+    mv "$source_binary" "$bin_dir/$INSTALL_NAME${extension}"
     rm -rf "$tmp_dir"
 
     if [ ! -f "$bin_dir/$INSTALL_NAME${extension}" ]; then
@@ -265,10 +400,17 @@ check_and_install_dependencies() {
     echo "All dependencies are installed."
 }
 
+create_tmp_dir() {
+    local base_dir="${XDG_CACHE_HOME:-$HOME/.cache}/hangar-install"
+    mkdir -p "$base_dir"
+    mktemp -d "${base_dir}/release.XXXXXX"
+}
+
 main() {
     # Parse command line arguments
     INSTALL_NAME="cs"
     UPGRADE_MODE=false
+    SKIP_SIGNATURE_CHECK=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -276,9 +418,13 @@ main() {
                 INSTALL_NAME="$2"
                 shift 2
                 ;;
+            --skip-signature-check)
+                SKIP_SIGNATURE_CHECK=true
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
-                echo "Usage: install.sh [--name <n>]"
+                echo "Usage: install.sh [--name <n>] [--skip-signature-check]"
                 exit 1
                 ;;
         esac
@@ -295,13 +441,15 @@ main() {
     if [[ "$VERSION" == "latest" ]]; then
         VERSION=$(get_latest_version)
     fi
+    VERSION="${VERSION#v}"
 
-    RELEASE_URL="https://github.com/smtg-ai/claude-squad/releases/download/v${VERSION}"
-    ARCHIVE_NAME="claude-squad_${VERSION}_${PLATFORM}_${ARCHITECTURE}${ARCHIVE_EXT}"
+    RELEASE_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${VERSION}"
+    ARCHIVE_NAME="${PROJECT_NAME}_${VERSION}_${PLATFORM}_${ARCHITECTURE}${ARCHIVE_EXT}"
     BINARY_URL="${RELEASE_URL}/${ARCHIVE_NAME}"
-    TMP_DIR=$(mktemp -d)
+    TMP_DIR=$(create_tmp_dir)
     
     download_release "$VERSION" "$BINARY_URL" "$ARCHIVE_NAME" "$TMP_DIR"
+    download_and_verify_release_metadata "$RELEASE_URL" "$ARCHIVE_NAME" "$TMP_DIR"
     extract_and_install "$TMP_DIR" "$ARCHIVE_NAME" "$BIN_DIR" "$EXTENSION"
 }
 

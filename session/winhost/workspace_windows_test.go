@@ -66,6 +66,7 @@ func TestWorkspaceLifecycle(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
+	authClient(t, c)
 
 	// Create a workspace (use a long-lived program on PATH so the session stays alive).
 	ws, err := c.CreateWorkspace(repo, "My Feature", "cmd", "")
@@ -142,6 +143,7 @@ func TestWorkspaceCommit(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
+	authClient(t, c)
 
 	ws, err := c.CreateWorkspace(repo, "Commit Test", "cmd", "")
 	if err != nil {
@@ -187,6 +189,7 @@ func TestCreateWorkspaceRejectsUnknownProgram(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
+	authClient(t, c)
 
 	_, err = c.CreateWorkspace(repo, "Bad Agent", "definitely-not-a-real-program-xyz", "")
 	if err == nil {
@@ -278,6 +281,7 @@ func TestCopilotWorkspaceLaunchCommands(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
+	authClient(t, c)
 
 	ws, err := c.CreateWorkspace(repo, "Copilot Launch", "copilot.cmd", "")
 	if err != nil {
@@ -349,6 +353,7 @@ func TestReviveSessionOnAttach(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
+	authClient(t, c)
 
 	ws, err := c.CreateWorkspace(repo, "Revive Me", "cmd", "")
 	if err != nil {

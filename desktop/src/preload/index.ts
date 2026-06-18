@@ -175,16 +175,23 @@ const api = {
   },
   resumeCopilotSession: async (
     sessionId: string,
-    opts?: { repoPath?: string; title?: string },
-  ): Promise<WorkspaceInfo> => {
+    opts?: { repoPath?: string; title?: string; confirmed?: boolean },
+  ): Promise<{ workspace?: WorkspaceInfo; needsConfirm?: boolean; absPath?: string }> => {
     const r = await rpc({
       method: 'ResumeCopilotSession',
       sessionId,
       repoPath: opts?.repoPath,
       title: opts?.title,
+      confirmed: opts?.confirmed,
     });
+    // The host returns needsConfirm (with the resolved absolute path) when the
+    // resume targets a repo other than its own working directory and has not yet
+    // been confirmed. Surface that to the renderer instead of throwing.
+    if (r.needsConfirm) {
+      return { needsConfirm: true, absPath: r.absPath };
+    }
     if (!r.ok || !r.workspace) throw new Error(r.error || 'ResumeCopilotSession failed');
-    return r.workspace;
+    return { workspace: r.workspace };
   },
   startRun: async (id: string, command: string): Promise<void> => {
     const r = await rpc({ method: 'StartRun', workspaceId: id, command });

@@ -103,7 +103,7 @@ func SaveState(state *State) error {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
 
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -113,7 +113,7 @@ func SaveState(state *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	return os.WriteFile(statePath, data, 0644)
+	return os.WriteFile(statePath, data, 0600)
 }
 
 // InstanceStorage interface implementation

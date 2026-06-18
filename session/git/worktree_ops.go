@@ -39,6 +39,15 @@ func (g *GitWorktree) Setup() error {
 func (g *GitWorktree) setupFromExistingBranch() error {
 	// Directory already created in Setup(), skip duplicate creation
 
+	// Refuse to touch a worktree path that is not contained within the managed
+	// worktrees directory. On a fresh create this always passes; on a reload from
+	// a tampered state.json/workspaces.json it blocks deletion of an arbitrary
+	// directory (F-09).
+	if err := AssertWorktreePathContained(g.worktreePath); err != nil {
+		log.ErrorLog.Printf("SECURITY: refusing worktree setup on uncontained path %q: %v", g.worktreePath, err)
+		return fmt.Errorf("refusing to operate on unsafe worktree path: %w", err)
+	}
+
 	// Clean up any existing worktree first
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 	// If the directory is still there (orphaned, not registered with git), drop it so `git worktree add` won't fail.
@@ -69,6 +78,12 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 
 // setupNewWorktree creates a new worktree from HEAD
 func (g *GitWorktree) setupNewWorktree() error {
+	// Refuse to touch a worktree path outside the managed worktrees directory (F-09).
+	if err := AssertWorktreePathContained(g.worktreePath); err != nil {
+		log.ErrorLog.Printf("SECURITY: refusing worktree setup on uncontained path %q: %v", g.worktreePath, err)
+		return fmt.Errorf("refusing to operate on unsafe worktree path: %w", err)
+	}
+
 	// Clean up any existing worktree first
 	_, _ = g.runGitCommand(g.repoPath, "worktree", "remove", "-f", g.worktreePath) // Ignore error if worktree doesn't exist
 	// If the directory is still there (orphaned, not registered with git), drop it so `git worktree add` won't fail.
@@ -224,7 +239,13 @@ func CleanupWorktrees() error {
 				}
 			}
 
-			// Remove the worktree directory
+			// Remove the worktree directory. entry.Name() comes from os.ReadDir so
+			// it can never contain a path separator, but assert containment anyway
+			// as defense-in-depth before the destructive delete (F-09).
+			if err := AssertUnderWorktreeDir(worktreesDir, worktreePath); err != nil {
+				log.ErrorLog.Printf("SECURITY: skipping RemoveAll on uncontained path %q: %v", worktreePath, err)
+				continue
+			}
 			os.RemoveAll(worktreePath)
 		}
 	}
