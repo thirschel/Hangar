@@ -40,6 +40,15 @@ builds**. The release feed is configured in `electron-builder.yml` → `publish`
 `electron-builder --win nsis --publish always` (needs a `GH_TOKEN`).
 If no release exists the updater logs and no-ops — it never crashes the app.
 
+## Releases (automated)
+
+Releases are cut automatically by `semantic-release` on push to `main` — see the
+**Releases** section in the repo-root `CONTRIBUTING.md`. The version in
+`desktop/package.json` is bumped for you (kept in lockstep with `main.go`), and the
+release workflow's desktop job runs `npm run dist` and uploads the resulting
+`Hangar-Setup-<version>.exe` to the GitHub release the updater feeds from. The
+commands above are for **local** installer builds only.
+
 ## Code signing (currently UNSIGNED)
 
 No certificate is configured, so the installer is **unsigned** and Windows
