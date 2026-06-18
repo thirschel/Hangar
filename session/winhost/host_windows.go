@@ -24,9 +24,15 @@ import (
 const defaultIdleTimeout = 5 * time.Minute
 
 // bodyReadTimeout bounds how long the host waits for a frame body once its
-// header has arrived (anti-stuck-client). The header read itself is unbounded so
-// idle persistent control connections stay open.
+// header has arrived (anti-stuck-client). The header read itself is bounded by
+// headerReadTimeout to prevent abandoned connections from parking goroutines.
 const bodyReadTimeout = 15 * time.Second
+
+// headerReadTimeout bounds how long we wait for the first byte of a new request
+// header on a persistent control connection.  Set longer than bodyReadTimeout to
+// allow genuine idle periods between RPCs, but finite to prevent an abandoned
+// same-user pipe connection from inflating activeConns indefinitely (HARDEN-22).
+const headerReadTimeout = 5 * time.Minute
 
 // managedSession is the host's view of a session. The real implementation is
 // conptySession (ConPTY + VT emulator); tests inject a fake via host.newSession.
@@ -38,7 +44,8 @@ type managedSession interface {
 	hasUpdated() (updated, hasPrompt bool)
 	agentStatus() (busy, waiting bool)
 	setAutoYes(enabled bool)
-	setForceApprove(enabled bool)
+	armTrustApproval(reason string, expiresAt time.Time)
+	clearTrustApproval()
 	info() proto.SessionInfo
 	alive() bool
 	close() error
@@ -49,7 +56,7 @@ type managedSession interface {
 type host struct {
 	mu          sync.RWMutex
 	sessions    map[string]managedSession
-	newSession  func(name, program, workDir string, cols, rows int, autoYes bool) managedSession
+	newSession  func(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession
 	activeConns int
 	lastActive  time.Time
 	idleTimeout time.Duration
@@ -62,13 +69,14 @@ type host struct {
 
 	workspaces *workspaceManager
 	runs       *runManager
+	identity   *hostIdentity
 }
 
 func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
-		newSession: func(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
-			return newConptySession(name, program, workDir, "cmd", cols, rows, autoYes)
+		newSession: func(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
+			return newConptySession(name, program, workDir, shell, cols, rows, autoYes)
 		},
 		lastActive:  time.Now(),
 		idleTimeout: idle,
@@ -122,9 +130,13 @@ func (h *host) handleConn(conn net.Conn) {
 		h.mu.Unlock()
 	}()
 	defer recoverGoroutine("host.handleConn")
+	authenticated := false
 	for {
-		// Unbounded wait for the next request header (persistent connection)...
+		// Apply a header-read deadline so an idle or abandoned connection cannot
+		// park the goroutine and inflate activeConns indefinitely (HARDEN-22).
+		_ = conn.SetReadDeadline(time.Now().Add(headerReadTimeout))
 		n, err := proto.ReadHeader(conn)
+		_ = conn.SetReadDeadline(time.Time{})
 		if err != nil {
 			return
 		}
@@ -139,13 +151,21 @@ func (h *host) handleConn(conn net.Conn) {
 		if err != nil {
 			return
 		}
-		resp := h.safeDispatch(req)
+		var resp *proto.Response
+		if !authenticated && req.Method != proto.MethodHello {
+			resp = proto.Errorf(req.ID, "authenticated Hello required")
+		} else {
+			resp = h.safeDispatch(req)
+			if req.Method == proto.MethodHello && resp.OK {
+				authenticated = true
+			}
+		}
 		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
 		if err := proto.WriteFrame(conn, resp); err != nil {
 			return
 		}
 		_ = conn.SetWriteDeadline(time.Time{})
-		if req.Method == proto.MethodShutdown {
+		if req.Method == proto.MethodShutdown && resp.OK {
 			h.logger.Printf("shutdown requested by client")
 			h.triggerShutdown()
 			return
@@ -181,7 +201,27 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 	h.touch()
 	switch req.Method {
 	case proto.MethodHello:
-		return &proto.Response{ID: req.ID, OK: true, HostVersion: proto.Version}
+		if req.ClientVersion != proto.Version {
+			return proto.Errorf(req.ID, "protocol mismatch: host=%d client=%d", proto.Version, req.ClientVersion)
+		}
+		if !validLowerHexBytes(req.ClientNonce, 32) {
+			return proto.Errorf(req.ID, "missing or invalid hello challenge")
+		}
+		if h.identity == nil {
+			return proto.Errorf(req.ID, "host identity unavailable")
+		}
+		proof, err := hostNonceProofForIdentity(h.identity, req.ClientNonce)
+		if err != nil {
+			return proto.Errorf(req.ID, "host authentication unavailable")
+		}
+		return &proto.Response{
+			ID:              req.ID,
+			OK:              true,
+			HostVersion:     h.identity.Version,
+			HostPID:         h.identity.PID,
+			HostCreatedUnix: h.identity.CreatedUnix,
+			HostNonceProof:  proof,
+		}
 	case proto.MethodCreateSession:
 		return h.createSession(req)
 	case proto.MethodHasSession:
@@ -306,7 +346,7 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 	if _, exists := h.sessions[name]; exists {
 		return fmt.Errorf("session already exists: %s", name)
 	}
-	s := newConptySession(name, program, workDir, shell, cols, rows, autoYes)
+	s := h.newSession(name, program, workDir, shell, cols, rows, autoYes)
 	if err := s.start(); err != nil {
 		return fmt.Errorf("start session: %w", err)
 	}
@@ -380,7 +420,11 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 	if err != nil {
 		return proto.Errorf(req.ID, "attach listen: %v", err)
 	}
-	token := randomNonce()
+	token, err := randomNonceHex(16)
+	if err != nil {
+		_ = ln.Close()
+		return proto.Errorf(req.ID, "attach token: %v", err)
+	}
 	go h.runAttach(sess, ln, token, req.Cols, req.Rows)
 	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token}
 }
@@ -532,8 +576,15 @@ func RunHost() error {
 	}
 
 	h := newHost(logw, defaultIdleTimeout)
-	if err := writeHostInfo(pipe); err != nil {
-		h.logger.Printf("warning: could not write host.json: %v", err)
+	identity, err := newHostIdentity(pipe)
+	if err != nil {
+		_ = ln.Close()
+		return err
+	}
+	h.identity = identity
+	if err := writeHostInfo(identity); err != nil {
+		_ = ln.Close()
+		return fmt.Errorf("write host.json: %w", err)
 	}
 	defer removeHostInfo()
 

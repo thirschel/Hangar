@@ -3,12 +3,55 @@
 package winhost
 
 import (
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
+// TestLoadDoesNotAutoFireRunCommand asserts that a persisted RunCommand is never
+// executed on load/revive — it only runs from an explicit, user-initiated
+// StartRun. This is the proportionate containment for F-33 (a tampered
+// workspaces.json must not silently re-fire `cmd.exe /c <command>`).
+func TestLoadDoesNotAutoFireRunCommand(t *testing.T) {
+	testHome(t)
+
+	p, err := workspacesPath()
+	if err != nil {
+		t.Fatalf("workspacesPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	// worktreePath is left empty here: this test isolates F-33 (a persisted
+	// RunCommand must not auto-fire on load). Worktree-path containment on load
+	// is covered separately; an empty path skips that unrelated check.
+	const data = `[{"id":"w1","sessionName":"ws_w1","runCommand":"calc.exe","worktreePath":""}]`
+	if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+		t.Fatalf("write workspaces.json: %v", err)
+	}
+
+	// Constructing the host loads persisted workspaces.
+	h := newHost(io.Discard, time.Minute)
+
+	h.workspaces.mu.Lock()
+	w, ok := h.workspaces.wss["w1"]
+	h.workspaces.mu.Unlock()
+	if !ok || w.RunCommand != "calc.exe" {
+		t.Fatalf("expected workspace w1 with persisted RunCommand, got %+v", w)
+	}
+	if running, _ := h.runs.info("w1"); running {
+		t.Fatal("load() must not auto-fire a persisted RunCommand (F-33)")
+	}
+	if h.runs.existingState("w1") != nil {
+		t.Fatal("load() must not create a run state for a persisted RunCommand (F-33)")
+	}
+}
+
 func TestRunLifecycle(t *testing.T) {
+	requireConPTY(t)
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home)
@@ -22,6 +65,7 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("dial: %v", err)
 	}
 	defer c.Close()
+	authClient(t, c)
 
 	ws, err := c.CreateWorkspace(repo, "Run Test", "cmd", "")
 	if err != nil {

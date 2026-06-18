@@ -1,11 +1,24 @@
-# Claude Squad Windows Installation Script
+# Hangar Windows Installation Script
 # PowerShell version of install.sh
 
 param(
     [string]$Name = "cs",
     [string]$Version = "latest",
-    [string]$BinDir = "$env:LOCALAPPDATA\bin"
+    [string]$BinDir = "$env:LOCALAPPDATA\bin",
+    [switch]$SkipSignatureCheck
 )
+
+$RepoOwner = "thirschel"
+$RepoName = "Hangar"
+$ProjectName = "Hangar"
+$ReleaseBinaryName = "claude-squad"
+$ChecksumsName = "checksums.txt"
+$ChecksumsSignatureName = "$ChecksumsName.sig"
+$ChecksumsCertificateName = "$ChecksumsName.pem"
+# The issuer check below limits this to GitHub Actions OIDC; this regex scopes
+# the signing identity to workflows/refs in the thirschel/Hangar repository.
+$CosignCertificateIdentityRegexp = "^https://github.com/thirschel/Hangar/"
+$CosignCertificateOidcIssuer = "https://token.actions.githubusercontent.com"
 
 function Write-Status {
     param([string]$Message, [string]$Type = "Info")
@@ -98,7 +111,7 @@ function Test-Dependencies {
 
 function Get-LatestVersion {
     try {
-        $apiUrl = "https://api.github.com/repos/smtg-ai/claude-squad/releases"
+        $apiUrl = "https://api.github.com/repos/$RepoOwner/$RepoName/releases"
         $releases = Invoke-RestMethod -Uri $apiUrl -Method Get
 
         if ($releases -and $releases.Count -gt 0) {
@@ -124,6 +137,26 @@ function Get-Architecture {
     }
 }
 
+function Invoke-DownloadFile {
+    param(
+        [string]$Uri,
+        [string]$OutFile,
+        [string]$Description
+    )
+
+    Write-Status "Downloading $Description from: $Uri" "Info"
+
+    try {
+        Invoke-WebRequest -Uri $Uri -OutFile $OutFile -UseBasicParsing
+        Write-Status "$Description download completed" "Success"
+    }
+    catch {
+        Write-Status "Failed to download $Description`: $($_.Exception.Message)" "Error"
+        Write-Status "URL attempted: $Uri" "Error"
+        throw
+    }
+}
+
 function Download-Release {
     param(
         [string]$Version,
@@ -134,21 +167,102 @@ function Download-Release {
     $platform = "windows"
     $archiveExt = ".zip"
 
-    $archiveName = "claude-squad_${Version}_${platform}_${Architecture}${archiveExt}"
-    $downloadUrl = "https://github.com/smtg-ai/claude-squad/releases/download/v${Version}/${archiveName}"
+    $archiveName = "${ProjectName}_${Version}_${platform}_${Architecture}${archiveExt}"
+    $releaseUrl = "https://github.com/$RepoOwner/$RepoName/releases/download/v${Version}"
+    $downloadUrl = "$releaseUrl/$archiveName"
     $downloadPath = Join-Path $TempDir $archiveName
 
-    Write-Status "Downloading from: $downloadUrl" "Info"
-
     try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $downloadPath -UseBasicParsing
-        Write-Status "Download completed" "Success"
-        return $downloadPath
+        Invoke-DownloadFile -Uri $downloadUrl -OutFile $downloadPath -Description "release asset"
+        return [PSCustomObject]@{
+            Path = $downloadPath
+            ArchiveName = $archiveName
+            ReleaseUrl = $releaseUrl
+        }
     }
     catch {
         Write-Status "Download failed: $($_.Exception.Message)" "Error"
         throw
     }
+}
+
+function Get-ExpectedChecksum {
+    param(
+        [string]$ChecksumsPath,
+        [string]$ArchiveName
+    )
+
+    foreach ($line in Get-Content -Path $ChecksumsPath) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        $parts = $line.Trim() -split "\s+"
+        if ($parts.Count -lt 2) {
+            continue
+        }
+
+        $name = $parts[-1].TrimStart("*") -replace "^[.][\\/]", ""
+        if ($name -eq $ArchiveName) {
+            return $parts[0].ToLowerInvariant()
+        }
+    }
+
+    return $null
+}
+
+function Test-ReleaseVerification {
+    param(
+        [string]$ReleaseUrl,
+        [string]$ArchiveName,
+        [string]$ArchivePath,
+        [string]$TempDir
+    )
+
+    $checksumsPath = Join-Path $TempDir $ChecksumsName
+    Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsName" -OutFile $checksumsPath -Description $ChecksumsName
+
+    if (Test-CommandExists "cosign") {
+        $signaturePath = Join-Path $TempDir $ChecksumsSignatureName
+        $certificatePath = Join-Path $TempDir $ChecksumsCertificateName
+
+        Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsSignatureName" -OutFile $signaturePath -Description $ChecksumsSignatureName
+        Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsCertificateName" -OutFile $certificatePath -Description $ChecksumsCertificateName
+
+        Write-Status "Verifying $ChecksumsName signature with cosign" "Info"
+        & cosign verify-blob `
+            --certificate $certificatePath `
+            --signature $signaturePath `
+            --certificate-identity-regexp $CosignCertificateIdentityRegexp `
+            --certificate-oidc-issuer $CosignCertificateOidcIssuer `
+            $checksumsPath
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "cosign verification failed; aborting install"
+        }
+    }
+    else {
+        if (-not $SkipSignatureCheck) {
+            Write-Status "cosign is not installed, so the release signature cannot be verified." "Error"
+            Write-Status "Install cosign and retry, or rerun with -SkipSignatureCheck to acknowledge checksum-only verification." "Error"
+            throw "cosign is required unless -SkipSignatureCheck is provided"
+        }
+
+        Write-Status "WARNING: cosign is not installed; skipping signature verification because -SkipSignatureCheck was provided." "Warning"
+        Write-Status "WARNING: Continuing with SHA256 verification against unsigned $ChecksumsName only." "Warning"
+    }
+
+    $expectedChecksum = Get-ExpectedChecksum -ChecksumsPath $checksumsPath -ArchiveName $ArchiveName
+    if (-not $expectedChecksum) {
+        throw "$ChecksumsName does not contain an entry for $ArchiveName"
+    }
+
+    $actualChecksum = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualChecksum -ne $expectedChecksum) {
+        throw "SHA256 mismatch for $ArchiveName. Expected $expectedChecksum, got $actualChecksum"
+    }
+
+    Write-Status "Verified SHA256 checksum for $ArchiveName" "Success"
 }
 
 function Extract-Archive {
@@ -158,6 +272,16 @@ function Extract-Archive {
     )
 
     try {
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+            $zip.Dispose()
+        }
+        catch {
+            Write-Status "Downloaded file is not a valid zip archive: $($_.Exception.Message)" "Error"
+            return $false
+        }
+
         Expand-Archive -Path $ArchivePath -DestinationPath $ExtractDir -Force
         Write-Status "Archive extracted successfully" "Success"
         return $true
@@ -175,7 +299,20 @@ function Install-Binary {
         [string]$InstallName
     )
 
-    $sourcePath = Join-Path $ExtractDir "claude-squad.exe"
+    $sourcePath = $null
+    foreach ($candidate in @("$ReleaseBinaryName.exe", "cs.exe", "hangar.exe")) {
+        $candidatePath = Join-Path $ExtractDir $candidate
+        if (Test-Path $candidatePath) {
+            $sourcePath = $candidatePath
+            break
+        }
+    }
+
+    if (-not $sourcePath) {
+        Write-Status "Archive did not contain $ReleaseBinaryName.exe, cs.exe, or hangar.exe" "Error"
+        return $false
+    }
+
     $targetPath = Join-Path $BinDir "$InstallName.exe"
 
     # Create bin directory if it doesn't exist
@@ -243,8 +380,8 @@ function Test-Installation {
 
 # Main installation process
 function Main {
-    Write-Status "Claude Squad Windows Installer" "Info"
-    Write-Status "================================" "Info"
+    Write-Status "Hangar Windows Installer" "Info"
+    Write-Status "========================" "Info"
 
     # Check dependencies
     if (-not (Test-Dependencies)) {
@@ -263,13 +400,14 @@ function Main {
             exit 1
         }
     }
+    $Version = $Version -replace "^v", ""
 
     # Detect architecture
     $architecture = Get-Architecture
     Write-Status "Detected architecture: $architecture" "Info"
 
     # Create temporary directory
-    $tempDir = Join-Path $env:TEMP "claude-squad-install"
+    $tempDir = Join-Path $env:TEMP "hangar-install"
     if (Test-Path $tempDir) {
         Remove-Item $tempDir -Recurse -Force
     }
@@ -277,11 +415,12 @@ function Main {
 
     try {
         # Download release
-        $archivePath = Download-Release -Version $Version -Architecture $architecture -TempDir $tempDir
+        $release = Download-Release -Version $Version -Architecture $architecture -TempDir $tempDir
+        Test-ReleaseVerification -ReleaseUrl $release.ReleaseUrl -ArchiveName $release.ArchiveName -ArchivePath $release.Path -TempDir $tempDir
 
         # Extract archive
         $extractDir = Join-Path $tempDir "extract"
-        if (-not (Extract-Archive -ArchivePath $archivePath -ExtractDir $extractDir)) {
+        if (-not (Extract-Archive -ArchivePath $release.Path -ExtractDir $extractDir)) {
             exit 1
         }
 
