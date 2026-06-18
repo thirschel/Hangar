@@ -2,6 +2,8 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
+import { isAtBottom, normalizeHistory, shouldReconcile } from './termHistory';
+import { appHandlesWheel, encodeWheelSgr } from './termWheel';
 
 type TermViewProps = {
   // The daemon session to stream (agent ws_… or shell sh_…). Null renders nothing.
@@ -33,6 +35,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       return;
     }
     const session = sessionName;
+    let disposed = false;
+    let lastScrollbackLines = 0;
+    let reconcileTimer: number | undefined;
+    let reconcileInFlight = false;
 
     const term = new Terminal({
       cols: 120,
@@ -53,6 +59,17 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
+
+    const termIsAtBottom = (): boolean =>
+      isAtBottom(term.buffer.active.viewportY, term.buffer.active.baseY);
+    const writeTerm = (data: string | Uint8Array): Promise<void> =>
+      new Promise((resolve) => {
+        if (disposed) {
+          resolve();
+          return;
+        }
+        term.write(data, () => resolve());
+      });
 
     const copySelection = (): boolean => {
       const sel = term.getSelection();
@@ -100,19 +117,100 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     el.addEventListener('contextmenu', onContextMenu);
 
+    const reconcileHistory = async (): Promise<void> => {
+      if (
+        disposed ||
+        reconcileInFlight ||
+        term.hasSelection() ||
+        term.buffer.active.type !== 'normal'
+      ) {
+        return;
+      }
+      const atBottom = termIsAtBottom();
+      if (atBottom) return;
+
+      const viewportY = term.buffer.active.viewportY;
+      reconcileInFlight = true;
+      try {
+        const history = await window.cs.getHistory(session, true);
+        const stillAtBottom = termIsAtBottom();
+        if (disposed || term.hasSelection() || stillAtBottom) return;
+
+        const previousScrollbackLines = lastScrollbackLines;
+        lastScrollbackLines = history.scrollbackLines;
+        if (
+          history.altScreen ||
+          !history.ansi ||
+          !shouldReconcile(previousScrollbackLines, history.scrollbackLines, stillAtBottom)
+        ) {
+          return;
+        }
+
+        term.reset();
+        await writeTerm(normalizeHistory(history.ansi));
+        if (!disposed) {
+          term.scrollToLine(Math.min(viewportY, term.buffer.active.baseY));
+        }
+      } catch {
+        // History refresh is best-effort; live terminal streaming must continue.
+      } finally {
+        reconcileInFlight = false;
+      }
+    };
+
+    const scheduleReconcile = (): void => {
+      if (reconcileTimer !== undefined) {
+        window.clearTimeout(reconcileTimer);
+      }
+      if (
+        disposed ||
+        term.hasSelection() ||
+        term.buffer.active.type !== 'normal' ||
+        termIsAtBottom()
+      ) {
+        return;
+      }
+      reconcileTimer = window.setTimeout(() => {
+        reconcileTimer = undefined;
+        void reconcileHistory();
+      }, 150);
+    };
+
     // Wheel handler: scroll the terminal when in normal buffer mode.
     // When apps use the alternate screen buffer (fullscreen TUIs) or enable
     // mouse tracking, wheel events should pass through to the app normally.
     const onWheel = (ev: WheelEvent): void => {
-      // Only intercept wheel events when in the normal (scrollable) buffer.
-      // Alt-buffer apps (vim, less, top) should receive wheel as mouse input.
+      // Normal (scrollable) buffer only. xterm scrolls its own viewport natively,
+      // so we must NOT call term.scrollLines here as well (that double-scrolls).
+      // We only refresh host-backed history and prevent the page from scrolling.
       if (term.buffer.active.type === 'normal') {
-        const delta = ev.deltaY > 0 ? 3 : -3;
-        term.scrollLines(delta);
+        scheduleReconcile();
         ev.preventDefault();
       }
     };
     el.addEventListener('wheel', onWheel, { passive: false });
+
+    // Reliable scroll for apps that drive their own scrolling via mouse tracking
+    // (alt-screen TUIs like the copilot agent). xterm forwards wheel→mouse too,
+    // but its handler cancels the event even when forwarding fails on momentarily
+    // stale measurement/coords, silently dropping the scroll — that is the
+    // intermittent "sometimes I can't scroll" the agent window exhibits. We encode
+    // an SGR wheel report ourselves in the capture phase (before xterm sees it) so
+    // the app always receives it. Normal-buffer apps (no mouse mode) fall through
+    // to the native scroll + host-scrollback handling above.
+    const onWheelCapture = (ev: WheelEvent): void => {
+      if (!appHandlesWheel(term.modes.mouseTrackingMode)) return;
+      const rect = el.getBoundingClientRect();
+      const fracX = rect.width > 0 ? (ev.clientX - rect.left) / rect.width : 0;
+      const fracY = rect.height > 0 ? (ev.clientY - rect.top) / rect.height : 0;
+      const seq = encodeWheelSgr(ev.deltaY, fracX, fracY, term.cols, term.rows);
+      if (!seq) return;
+      window.cs.sendInput(session, seq);
+      ev.preventDefault();
+      ev.stopPropagation();
+    };
+    el.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
+    const scrollDisposable = term.onScroll(() => scheduleReconcile());
 
     const resize = (): void => {
       try {
@@ -131,8 +229,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         // This preserves the user's scroll position when reviewing history.
         // viewportY is the buffer line at the top of the viewport; it equals baseY
         // only when scrolled fully to the bottom (and is smaller when scrolled up).
-        const wasAtBottom =
-          term.buffer.active.viewportY >= term.buffer.active.baseY;
+        const wasAtBottom = termIsAtBottom();
         term.write(toBytes(d.chunk));
         if (wasAtBottom) {
           term.scrollToBottom();
@@ -146,23 +243,51 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const observer = new ResizeObserver(() => resize());
     observer.observe(containerRef.current);
 
-    // Subscribe BEFORE attaching so we catch the host's emulator snapshot.
-    window.cs
-      .attachSession(session, { cols: term.cols, rows: term.rows })
-      .then(() => {
-        resize();
-        term.focus();
-      })
-      .catch((error: unknown) => {
-        term.writeln(`\r\n\x1b[31m[attach error: ${error instanceof Error ? error.message : String(error)}]\x1b[0m`);
-      });
+    // Subscribe BEFORE attaching so we catch the host's emulator snapshot. Prime
+    // scrollback before attaching so the live screen lands below prior history.
+    const connect = async (): Promise<void> => {
+      try {
+        const history = await window.cs.getHistory(session, false);
+        if (!disposed) {
+          lastScrollbackLines = history.scrollbackLines;
+          if (history.ansi && !history.altScreen) {
+            await writeTerm(normalizeHistory(history.ansi));
+          }
+        }
+      } catch {
+        // History priming is best-effort; never block the live attach.
+      }
 
-    setTimeout(resize, 0);
+      if (disposed) return;
+      window.cs
+        .attachSession(session, { cols: term.cols, rows: term.rows })
+        .then(() => {
+          if (disposed) return;
+          resize();
+          term.focus();
+        })
+        .catch((error: unknown) => {
+          if (disposed) return;
+          term.writeln(
+            `\r\n\x1b[31m[attach error: ${error instanceof Error ? error.message : String(error)}]\x1b[0m`,
+          );
+        });
+    };
+    void connect();
+
+    const resizeTimer = window.setTimeout(resize, 0);
 
     return () => {
+      disposed = true;
+      if (reconcileTimer !== undefined) {
+        window.clearTimeout(reconcileTimer);
+      }
+      window.clearTimeout(resizeTimer);
       el.removeEventListener('contextmenu', onContextMenu);
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('wheel', onWheelCapture, { capture: true });
       observer.disconnect();
+      scrollDisposable.dispose();
       inputDisposable.dispose();
       unsubData();
       unsubClosed();

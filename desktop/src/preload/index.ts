@@ -220,6 +220,11 @@ const api = {
   ): Promise<Response> => ipcRenderer.invoke('cs:attach-session', { sessionName, ...size }),
   detachSession: (sessionName: string): Promise<void> =>
     ipcRenderer.invoke('cs:detach-session', sessionName),
+  getHistory: (
+    session: string,
+    includeScreen = false,
+  ): Promise<{ ansi: string; altScreen: boolean; scrollbackLines: number }> =>
+    ipcRenderer.invoke('cs:get-history', { session, includeScreen }),
   ensureShell: (
     workspaceId: string,
     worktreePath: string,

@@ -122,6 +122,17 @@ func (c *Client) CapturePane(name, mode string, withANSI bool) (string, error) {
 	return r.Content, nil
 }
 
+func (c *Client) CaptureHistory(name string, includeScreen bool) (content string, altScreen bool, lines int, err error) {
+	r, e := c.call(&proto.Request{Method: proto.MethodCaptureHistory, Session: name, IncludeScreen: includeScreen})
+	if e != nil {
+		return "", false, 0, e
+	}
+	if !r.OK {
+		return "", false, 0, errors.New(r.Error)
+	}
+	return r.Content, r.AltScreen, r.ScrollbackLines, nil
+}
+
 func (c *Client) SendKeys(name string, data []byte) error {
 	return respErr(c.call(&proto.Request{Method: proto.MethodSendKeys, Session: name, Data: data}))
 }
