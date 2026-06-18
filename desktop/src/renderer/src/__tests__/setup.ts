@@ -26,6 +26,7 @@ const mockCs = {
   workspaceRunOutput: async () => ({ data: '', nextOffset: 0, running: false, exitCode: 0 }),
   attachSession: async () => ({ id: 0, ok: true }),
   detachSession: asyncNoop,
+  getHistory: async () => ({ ansi: '', altScreen: false, scrollbackLines: 0 }),
   ensureShell: async () => 'sh_mock',
   closeShell: asyncNoop,
   pickFolder: async () => null,

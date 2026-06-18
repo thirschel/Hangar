@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -207,5 +208,116 @@ func TestMaybeAutoYesForceApprovalIsScopedToTrustFolder(t *testing.T) {
 	}
 	if fpAfterTrust == "" {
 		t.Fatal("trust prompt should be approved despite attached user only for the one-shot")
+	}
+}
+
+func TestScrollbackANSI(t *testing.T) {
+	s := newConptySession("hist", "copilot", "", "cmd", 40, 3, false).(*conptySession)
+	_, _ = s.emu.Write([]byte("\x1b[31mRED-00\x1b[0m\r\n" +
+		"PLAIN-01\r\n" +
+		"\x1b[32mGREEN-02\x1b[0m\r\n" +
+		"PLAIN-03\r\n" +
+		"PLAIN-04\r\n" +
+		"PLAIN-05\r\n"))
+
+	if got := s.emu.ScrollbackLen(); got == 0 {
+		t.Fatal("expected scrollback after writing more lines than emulator height")
+	}
+	ansi := scrollbackANSI(s.emu)
+	for _, want := range []string{"RED-00", "PLAIN-01", "GREEN-02"} {
+		if !strings.Contains(ansi, want) {
+			t.Fatalf("scrollback ANSI missing %q: %q", want, ansi)
+		}
+	}
+	if !strings.Contains(ansi, "\x1b[31m") && !strings.Contains(ansi, "\x1b[38;") {
+		t.Fatalf("scrollback ANSI missing red SGR sequence: %q", ansi)
+	}
+	last := -1
+	for _, want := range []string{"RED-00", "PLAIN-01", "GREEN-02"} {
+		idx := strings.Index(ansi, want)
+		if idx <= last {
+			t.Fatalf("scrollback order is not top-to-bottom for %q in %q", want, ansi)
+		}
+		last = idx
+	}
+	if !strings.Contains(ansi, "\r\n") {
+		t.Fatalf("scrollback rows should be CRLF-terminated: %q", ansi)
+	}
+}
+
+func TestCaptureHistoryAltScreen(t *testing.T) {
+	s := newConptySession("alt", "copilot", "", "cmd", 40, 3, false).(*conptySession)
+	_, _ = s.emu.Write([]byte("\x1b[?1049hALT-SCREEN"))
+	if !s.emu.IsAltScreen() {
+		t.Fatal("emulator did not enter alternate screen")
+	}
+	ansi, altScreen, lines := s.captureHistory(true)
+	if !altScreen {
+		t.Fatal("captureHistory did not report alternate screen")
+	}
+	if lines != 0 {
+		t.Fatalf("expected no main scrollback while only alternate-screen output was written, got %d lines", lines)
+	}
+	if !strings.Contains(ansi, "ALT-SCREEN") {
+		t.Fatalf("includeScreen capture did not include alternate visible screen: %q", ansi)
+	}
+
+	_, _ = s.emu.Write([]byte("\x1b[?1049l"))
+	if s.emu.IsAltScreen() {
+		t.Fatal("emulator did not leave alternate screen")
+	}
+	_, altScreen, _ = s.captureHistory(false)
+	if altScreen {
+		t.Fatal("captureHistory still reported alternate screen after leaving it")
+	}
+}
+
+func TestTrackAndReplayModes(t *testing.T) {
+	s := &conptySession{decModes: make(map[int]bool)}
+	s.trackModesLocked([]byte("\x1b[?1049h\x1b[?1002;1006h\x1b[?2004h\x1b[?9001hHELLO"))
+
+	for _, m := range []int{1049, 1002, 1006, 2004, 9001} {
+		if !s.decModes[m] {
+			t.Fatalf("mode %d not tracked: %v", m, s.decModes)
+		}
+	}
+
+	replay := string(s.replayModesLocked())
+	// Alt-screen must come first so the snapshot's clear/home/render lands in the
+	// alternate buffer rather than accumulating in the normal buffer.
+	if !strings.HasPrefix(replay, "\x1b[?1049h") {
+		t.Fatalf("replay should start with alt-screen enter, got %q", replay)
+	}
+	for _, want := range []string{"\x1b[?1002h", "\x1b[?1006h", "\x1b[?2004h"} {
+		if !strings.Contains(replay, want) {
+			t.Fatalf("replay missing %q, got %q", want, replay)
+		}
+	}
+	// 9001 (win32-input) is deny-listed and must not be replayed to xterm.
+	if strings.Contains(replay, "\x1b[?9001h") {
+		t.Fatalf("replay must not contain deny-listed 9001, got %q", replay)
+	}
+
+	// A reset clears the mode.
+	s.trackModesLocked([]byte("\x1b[?1049l"))
+	if s.decModes[1049] {
+		t.Fatal("mode 1049 should be cleared after reset")
+	}
+}
+
+func TestTrackModesSplitAcrossChunks(t *testing.T) {
+	s := &conptySession{decModes: make(map[int]bool)}
+	// The mode sequence ESC[?1049h is split across two reads.
+	s.trackModesLocked([]byte("output\x1b[?10"))
+	s.trackModesLocked([]byte("49h more output"))
+	if !s.decModes[1049] {
+		t.Fatalf("mode split across chunks not tracked: %v", s.decModes)
+	}
+}
+
+func TestReplayModesEmptyWhenNoModes(t *testing.T) {
+	s := &conptySession{decModes: make(map[int]bool)}
+	if got := s.replayModesLocked(); got != nil {
+		t.Fatalf("expected nil replay when no modes are active, got %q", string(got))
 	}
 }

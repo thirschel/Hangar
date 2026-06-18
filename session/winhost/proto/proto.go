@@ -29,10 +29,12 @@ import (
 // (Request.Confirmed plus Response.NeedsConfirm/AbsPath). Bumping the version
 // guarantees a new client cannot silently resume against an old host that would
 // ignore the confirmation flag and create a worktree in an unconfirmed repo.
-const Version = 8
+// v9 adds CaptureHistory (ANSI scrollback + terminal-mode replay for the desktop).
+const Version = 9
 
-// MaxFrameSize bounds a single JSON frame. CapturePane(full) can include the
-// whole scrollback, so this is generous but still guards against abuse/OOM.
+// MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
+// can include the whole scrollback, so this is generous but still guards against
+// abuse/OOM.
 const MaxFrameSize = 16 << 20 // 16 MiB
 
 // Method names for Request.Method.
@@ -75,6 +77,9 @@ const (
 	// UpdateWorkspace (v6): update mutable workspace fields (title, program, shell).
 	MethodUpdateWorkspace = "UpdateWorkspace"
 
+	// CaptureHistory (v6): expose emulator scrollback as ANSI for terminal priming.
+	MethodCaptureHistory = "CaptureHistory"
+
 	// Copilot session browser (v6): discover and resume local Copilot CLI sessions.
 	MethodListCopilotSessions  = "ListCopilotSessions"
 	MethodResumeCopilotSession = "ResumeCopilotSession"
@@ -109,6 +114,9 @@ type Request struct {
 	// CapturePane
 	Mode     string `json:"mode,omitempty"`
 	WithANSI bool   `json:"withANSI,omitempty"`
+
+	// CaptureHistory: when true, append the current rendered screen after scrollback.
+	IncludeScreen bool `json:"includeScreen,omitempty"`
 
 	// Hello
 	ClientVersion int    `json:"clientVersion,omitempty"`
@@ -200,6 +208,10 @@ type Response struct {
 
 	// CapturePane
 	Content string `json:"content,omitempty"`
+
+	// CaptureHistory
+	AltScreen       bool `json:"altScreen,omitempty"`
+	ScrollbackLines int  `json:"scrollbackLines,omitempty"`
 
 	// HasSession
 	Exists bool `json:"exists,omitempty"`
