@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification
 import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import type net from 'node:net';
 import {
   ControlClient,
@@ -22,6 +22,7 @@ import {
   assertAuthorizedWorktree,
   classifyWindowOpen,
   isAllowedNavigationUrl,
+  resolveWithinWorktree,
   resolveWorktreeBase,
 } from './security';
 import { createTray, destroyTray } from './tray';
@@ -179,14 +180,19 @@ function createWindow(): void {
     return { action: 'deny' };
   });
 
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  // Block any navigation that leaves the app origin. will-navigate covers
+  // renderer-initiated navigations; will-redirect covers server-side 3xx redirects
+  // (e.g. a compromised dev server redirecting to file:/javascript:).
+  const guardNavigation = (event: { preventDefault: () => void }, url: string): void => {
     if (!isAllowedNavigationUrl(appUrl, url)) {
       event.preventDefault();
       if (classifyWindowOpen(url) === 'external') {
         void shell.openExternal(url);
       }
     }
-  });
+  };
+  mainWindow.webContents.on('will-navigate', guardNavigation);
+  mainWindow.webContents.on('will-redirect', guardNavigation);
 
   // Closing the window minimizes to the tray (keeping workspaces + daemon live)
   // unless the user is really quitting or has disabled the behavior.
@@ -258,7 +264,7 @@ ipcMain.handle('cs:detach-session', async (_event, sessionName: string) => {
 ipcMain.handle(
   'cs:ensure-shell',
   async (_event, args: { workspaceId: string; worktreePath: string; cols?: number; rows?: number }): Promise<string> => {
-    assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath);
+    assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath, realpath);
     const session = `sh_${args.workspaceId}`;
     const client = await getControlClient();
     const has = await client.call({ method: 'HasSession', session });
@@ -291,14 +297,10 @@ ipcMain.handle('cs:close-shell', async (_event, workspaceId: string): Promise<vo
   }
 });
 
-// Files tab: resolve a path strictly inside the worktree (reject traversal).
-function resolveInWorktree(worktreePath: string, rel: string): string {
-  const root = path.resolve(worktreePath);
-  const target = path.resolve(root, rel || '.');
-  if (target !== root && !target.startsWith(root + path.sep)) {
-    throw new Error('path is outside the worktree');
-  }
-  return target;
+// realpath canonicaliser used to collapse symlinks/junctions before containment
+// checks. Bound so the injected helpers in security.ts can call it directly.
+function realpath(p: string): string {
+  return realpathSync.native(p);
 }
 
 // The directory every managed worktree must live under (configured worktree_dir,
@@ -308,8 +310,8 @@ function authorizedWorktreeBase(): string {
 }
 
 ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir: string }): Promise<DirEntry[]> => {
-  assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath);
-  const dir = resolveInWorktree(args.worktreePath, args.relDir);
+  const root = assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath, realpath);
+  const dir = resolveWithinWorktree(root, args.relDir, realpath);
   const entries = readdirSync(dir, { withFileTypes: true });
   return entries
     .filter((e) => e.name !== '.git')
@@ -319,8 +321,8 @@ ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir
 
 ipcMain.handle('cs:fs-read', async (_event, args: { worktreePath: string; relFile: string }): Promise<FileContents> => {
   try {
-    assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath);
-    const file = resolveInWorktree(args.worktreePath, args.relFile);
+    const root = assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath, realpath);
+    const file = resolveWithinWorktree(root, args.relFile, realpath);
     const st = statSync(file);
     if (st.size > 1_000_000) return { kind: 'tooLarge', size: st.size };
     const buf = readFileSync(file);

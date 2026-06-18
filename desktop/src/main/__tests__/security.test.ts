@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import {
   assertAuthorizedWorktree,
+  canonicalize,
   classifyWindowOpen,
   isAllowedNavigationUrl,
   isStrictlyUnder,
+  resolveWithinWorktree,
   resolveWorktreeBase,
 } from '../security';
 
@@ -69,6 +71,12 @@ describe('assertAuthorizedWorktree', () => {
     expect(() => assertAuthorizedWorktree(base, base + '\\thirschel\\repo')).not.toThrow();
   });
 
+  it('returns the canonical worktree root', () => {
+    expect(assertAuthorizedWorktree(base, base + '\\thirschel\\repo')).toBe(
+      path.resolve(base + '\\thirschel\\repo'),
+    );
+  });
+
   it('throws for a path outside the base', () => {
     expect(() => assertAuthorizedWorktree(base, 'C:\\Windows\\System32')).toThrow(
       /not an authorized workspace/,
@@ -77,6 +85,66 @@ describe('assertAuthorizedWorktree', () => {
 
   it('throws for an empty path', () => {
     expect(() => assertAuthorizedWorktree(base, '')).toThrow(/not an authorized workspace/);
+  });
+
+  it('rejects a junction worktree root that resolves outside the base (canonicalized)', () => {
+    // The supplied path is lexically under the base, but realpath resolves the
+    // junction to a system directory — it must be rejected.
+    const junction = base + '\\escape';
+    const realpath = (p: string): string => (p === path.resolve(junction) ? 'C:\\Windows' : p);
+    expect(() => assertAuthorizedWorktree(base, junction, realpath)).toThrow(
+      /not an authorized workspace/,
+    );
+  });
+
+  it('accepts a worktree whose real path stays under the base', () => {
+    const wt = base + '\\thirschel\\repo';
+    const realpath = (p: string): string => p; // identity: resolves to itself
+    expect(assertAuthorizedWorktree(base, wt, realpath)).toBe(path.resolve(wt));
+  });
+});
+
+describe('canonicalize', () => {
+  it('resolves to an absolute path and applies realpath', () => {
+    const realpath = (p: string): string => p + '\\real';
+    expect(canonicalize('C:\\a\\b', realpath)).toBe('C:\\a\\b\\real');
+  });
+
+  it('falls back to the lexical absolute path when realpath throws', () => {
+    const realpath = (): string => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    };
+    expect(canonicalize('C:\\a\\..\\b', realpath)).toBe(path.resolve('C:\\a\\..\\b'));
+  });
+});
+
+describe('resolveWithinWorktree', () => {
+  const root = 'C:\\Users\\tester\\.hangar\\worktrees\\thirschel\\repo';
+
+  it('resolves a normal relative file inside the worktree', () => {
+    expect(resolveWithinWorktree(root, 'src\\index.ts')).toBe(path.resolve(root, 'src\\index.ts'));
+  });
+
+  it('rejects lexical traversal out of the worktree', () => {
+    expect(() => resolveWithinWorktree(root, '..\\..\\secrets.txt')).toThrow(
+      /outside the worktree/,
+    );
+  });
+
+  it('rejects a symlink inside the worktree that resolves outside it', () => {
+    // A malicious cloned repo plants `escape` -> C:\Users\tester\.ssh; the lexical
+    // path is contained but realpath resolves the link outside the worktree.
+    const realpath = (p: string): string =>
+      p === path.resolve(root, 'escape\\id_rsa') ? 'C:\\Users\\tester\\.ssh\\id_rsa' : p;
+    expect(() => resolveWithinWorktree(root, 'escape\\id_rsa', realpath)).toThrow(
+      /outside the worktree/,
+    );
+  });
+
+  it('accepts a symlink that resolves to a sibling inside the worktree', () => {
+    const realpath = (p: string): string =>
+      p === path.resolve(root, 'link\\f') ? path.join(root, 'real', 'f') : p;
+    expect(() => resolveWithinWorktree(root, 'link\\f', realpath)).not.toThrow();
   });
 });
 
@@ -112,6 +180,22 @@ describe('isAllowedNavigationUrl', () => {
   it('blocks file navigation outside the renderer directory', () => {
     const app = 'file:///C:/Users/tester/app/renderer/index.html';
     expect(isAllowedNavigationUrl(app, 'file:///C:/Windows/System32/x.html')).toBe(false);
+  });
+
+  it('blocks a remote UNC/SMB file host even when the path prefix matches', () => {
+    // file://attacker.com/C:/.../renderer/evil.html has a matching pathname prefix
+    // but a remote host, which Chromium would load over SMB — must be rejected.
+    const app = 'file:///C:/Users/tester/app/renderer/index.html';
+    expect(
+      isAllowedNavigationUrl(app, 'file://attacker.com/C:/Users/tester/app/renderer/evil.html'),
+    ).toBe(false);
+  });
+
+  it('blocks a sibling directory that shares the renderer name prefix', () => {
+    const app = 'file:///C:/Users/tester/app/renderer/index.html';
+    expect(isAllowedNavigationUrl(app, 'file:///C:/Users/tester/app/renderer-evil/x.html')).toBe(
+      false,
+    );
   });
 
   it('blocks a protocol switch', () => {
