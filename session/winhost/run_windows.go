@@ -22,6 +22,16 @@ func newRunManager() *runManager {
 	return &runManager{states: map[string]*runState{}}
 }
 
+// runShell builds the shell invocation for a workspace Run command (e.g.
+// `npm run dev`). Unlike the agent launch path, RunCommand legitimately needs a
+// real shell (pipes, `&&`, `.cmd`/`.bat` shims), so it is intentionally NOT
+// de-shelled. Instead it is confined to this single, clearly-labeled chokepoint.
+// It must only ever be reached from an explicit, user-initiated `runs.start`
+// action — never auto-fired from persisted state on load/revive (F-33).
+func runShell(command string) *exec.Cmd {
+	return exec.Command("cmd.exe", "/c", command)
+}
+
 func (m *runManager) state(id string) *runState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -101,7 +111,7 @@ func (s *runState) start(worktreePath, command string) error {
 	s.previewURL = ""
 	s.exitCode = 0
 
-	cmd := exec.Command("cmd.exe", "/c", command)
+	cmd := runShell(command)
 	cmd.Dir = worktreePath
 	hideConsole(cmd)
 	w := runOutputWriter{state: s, seq: seq}

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"hangar/session/agentcmd"
+	"hangar/session/promptpolicy"
 	"hangar/session/winhost/proto"
 
 	uv "github.com/charmbracelet/ultraviolet"
@@ -60,9 +63,9 @@ type conptySession struct {
 
 	mu           sync.Mutex
 	autoYes      bool
-	forceApprove bool
-	autoYesArmed bool // edge-trigger guard: tap Enter once per prompt appearance
-	attachedCnt  int  // >0 while a client is interactively attached (AutoYes pauses)
+	pendingTrust *pendingTrustApproval
+	lastPromptFP string
+	attachedCnt  int // >0 while a client is interactively attached (AutoYes pauses)
 	cols         int
 	rows         int
 	detCols      int // detached/preview size to restore when a client detaches
@@ -81,29 +84,40 @@ type conptySession struct {
 	closeOnce   sync.Once
 }
 
+type pendingTrustApproval struct {
+	reason    string
+	expiresAt time.Time
+}
+
 func newConptySession(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
 	return &conptySession{
-		name:         name,
-		program:      program,
-		workDir:      workDir,
-		shell:        shell,
-		cols:         cols,
-		rows:         rows,
-		detCols:      cols,
-		detRows:      rows,
-		autoYes:      autoYes,
-		autoYesArmed: true,
-		emu:          vt.NewSafeEmulator(cols, rows),
-		subs:         make(map[*subscriber]struct{}),
-		decModes:     make(map[int]bool),
-		autoYesStop:  make(chan struct{}),
+		name:        name,
+		program:     program,
+		workDir:     workDir,
+		shell:       shell,
+		cols:        cols,
+		rows:        rows,
+		detCols:     cols,
+		detRows:     rows,
+		autoYes:     autoYes,
+		emu:         vt.NewSafeEmulator(cols, rows),
+		subs:        make(map[*subscriber]struct{}),
+		decModes:    make(map[int]bool),
+		autoYesStop: make(chan struct{}),
 	}
 }
 
 func (s *conptySession) start() error {
-	fields := strings.Fields(s.program)
-	if len(fields) == 0 {
-		return fmt.Errorf("empty program")
+	// Build the launch spec ONCE: the program string is tokenized with
+	// platform-correct (CommandLineToArgvW) semantics and, in the default path,
+	// launched directly via argv with NO shell interpreter. This removes the
+	// cmd.exe/powershell middleman that allowed `&`/`;`/`|` in an agent program
+	// or a poisoned resume id to inject commands (F-01/F-04). Any resume id is
+	// already validated at the trust boundary and survives as a single argv
+	// element.
+	spec, err := agentcmd.BuildLaunch(s.program, "", "--resume=", agentcmd.ParseShellKind(s.shell))
+	if err != nil {
+		return err
 	}
 	pty, err := xpty.NewPty(s.cols, s.rows)
 	if err != nil {
@@ -111,13 +125,22 @@ func (s *conptySession) start() error {
 	}
 
 	var cmd *exec.Cmd
-	switch s.shell {
-	case "powershell":
-		cmd = exec.Command("powershell.exe", append([]string{"-Command"}, fields...)...)
-	case "pwsh":
-		cmd = exec.Command("pwsh.exe", append([]string{"-Command"}, fields...)...)
-	default: // "cmd" or empty
-		cmd = exec.Command("cmd.exe", append([]string{"/c"}, fields...)...)
+	switch spec.Shell {
+	case agentcmd.ShellPowerShell:
+		// Explicit opt-in shell mode (e.g. PowerShell-function agents like `cpa`).
+		// The script is the trusted program text; any resume id is charset-
+		// restricted and/or env-bound so it cannot inject.
+		cmd = exec.Command("powershell.exe", "-NoLogo", "-Command", spec.Script)
+		cmd.Env = append(os.Environ(), spec.Env...)
+	case agentcmd.ShellPwsh:
+		cmd = exec.Command("pwsh.exe", "-NoLogo", "-Command", spec.Script)
+		cmd.Env = append(os.Environ(), spec.Env...)
+	default: // ShellNone: direct argv exec, no shell.
+		if spec.Path == "" {
+			_ = pty.Close()
+			return fmt.Errorf("empty program")
+		}
+		cmd = exec.Command(spec.Path, spec.Args...)
 	}
 	if s.workDir != "" {
 		cmd.Dir = s.workDir
@@ -488,27 +511,29 @@ func (s *conptySession) setAutoYes(enabled bool) {
 	s.mu.Lock()
 	s.autoYes = enabled
 	if enabled {
-		// Re-arm so a prompt that is already on screen gets approved.
-		s.autoYesArmed = true
+		// Re-arm so a prompt that is already on screen gets policy-evaluated.
+		s.lastPromptFP = ""
 	}
 	s.mu.Unlock()
 }
 
-func (s *conptySession) setForceApprove(enabled bool) {
+func (s *conptySession) armTrustApproval(reason string, expiresAt time.Time) {
 	s.mu.Lock()
-	s.forceApprove = enabled
-	if enabled {
-		// Re-arm so an approval prompt already on screen is accepted during handoff.
-		s.autoYesArmed = true
-	}
+	s.pendingTrust = &pendingTrustApproval{reason: reason, expiresAt: expiresAt}
+	s.lastPromptFP = ""
 	s.mu.Unlock()
 }
 
-// autoYesLoop drives host-side AutoYes: it periodically checks for an approval
-// prompt and, if AutoYes is enabled and no client is attached, taps Enter once
-// per prompt appearance. Running it in the host (not the TUI) means unattended
-// agents keep progressing even when the TUI is closed, while pausing whenever a
-// user is interactively attached.
+func (s *conptySession) clearTrustApproval() {
+	s.mu.Lock()
+	s.pendingTrust = nil
+	s.mu.Unlock()
+}
+
+// autoYesLoop drives host-side AutoYes: it periodically classifies the visible
+// prompt and approves only policy-allowlisted categories. Running it in the host
+// (not the TUI) means unattended agents keep progressing even when the TUI is
+// closed, while pausing whenever a user is interactively attached.
 func (s *conptySession) autoYesLoop() {
 	defer recoverGoroutine("conpty.autoYesLoop")
 	ticker := time.NewTicker(400 * time.Millisecond)
@@ -527,43 +552,60 @@ func (s *conptySession) autoYesLoop() {
 func (s *conptySession) maybeAutoYes() {
 	s.mu.Lock()
 	enabled := s.autoYes
-	force := s.forceApprove
 	attached := s.attachedCnt > 0
-	armed := s.autoYesArmed
+	lastFP := s.lastPromptFP
+	pending := s.pendingTrust
 	s.mu.Unlock()
-	effEnabled := enabled || force
-	effAttached := attached && !force
-	// Pause while attached so we never approve a prompt out from under the user.
-	prompt := false
-	if effEnabled && !effAttached {
-		prompt = detectPrompt(s.program, plainScreen(s.emu))
+
+	match, ok := promptpolicy.Classify(s.program, plainScreen(s.emu))
+	now := time.Now()
+	if !ok {
+		s.mu.Lock()
+		s.lastPromptFP = ""
+		if s.pendingTrust != nil && now.After(s.pendingTrust.expiresAt) {
+			s.pendingTrust = nil
+		}
+		s.mu.Unlock()
+		return
 	}
-	tap, nextArmed := autoYesDecision(effEnabled, effAttached, prompt, armed)
+	if match.Fingerprint == lastFP {
+		return
+	}
+
+	approve, consumePending, source := autoYesDecision(enabled, attached, match, pending, now)
+	if consumePending {
+		s.mu.Lock()
+		if s.pendingTrust == pending {
+			s.pendingTrust = nil
+		}
+		s.mu.Unlock()
+	}
+	if !approve {
+		return
+	}
 	s.mu.Lock()
-	s.autoYesArmed = nextArmed
+	s.lastPromptFP = match.Fingerprint
 	s.mu.Unlock()
-	if tap {
-		_ = s.sendKeys([]byte{0x0d})
+	if err := s.sendKeys(match.ApproveKeys); err != nil {
+		return
 	}
+	promptpolicy.AuditAutoApproval(s.name, s.program, match, source)
 }
 
-// autoYesDecision is the pure edge-trigger core of host-side AutoYes: given the
-// current state it returns whether to tap Enter now and the next armed value.
-// It taps once on the rising edge of a prompt (prompt && armed) and re-arms once
-// the prompt clears, so a single prompt is approved exactly once. While disabled
-// or attached it never taps and leaves armed unchanged.
-func autoYesDecision(enabled, attached, prompt, armed bool) (tap, nextArmed bool) {
-	if !enabled || attached {
-		return false, armed
+func autoYesDecision(enabled, attached bool, match promptpolicy.Match, pending *pendingTrustApproval, now time.Time) (approve, consumePending bool, source string) {
+	if pending != nil && now.After(pending.expiresAt) {
+		return false, true, ""
 	}
-	switch {
-	case prompt && armed:
-		return true, false
-	case !prompt && !armed:
-		return false, true
-	default:
-		return false, armed
+	if pending != nil && match.Category == promptpolicy.CategoryTrustFolder {
+		return true, true, "force-once:" + pending.reason
 	}
+	if attached || !enabled {
+		return false, false, ""
+	}
+	if promptpolicy.AllowsAutoApprove(match) {
+		return true, false, "policy"
+	}
+	return false, false, ""
 }
 
 func (s *conptySession) info() proto.SessionInfo {
@@ -703,23 +745,10 @@ func rowText(se *vt.SafeEmulator, y int, scrollback bool, w int) string {
 	return b.String()
 }
 
-// detectPrompt mirrors the tmux backend's prompt heuristics, plus copilot. When
-// AutoYes is on, the host taps Enter on these prompts (the default option is the
-// affirmative one). The copilot match is the "reject" option that appears on
-// every copilot approval prompt (shell command, file edit, etc.), so it is
-// prompt-type-agnostic and stable.
+// detectPrompt reports prompts known to the typed prompt policy. It is used only
+// for status/metadata; AutoYes approval is gated by category in maybeAutoYes.
 func detectPrompt(program, plain string) bool {
-	switch {
-	case strings.Contains(program, "claude"):
-		return strings.Contains(plain, "No, and tell Claude what to do differently")
-	case strings.Contains(program, "copilot"):
-		return strings.Contains(plain, "No, and tell Copilot what to do differently")
-	case strings.Contains(program, "aider"):
-		return strings.Contains(plain, "(Y)es/(N)o/(D)on't ask again")
-	case strings.Contains(program, "gemini"):
-		return strings.Contains(plain, "Yes, allow once")
-	}
-	return false
+	return promptpolicy.IsPrompt(program, plain)
 }
 
 // detectWaiting is a broader, status-only signal than detectPrompt: it reports

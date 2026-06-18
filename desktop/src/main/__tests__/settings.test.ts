@@ -100,6 +100,7 @@ describe('settings', () => {
 
     expect(fsMock.mkdirSync).toHaveBeenCalledWith(path.join(osMock.homedir, '.hangar'), {
       recursive: true,
+      mode: 0o700,
     });
     expect(readWrittenJson(configPath)).toEqual({
       default_program: 'copilot',
