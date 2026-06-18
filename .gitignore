@@ -9,3 +9,6 @@ cs
 *.exe~
 Thumbs.db
 Desktop.ini
+
+# Node (root release tooling)
+node_modules/
