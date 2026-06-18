@@ -10,6 +10,7 @@ import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import { SessionBrowserModal } from './components/SessionBrowserModal';
 import { WelcomeModal } from './components/WelcomeModal';
+import { playNotificationSound } from './notificationSound';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -197,11 +198,13 @@ export function App(): JSX.Element {
       .catch(() => {});
     const unsubFocus = window.cs.onFocusWorkspace((id) => setSelectedId(id));
     const unsubWelcome = window.cs.onFirstRun?.(() => setShowWelcome(true));
+    const unsubSound = window.cs.onPlayNotificationSound?.(() => playNotificationSound());
 
     return () => {
       active = false;
       unsubFocus();
       unsubWelcome?.();
+      unsubSound?.();
     };
   }, [refresh]);
 
