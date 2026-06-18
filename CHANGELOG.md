@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.1.1](https://github.com/thirschel/Hangar/compare/v1.1.0...v1.1.1) (2026-06-18)
+
+### Bug Fixes
+
+* **desktop:** align agent terminal when switching workspaces ([#45](https://github.com/thirschel/Hangar/issues/45)) ([ad82075](https://github.com/thirschel/Hangar/commit/ad820752a644aa7c7b57f26170bf26b19a52d307))
+
 ## [1.1.0](https://github.com/thirschel/Hangar/compare/v1.0.0...v1.1.0) (2026-06-18)
 
 ### Features
