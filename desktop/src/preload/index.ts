@@ -223,8 +223,9 @@ const api = {
   getHistory: (
     session: string,
     includeScreen = false,
+    size?: { cols?: number; rows?: number },
   ): Promise<{ ansi: string; altScreen: boolean; scrollbackLines: number }> =>
-    ipcRenderer.invoke('cs:get-history', { session, includeScreen }),
+    ipcRenderer.invoke('cs:get-history', { session, includeScreen, ...size }),
   ensureShell: (
     workspaceId: string,
     worktreePath: string,

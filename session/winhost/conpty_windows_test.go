@@ -223,7 +223,7 @@ func TestScrollbackANSI(t *testing.T) {
 	if got := s.emu.ScrollbackLen(); got == 0 {
 		t.Fatal("expected scrollback after writing more lines than emulator height")
 	}
-	ansi := scrollbackANSI(s.emu)
+	ansi := scrollbackANSI(s.emu, s.emu.Width())
 	for _, want := range []string{"RED-00", "PLAIN-01", "GREEN-02"} {
 		if !strings.Contains(ansi, want) {
 			t.Fatalf("scrollback ANSI missing %q: %q", want, ansi)
@@ -251,7 +251,7 @@ func TestCaptureHistoryAltScreen(t *testing.T) {
 	if !s.emu.IsAltScreen() {
 		t.Fatal("emulator did not enter alternate screen")
 	}
-	ansi, altScreen, lines := s.captureHistory(true)
+	ansi, altScreen, lines := s.captureHistory(true, 0, 0)
 	if !altScreen {
 		t.Fatal("captureHistory did not report alternate screen")
 	}
@@ -266,7 +266,7 @@ func TestCaptureHistoryAltScreen(t *testing.T) {
 	if s.emu.IsAltScreen() {
 		t.Fatal("emulator did not leave alternate screen")
 	}
-	_, altScreen, _ = s.captureHistory(false)
+	_, altScreen, _ = s.captureHistory(false, 0, 0)
 	if altScreen {
 		t.Fatal("captureHistory still reported alternate screen after leaving it")
 	}

@@ -30,6 +30,9 @@ import (
 // guarantees a new client cannot silently resume against an old host that would
 // ignore the confirmation flag and create a worktree in an unconfirmed repo.
 // v9 adds CaptureHistory (ANSI scrollback + terminal-mode replay for the desktop).
+// CaptureHistory now also honors the request's Cols/Rows, rendering stored
+// scrollback at the client's display width so it aligns with the fitted xterm
+// grid (additive; clips/reveals rows, never reflows — no version change).
 const Version = 9
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory

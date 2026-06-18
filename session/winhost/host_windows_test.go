@@ -104,7 +104,7 @@ func (f *fakeSession) capture(full, withANSI bool) string {
 	defer f.mu.Unlock()
 	return string(f.buf)
 }
-func (f *fakeSession) captureHistory(includeScreen bool) (string, bool, int) {
+func (f *fakeSession) captureHistory(includeScreen bool, cols, rows int) (string, bool, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	content := string(f.history)
