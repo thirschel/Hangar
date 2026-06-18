@@ -21,9 +21,10 @@ archives:
         format: zip
 
 release:
-  prerelease: auto
-  draft: true
-  replace_existing_draft: true
+  # semantic-release owns the GitHub release + changelog; GoReleaser only builds,
+  # archives, checksums and signs. The release workflow uploads dist/* to the
+  # release semantic-release created (see .github/workflows/release.yml).
+  disable: true
 
 checksum:
   name_template: 'checksums.txt'
@@ -38,13 +39,3 @@ signs:
       - --output-signature=${signature}
       - --output-certificate=${certificate}
       - ${artifact}
-
-changelog:
-  use: github
-
-  filters:
-    exclude:
-      - "^docs:"
-      - typo
-      - "^refactor"
-      - "^chore"
