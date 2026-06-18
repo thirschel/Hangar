@@ -6,6 +6,7 @@
 // renderer-facing filesystem/shell IPC handlers.
 
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const isWindows = process.platform === 'win32';
 
@@ -144,13 +145,20 @@ export function isAllowedNavigationUrl(appUrl: string, targetUrl: string): boole
     // (file://server/share) that Chromium would load from a remote machine, so
     // require the host to match the app's (empty for a normal local file: URL).
     if (target.hostname !== appU.hostname) return false;
-    // Allow only navigation within the renderer's own directory. file: URLs have
-    // a "null" origin, so compare the directory prefix of the pathname instead.
-    const dir = appU.pathname.slice(0, appU.pathname.lastIndexOf('/') + 1);
-    if (dir.length === 0) return false;
-    const a = isWindows ? dir.toLowerCase() : dir;
-    const t = isWindows ? target.pathname.toLowerCase() : target.pathname;
-    return t.startsWith(a);
+    // Resolve both to real filesystem paths and reuse the worktree containment
+    // primitive: the target must be a file strictly inside the renderer's own
+    // directory. fileURLToPath decodes percent-escapes and, crucially, throws on
+    // encoded path separators (%2f / %5c), so an encoded-traversal target that
+    // would slip past a raw pathname-prefix comparison is rejected here.
+    let appPath: string;
+    let targetPath: string;
+    try {
+      appPath = fileURLToPath(appU);
+      targetPath = fileURLToPath(target);
+    } catch {
+      return false;
+    }
+    return isStrictlyUnder(path.dirname(appPath), targetPath);
   }
   // http/https dev server: same origin only (permits Vite HMR reloads).
   return appU.origin === target.origin;
