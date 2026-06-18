@@ -1,5 +1,6 @@
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
+import { CenterTerminal } from './CenterTerminal';
 
 type CenterPaneProps = {
   workspace: WorkspaceInfo | null;
@@ -16,9 +17,9 @@ const regenPhaseCopy: Record<string, string> = {
   seeding: 'Seeding the new agent with the handoff…',
 };
 
-// CenterPane shows the agent terminal (always visible) plus the composer. Files,
-// Terminal, Changes and Run live in the RightPanel so they're visible at the same
-// time as the agent.
+// CenterPane shows the agent terminal (always visible) over a collapsible,
+// drag-resizable shell dock (CenterTerminal). Files and Changes live in the
+// RightPanel so they're visible at the same time as the agent.
 export function CenterPane({
   workspace,
   onToggleAutoYes,
@@ -78,6 +79,8 @@ export function CenterPane({
           </div>
         </div>
       </div>
+
+      <CenterTerminal workspace={workspace} />
     </section>
   );
 }
