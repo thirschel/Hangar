@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import type net from 'node:net';
 import {
@@ -17,6 +18,12 @@ import {
   type FileContents,
 } from './host-client';
 import { getSettings, applySettings, isFirstRun, markSetupComplete, type Settings } from './settings';
+import {
+  assertAuthorizedWorktree,
+  classifyWindowOpen,
+  isAllowedNavigationUrl,
+  resolveWorktreeBase,
+} from './security';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { log } from './logger';
@@ -154,8 +161,31 @@ function createWindow(): void {
       preload: path.join(__dirname, '..\\preload\\index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
+  });
+
+  // The renderer must never open Electron child windows or navigate the main
+  // window off its own origin (F-16). Deny all window.open targets — routing real
+  // web links to the OS browser — and block any cross-origin top-level navigation.
+  const appUrl = process.env.ELECTRON_RENDERER_URL
+    ? process.env.ELECTRON_RENDERER_URL
+    : pathToFileURL(path.join(__dirname, '..\\renderer\\index.html')).toString();
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (classifyWindowOpen(url) === 'external') {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedNavigationUrl(appUrl, url)) {
+      event.preventDefault();
+      if (classifyWindowOpen(url) === 'external') {
+        void shell.openExternal(url);
+      }
+    }
   });
 
   // Closing the window minimizes to the tray (keeping workspaces + daemon live)
@@ -228,6 +258,7 @@ ipcMain.handle('cs:detach-session', async (_event, sessionName: string) => {
 ipcMain.handle(
   'cs:ensure-shell',
   async (_event, args: { workspaceId: string; worktreePath: string; cols?: number; rows?: number }): Promise<string> => {
+    assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath);
     const session = `sh_${args.workspaceId}`;
     const client = await getControlClient();
     const has = await client.call({ method: 'HasSession', session });
@@ -270,7 +301,14 @@ function resolveInWorktree(worktreePath: string, rel: string): string {
   return target;
 }
 
+// The directory every managed worktree must live under (configured worktree_dir,
+// else ~/.hangar/worktrees) — the allowlist root for renderer-supplied paths.
+function authorizedWorktreeBase(): string {
+  return resolveWorktreeBase(os.homedir(), getSettings().workspaceDir);
+}
+
 ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir: string }): Promise<DirEntry[]> => {
+  assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath);
   const dir = resolveInWorktree(args.worktreePath, args.relDir);
   const entries = readdirSync(dir, { withFileTypes: true });
   return entries
@@ -281,6 +319,7 @@ ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir
 
 ipcMain.handle('cs:fs-read', async (_event, args: { worktreePath: string; relFile: string }): Promise<FileContents> => {
   try {
+    assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath);
     const file = resolveInWorktree(args.worktreePath, args.relFile);
     const st = statSync(file);
     if (st.size > 1_000_000) return { kind: 'tooLarge', size: st.size };
