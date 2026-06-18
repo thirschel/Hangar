@@ -325,6 +325,72 @@ func TestCopilotWorkspaceLaunchCommands(t *testing.T) {
 	}
 }
 
+// runCopilotProbe runs copilotProbeScript with funcDef prepended (defining the
+// agent named by HANGAR_PROBE_NAME) under -NoProfile, so the create-time
+// detection heuristic is exercised hermetically. Returns the probe exit code
+// (0 = copilot-backed, 1 = found but not copilot, 2 = not found).
+func runCopilotProbe(t *testing.T, funcDef, name string) int {
+	t.Helper()
+	if _, err := exec.LookPath("powershell.exe"); err != nil {
+		t.Skip("powershell.exe not available")
+	}
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command", funcDef+"\n"+copilotProbeScript)
+	cmd.Env = append(os.Environ(), "HANGAR_PROBE_NAME="+name)
+	if err := cmd.Run(); err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return ee.ExitCode()
+		}
+		t.Fatalf("probe launch failed: %v", err)
+	}
+	return 0
+}
+
+// TestCopilotProbeScriptDetection verifies the create-time probe recognises a
+// copilot wrapper (e.g. `cpa`) via the parsed AST while ignoring comments and
+// non-copilot agents — the heuristic that lets a wrapper get a resumable session.
+func TestCopilotProbeScriptDetection(t *testing.T) {
+	cases := []struct {
+		name    string
+		funcDef string
+		probe   string
+		want    int
+	}{
+		{"copilot wrapper", "function cpa { copilot --allow-all-tools --yolo @args }", "cpa", 0},
+		{"copilot exe wrapper", "function cpa { copilot.exe @args }", "cpa", 0},
+		{"non-copilot wrapper", "function claudewrap { claude @args }", "claudewrap", 1},
+		{"copilot only in comment", "function claudewrap {\n claude @args # copilot\n }", "claudewrap", 1},
+		{"missing command", "", "definitely_missing_agent_xyz", 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := runCopilotProbe(t, c.funcDef, c.probe); got != c.want {
+				t.Fatalf("probe exit = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+// TestCopilotResumable covers the name-independent resume gate: a detected wrapper
+// (CopilotResume=true) and legacy literal-copilot workspaces both resume, while a
+// wrapper without the persisted flag does not.
+func TestCopilotResumable(t *testing.T) {
+	cases := []struct {
+		name string
+		w    workspace
+		want bool
+	}{
+		{"detected wrapper", workspace{Program: "cpa", CopilotResume: true}, true},
+		{"legacy copilot", workspace{Program: "copilot"}, true},
+		{"undetected wrapper", workspace{Program: "cpa"}, false},
+		{"non-copilot", workspace{Program: "claude", CopilotResume: false}, false},
+	}
+	for _, c := range cases {
+		if got := c.w.copilotResumable(); got != c.want {
+			t.Fatalf("%s: copilotResumable() = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // TestNewUUID checks the session id is a well-formed v4 UUID and unique.
 func TestNewUUID(t *testing.T) {
 	re := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
