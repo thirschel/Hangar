@@ -597,6 +597,7 @@ func RunHost() error {
 	defer removeHostInfo()
 
 	go h.idleLoop()
+	h.workspaces.startDiffRefresh()
 	h.logger.Printf("session-host started pid=%d pipe=%s version=%d", os.Getpid(), pipe, proto.Version)
 	h.serve(ln) // blocks until shutdown
 	h.logger.Printf("session-host stopped")

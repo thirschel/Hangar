@@ -1,9 +1,11 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DiffStats holds statistics about the changes in a diff
@@ -87,7 +89,40 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 	return stats
 }
 
-// FileDiffStat summarizes the change to a single file vs the base branch.
+// DiffNumstatTimeout is like DiffNumstat but bounds the underlying git commands
+// with a timeout. `git add -N .` walks the entire worktree, so a worktree that
+// contains a pathological tree (e.g. a symlink into the Windows assembly cache)
+// can otherwise make this take minutes. On timeout the git process is killed and
+// the returned DiffStats carries the timeout error, so callers can fall back to
+// the last known counts instead of blocking.
+func (g *GitWorktree) DiffNumstatTimeout(timeout time.Duration) *DiffStats {
+	stats := &DiffStats{}
+
+	sha := g.GetBaseCommitSHA()
+	if err := ValidateSHA(sha); err != nil {
+		stats.Error = fmt.Errorf("invalid base commit SHA: %w", err)
+		return stats
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	// -N stages untracked files (intent to add), including them in the diff.
+	if _, err := g.runGitCommandContext(ctx, g.worktreePath, "add", "-N", "."); err != nil {
+		stats.Error = err
+		return stats
+	}
+
+	out, err := g.runGitCommandContext(ctx, g.worktreePath, "--no-pager", "diff", "--numstat", sha)
+	if err != nil {
+		stats.Error = err
+		return stats
+	}
+
+	stats.Added, stats.Removed = parseNumstat(out)
+	return stats
+}
+
 type FileDiffStat struct {
 	Path    string
 	Added   int
