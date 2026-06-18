@@ -43,8 +43,9 @@ type workspace struct {
 	ExistingBranch bool   `json:"existingBranch"`
 	CreatedUnix    int64  `json:"createdUnix"`
 	RunCommand     string `json:"runCommand"`
-	AgentSessionID string `json:"agentSessionId"`  // stable agent session UUID for resume (copilot)
-	Shell          string `json:"shell,omitempty"` // "cmd", "powershell", "pwsh"; empty = config default
+	AgentSessionID string `json:"agentSessionId"`          // stable agent session UUID for resume (copilot)
+	Shell          string `json:"shell,omitempty"`         // "cmd", "powershell", "pwsh"; empty = config default
+	CopilotResume  bool   `json:"copilotResume,omitempty"` // agent is copilot or a detected copilot wrapper (e.g. "cpa") -> resumable
 }
 
 type workspaceManager struct {
@@ -576,9 +577,9 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 	// the launch path (F-01); if it no longer passes the trust-boundary gate we
 	// launch fresh (no resume) rather than trusting stored state.
 	program := w.Program
-	if w.AgentSessionID != "" {
+	if w.copilotResumable() && w.AgentSessionID != "" {
 		if agentcmd.ValidSessionID(w.AgentSessionID) {
-			program = agentcmd.ResumeCommand(w.Program, w.AgentSessionID)
+			program = agentcmd.ResumeFlagCommand(w.Program, w.AgentSessionID)
 		} else {
 			m.host.logger.Printf("workspace %s: rejecting invalid persisted AgentSessionID %q; launching without resume", w.ID, w.AgentSessionID)
 		}
@@ -947,7 +948,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 	}
 	oldName = w.SessionName
 	w.SessionName = "ws_" + id + "-" + shortRand()
-	if agentcmd.SupportsResume(w.Program) {
+	if w.copilotResumable() {
 		w.AgentSessionID = newUUID()
 	} else {
 		w.AgentSessionID = ""
@@ -970,7 +971,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 
 	var lastErr error
 	for attempt := 0; attempt < 8; attempt++ {
-		err := m.host.startManagedSessionWithShell(newName, agentcmd.SeedNewCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+		err := m.host.startManagedSessionWithShell(newName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
 		if err == nil {
 			return nil
 		}
@@ -990,6 +991,71 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 		m.mu.Unlock()
 	}
 	return lastErr
+}
+
+// copilotResumable reports whether this workspace's agent supports copilot-style
+// resume. CopilotResume is detected and persisted at create/import time and covers
+// copilot wrappers such as `cpa` (whose name is not "copilot"). The SupportsResume
+// fallback keeps workspaces created before this field existed (literal `copilot`)
+// resuming across an upgrade.
+func (w *workspace) copilotResumable() bool {
+	return w.CopilotResume || agentcmd.SupportsResume(w.Program)
+}
+
+// copilotProbeScript resolves the agent named in $env:HANGAR_PROBE_NAME via
+// Get-Command (with the user's $PROFILE loaded, so functions like `cpa` are
+// visible) and reports, through its exit code, whether it exists and ultimately
+// invokes copilot. The name is bound through the environment and never string-
+// interpolated, so a hostile token cannot inject (F-05). Detection walks the
+// parsed AST, so only real command invocations count — not comments or strings.
+//
+//	exit 0 = found and copilot-backed
+//	exit 1 = found but not copilot
+//	exit 2 = not found
+const copilotProbeScript = `
+$c = Get-Command -Name $env:HANGAR_PROBE_NAME -ErrorAction SilentlyContinue
+if (-not $c) { exit 2 }
+if ($c.CommandType -eq 'Alias' -and $c.ResolvedCommand) { $c = $c.ResolvedCommand }
+$isCopilot = $false
+try {
+  if ($c.CommandType -eq 'Function' -or $c.CommandType -eq 'Filter') {
+    $cmds = $c.ScriptBlock.Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
+    foreach ($cmd in $cmds) {
+      $name = $cmd.GetCommandName()
+      if ($name -and ([System.IO.Path]::GetFileNameWithoutExtension($name) -ieq 'copilot')) { $isCopilot = $true; break }
+    }
+  } elseif ($c.CommandType -eq 'Application') {
+    if ([System.IO.Path]::GetFileNameWithoutExtension([string]$c.Source) -ieq 'copilot') { $isCopilot = $true }
+  }
+} catch { }
+if ($isCopilot) { exit 0 } else { exit 1 }
+`
+
+// probeAgentProgram resolves an agent program that is not on PATH (e.g. a
+// PowerShell profile function like `cpa`) and reports whether it exists and
+// whether it is copilot-backed, reusing the hidden, env-bound probe pattern.
+// A launch failure of the probe itself is treated as "not found".
+func probeAgentProgram(shell, progName string) (found, isCopilot bool) {
+	psExe := "powershell.exe"
+	if shell == "pwsh" {
+		psExe = "pwsh.exe"
+	}
+	probe := exec.Command(psExe, "-WindowStyle", "Hidden", "-Command", copilotProbeScript)
+	probe.Env = append(os.Environ(), "HANGAR_PROBE_NAME="+progName)
+	hideConsole(probe)
+	err := probe.Run()
+	if err == nil {
+		return true, true // exit 0
+	}
+	if ee, ok := err.(*exec.ExitError); ok {
+		switch ee.ExitCode() {
+		case 1:
+			return true, false
+		case 2:
+			return false, false
+		}
+	}
+	return false, false
 }
 
 func (m *workspaceManager) create(req *proto.Request) *proto.Response {
@@ -1015,30 +1081,23 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 
 	// Validate the agent program resolves *before* creating any worktree or
 	// session. For cmd, check PATH; for powershell/pwsh, also probe Get-Command
-	// (with profile loaded so functions like `cpa` are visible).
+	// (with profile loaded so functions like `cpa` are visible). The same probe
+	// reports whether the program ultimately invokes copilot, so a wrapper such as
+	// `cpa` gets a resumable session id even though its name isn't "copilot".
 	argv, perr := agentcmd.ParseProgram(program)
 	if perr != nil {
 		return proto.Errorf(req.ID, "no agent program configured")
 	}
 	progName := argv[0]
+	copilotResume := agentcmd.SupportsResume(program)
 	if _, err := exec.LookPath(progName); err != nil {
 		if shell == "powershell" || shell == "pwsh" {
-			psExe := "powershell.exe"
-			if shell == "pwsh" {
-				psExe = "pwsh.exe"
-			}
-			// The untrusted program name is bound via an environment variable and
-			// referenced through Get-Command -Name $env:HANGAR_PROBE_NAME — never
-			// string-interpolated — so a token like `x'); calc; ('` resolves to
-			// "not found" instead of executing (F-05). -WindowStyle Hidden avoids
-			// the blue PowerShell flash; no -NoProfile so $PROFILE functions are
-			// visible to Get-Command.
-			const probeScript = `if (Get-Command -Name $env:HANGAR_PROBE_NAME -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`
-			probe := exec.Command(psExe, "-WindowStyle", "Hidden", "-Command", probeScript)
-			probe.Env = append(os.Environ(), "HANGAR_PROBE_NAME="+progName)
-			hideConsole(probe)
-			if probeErr := probe.Run(); probeErr != nil {
+			found, isCopilot := probeAgentProgram(shell, progName)
+			if !found {
 				return proto.Errorf(req.ID, "agent program %q not found on PATH or as a PowerShell command (set a valid agent such as 'copilot' or 'claude'): %v", progName, err)
+			}
+			if isCopilot {
+				copilotResume = true
 			}
 		} else {
 			return proto.Errorf(req.ID, "agent program %q not found on PATH (set a valid agent such as 'copilot' or 'claude'): %v", progName, err)
@@ -1049,10 +1108,11 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	sessionName := "ws_" + id
 	gitName := slug(title) + "-" + id[:6] // unique branch even for duplicate titles
 
-	// Give resumable agents (copilot) a stable session UUID so a relaunch after a
-	// daemon restart continues the same conversation instead of starting fresh.
+	// Give resumable agents (copilot, or a detected copilot wrapper such as `cpa`)
+	// a stable session UUID so a relaunch after a daemon restart continues the same
+	// conversation instead of starting fresh.
 	agentSessionID := ""
-	if agentcmd.SupportsResume(program) {
+	if copilotResume {
 		agentSessionID = newUUID()
 	}
 
@@ -1075,7 +1135,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedNewCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
 		// Roll back the worktree so a failed create leaves no orphan.
 		_ = wt.Remove()
 		_ = wt.Prune()
@@ -1087,6 +1147,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
 		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: req.BaseBranch != "",
 		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID, Shell: shell,
+		CopilotResume: copilotResume,
 	}
 	m.mu.Lock()
 	m.wss[id] = w
@@ -1443,6 +1504,7 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
 		SessionName: sessionName, AutoYes: req.AutoYes,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: req.SessionID, Shell: shell,
+		CopilotResume: true,
 	}
 	m.mu.Lock()
 	m.wss[id] = w
