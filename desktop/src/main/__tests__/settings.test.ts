@@ -52,7 +52,8 @@ describe('settings', () => {
   });
 
   it('getSettings returns defaults when no config files exist', () => {
-    expect(getSettings()).toEqual({
+    const settings = getSettings();
+    expect(settings).toMatchObject({
       defaultProgram: 'copilot',
       defaultShell: 'cmd',
       autoYes: false,
@@ -64,6 +65,8 @@ describe('settings', () => {
       autoUpdate: false,
       uiRefreshMs: 2000,
     });
+    expect(settings.terminalProfiles.length).toBeGreaterThan(0);
+    expect(settings.terminalProfiles.some((profile) => profile.id === settings.defaultTerminalProfileId)).toBe(true);
   });
 
   it('getSettings returns autoUpdate default of false', () => {
@@ -110,7 +113,8 @@ describe('settings', () => {
       default_shell: 'powershell',
       worktree_dir: 'C:\\worktrees',
     });
-    expect(readWrittenJson(appSettingsPath)).toEqual({
+    const writtenAppSettings = readWrittenJson(appSettingsPath);
+    expect(writtenAppSettings).toMatchObject({
       notifications: true,
       notificationSound: true,
       minimizeToTray: true,
@@ -118,7 +122,9 @@ describe('settings', () => {
       uiRefreshMs: 2500,
       setupComplete: false,
     });
-    expect(result).toEqual({
+    expect(Array.isArray(writtenAppSettings.terminalProfiles)).toBe(true);
+    expect(typeof writtenAppSettings.defaultTerminalProfileId).toBe('string');
+    expect(result).toMatchObject({
       defaultProgram: 'copilot',
       defaultShell: 'powershell',
       autoYes: false,
@@ -130,12 +136,15 @@ describe('settings', () => {
       autoUpdate: false,
       uiRefreshMs: 2500,
     });
+    expect(result.terminalProfiles.length).toBeGreaterThan(0);
+    expect(result.terminalProfiles.some((profile) => profile.id === result.defaultTerminalProfileId)).toBe(true);
   });
 
   it('applySettings persists autoUpdate flag', () => {
     applySettings({ autoUpdate: true });
 
-    expect(readWrittenJson(appSettingsPath)).toEqual({
+    const writtenAppSettings = readWrittenJson(appSettingsPath);
+    expect(writtenAppSettings).toMatchObject({
       notifications: true,
       notificationSound: true,
       minimizeToTray: true,
@@ -143,6 +152,8 @@ describe('settings', () => {
       uiRefreshMs: 2000,
       setupComplete: false,
     });
+    expect(Array.isArray(writtenAppSettings.terminalProfiles)).toBe(true);
+    expect(typeof writtenAppSettings.defaultTerminalProfileId).toBe('string');
   });
 
   it('applySettings preserves unknown daemon keys', () => {

@@ -2,7 +2,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
-import { isAtBottom, normalizeHistory, shouldReconcile } from './termHistory';
+import { isAtBottom, normalizeHistory } from './termHistory';
 import { appHandlesWheel, encodeWheelSgr } from './termWheel';
 
 type TermViewProps = {
@@ -36,16 +36,14 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     }
     const session = sessionName;
     let disposed = false;
-    let lastScrollbackLines = 0;
-    let reconcileTimer: number | undefined;
-    let reconcileInFlight = false;
 
     const term = new Terminal({
       cols: 120,
       rows: 30,
       scrollback: 10000, // Allow scrolling back through conversation history
       cursorBlink: true,
-      fontFamily: 'Consolas, "Cascadia Mono", "Cascadia Code", monospace',
+      fontFamily:
+        '"CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "MesloLGM Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "Cascadia Code NF", "Cascadia Mono NF", Consolas, "Cascadia Mono", "Cascadia Code", monospace',
       fontSize: 13,
       allowProposedApi: true,
       windowsPty: { backend: 'conpty', buildNumber: 26100 },
@@ -117,77 +115,12 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     el.addEventListener('contextmenu', onContextMenu);
 
-    const reconcileHistory = async (): Promise<void> => {
-      if (
-        disposed ||
-        reconcileInFlight ||
-        term.hasSelection() ||
-        term.buffer.active.type !== 'normal'
-      ) {
-        return;
-      }
-      const atBottom = termIsAtBottom();
-      if (atBottom) return;
-
-      const viewportY = term.buffer.active.viewportY;
-      reconcileInFlight = true;
-      try {
-        const history = await window.cs.getHistory(session, true, {
-          cols: term.cols,
-          rows: term.rows,
-        });
-        const stillAtBottom = termIsAtBottom();
-        if (disposed || term.hasSelection() || stillAtBottom) return;
-
-        const previousScrollbackLines = lastScrollbackLines;
-        lastScrollbackLines = history.scrollbackLines;
-        if (
-          history.altScreen ||
-          !history.ansi ||
-          !shouldReconcile(previousScrollbackLines, history.scrollbackLines, stillAtBottom)
-        ) {
-          return;
-        }
-
-        term.reset();
-        await writeTerm(normalizeHistory(history.ansi));
-        if (!disposed) {
-          term.scrollToLine(Math.min(viewportY, term.buffer.active.baseY));
-        }
-      } catch {
-        // History refresh is best-effort; live terminal streaming must continue.
-      } finally {
-        reconcileInFlight = false;
-      }
-    };
-
-    const scheduleReconcile = (): void => {
-      if (reconcileTimer !== undefined) {
-        window.clearTimeout(reconcileTimer);
-      }
-      if (
-        disposed ||
-        term.hasSelection() ||
-        term.buffer.active.type !== 'normal' ||
-        termIsAtBottom()
-      ) {
-        return;
-      }
-      reconcileTimer = window.setTimeout(() => {
-        reconcileTimer = undefined;
-        void reconcileHistory();
-      }, 150);
-    };
-
-    // Wheel handler: scroll the terminal when in normal buffer mode.
-    // When apps use the alternate screen buffer (fullscreen TUIs) or enable
-    // mouse tracking, wheel events should pass through to the app normally.
+    // Wheel handler for the normal (scrollable) buffer: xterm scrolls its own
+    // viewport natively and keeps a 10k-line scrollback fed by the live stream,
+    // so we only stop the page from scrolling. (Alt-screen / mouse-tracking apps
+    // are handled by the separate capture-phase SGR wheel encoder below.)
     const onWheel = (ev: WheelEvent): void => {
-      // Normal (scrollable) buffer only. xterm scrolls its own viewport natively,
-      // so we must NOT call term.scrollLines here as well (that double-scrolls).
-      // We only refresh host-backed history and prevent the page from scrolling.
       if (term.buffer.active.type === 'normal') {
-        scheduleReconcile();
         ev.preventDefault();
       }
     };
@@ -213,7 +146,6 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       ev.stopPropagation();
     };
     el.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
-    const scrollDisposable = term.onScroll(() => scheduleReconcile());
 
     const resize = (): void => {
       try {
@@ -243,7 +175,18 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       if (c.session === session) term.writeln(`\r\n\x1b[90m${endedLabel}\x1b[0m`);
     });
 
-    const observer = new ResizeObserver(() => resize());
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleResize = (): void => {
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+      }
+      // Coalesce resize bursts to avoid per-frame fit jitter during the dock slide animation.
+      resizeTimer = setTimeout(() => {
+        resizeTimer = null;
+        resize();
+      }, 120);
+    };
+    const observer = new ResizeObserver(() => scheduleResize());
     observer.observe(containerRef.current);
 
     // Subscribe BEFORE attaching so we catch the host's emulator snapshot. Prime
@@ -254,11 +197,8 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           cols: term.cols,
           rows: term.rows,
         });
-        if (!disposed) {
-          lastScrollbackLines = history.scrollbackLines;
-          if (history.ansi && !history.altScreen) {
-            await writeTerm(normalizeHistory(history.ansi));
-          }
+        if (!disposed && history.ansi && !history.altScreen) {
+          await writeTerm(normalizeHistory(history.ansi));
         }
       } catch {
         // History priming is best-effort; never block the live attach.
@@ -302,16 +242,15 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
 
     return () => {
       disposed = true;
-      if (reconcileTimer !== undefined) {
-        window.clearTimeout(reconcileTimer);
-      }
       if (settleRaf1) cancelAnimationFrame(settleRaf1);
       if (settleRaf2) cancelAnimationFrame(settleRaf2);
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+      }
       el.removeEventListener('contextmenu', onContextMenu);
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('wheel', onWheelCapture, { capture: true });
       observer.disconnect();
-      scrollDisposable.dispose();
       inputDisposable.dispose();
       unsubData();
       unsubClosed();

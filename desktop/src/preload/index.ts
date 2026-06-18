@@ -8,7 +8,7 @@ import type {
   Response,
   WorkspaceInfo,
 } from '../main/host-client';
-import type { Settings } from '../main/settings';
+import type { Settings, ShellProfile } from '../main/settings';
 
 export type AppInfo = {
   version: string;
@@ -229,11 +229,12 @@ const api = {
   ensureShell: (
     workspaceId: string,
     worktreePath: string,
-    size?: { cols?: number; rows?: number },
+    opts?: { cols?: number; rows?: number; program?: string },
   ): Promise<string> =>
-    ipcRenderer.invoke('cs:ensure-shell', { workspaceId, worktreePath, ...size }),
+    ipcRenderer.invoke('cs:ensure-shell', { workspaceId, worktreePath, ...opts }),
   closeShell: (workspaceId: string): Promise<void> =>
     ipcRenderer.invoke('cs:close-shell', workspaceId),
+  detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),

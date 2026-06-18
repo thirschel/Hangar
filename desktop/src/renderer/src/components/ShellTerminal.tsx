@@ -4,13 +4,15 @@ import { TermView, type TermViewHandle } from './TermView';
 
 type ShellTerminalProps = {
   workspace: WorkspaceInfo | null;
+  program?: string;
 };
 
-// ShellTerminal lazily starts a PowerShell session in the workspace's worktree
-// (kept alive in the daemon so re-opening re-attaches the same shell) and renders
-// it via the shared TermView. Forwards a refit handle for tab-show resizing.
+// ShellTerminal lazily starts a shell session (PowerShell/pwsh/cmd/… per the
+// selected profile) in the workspace's worktree (kept alive in the daemon so
+// re-opening re-attaches the same shell) and renders it via the shared TermView.
+// Forwards a refit handle for tab-show resizing.
 export const ShellTerminal = forwardRef<TermViewHandle, ShellTerminalProps>(function ShellTerminal(
-  { workspace },
+  { workspace, program },
   ref,
 ): JSX.Element {
   const [session, setSession] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export const ShellTerminal = forwardRef<TermViewHandle, ShellTerminalProps>(func
     if (!wsId || !worktreePath) return;
     let active = true;
     window.cs
-      .ensureShell(wsId, worktreePath, { cols: 120, rows: 30 })
+      .ensureShell(wsId, worktreePath, { cols: 120, rows: 30, program })
       .then((s) => {
         if (active) setSession(s);
       })
@@ -38,7 +40,7 @@ export const ShellTerminal = forwardRef<TermViewHandle, ShellTerminalProps>(func
     return () => {
       active = false;
     };
-  }, [wsId, worktreePath]);
+  }, [wsId, worktreePath, program]);
 
   if (!workspace) {
     return (
@@ -57,7 +59,7 @@ export const ShellTerminal = forwardRef<TermViewHandle, ShellTerminalProps>(func
   if (!session) {
     return (
       <div className="agent-terminal agent-terminal--empty">
-        <div>Starting PowerShell…</div>
+        <div>Starting shell…</div>
       </div>
     );
   }
