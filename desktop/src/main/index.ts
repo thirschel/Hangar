@@ -232,13 +232,15 @@ ipcMain.handle(
   'cs:get-history',
   async (
     _event,
-    args: { session: string; includeScreen?: boolean },
+    args: { session: string; includeScreen?: boolean; cols?: number; rows?: number },
   ): Promise<{ ansi: string; altScreen: boolean; scrollbackLines: number }> => {
     const client = await getControlClient();
     const r = await client.call({
       method: 'CaptureHistory',
       session: args.session,
       includeScreen: args.includeScreen ?? false,
+      cols: args.cols,
+      rows: args.rows,
     });
     if (!r.ok) {
       // A workspace session that isn't live yet (e.g. just after a daemon

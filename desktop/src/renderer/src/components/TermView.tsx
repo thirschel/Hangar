@@ -132,7 +132,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       const viewportY = term.buffer.active.viewportY;
       reconcileInFlight = true;
       try {
-        const history = await window.cs.getHistory(session, true);
+        const history = await window.cs.getHistory(session, true, {
+          cols: term.cols,
+          rows: term.rows,
+        });
         const stillAtBottom = termIsAtBottom();
         if (disposed || term.hasSelection() || stillAtBottom) return;
 
@@ -247,7 +250,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     // scrollback before attaching so the live screen lands below prior history.
     const connect = async (): Promise<void> => {
       try {
-        const history = await window.cs.getHistory(session, false);
+        const history = await window.cs.getHistory(session, false, {
+          cols: term.cols,
+          rows: term.rows,
+        });
         if (!disposed) {
           lastScrollbackLines = history.scrollbackLines;
           if (history.ansi && !history.altScreen) {
@@ -273,16 +279,34 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           );
         });
     };
-    void connect();
-
-    const resizeTimer = window.setTimeout(resize, 0);
+    let settleRaf1 = 0;
+    let settleRaf2 = 0;
+    // Wait for flex/grid layout, fonts, and xterm cell measurement to settle
+    // (two frames) so fit() reflects the real pane BEFORE we prime history and
+    // bind the live attach. Otherwise a workspace switch attaches at the default
+    // 120x30 and only self-corrects on an OS resize (the bug being fixed).
+    settleRaf1 = requestAnimationFrame(() => {
+      settleRaf1 = 0;
+      settleRaf2 = requestAnimationFrame(() => {
+        settleRaf2 = 0;
+        if (disposed) return;
+        try {
+          fit.fit();
+        } catch {
+          // Element can be detached mid-startup/teardown; connect() still
+          // attaches at the current size and the ResizeObserver refit corrects it.
+        }
+        void connect();
+      });
+    });
 
     return () => {
       disposed = true;
       if (reconcileTimer !== undefined) {
         window.clearTimeout(reconcileTimer);
       }
-      window.clearTimeout(resizeTimer);
+      if (settleRaf1) cancelAnimationFrame(settleRaf1);
+      if (settleRaf2) cancelAnimationFrame(settleRaf2);
       el.removeEventListener('contextmenu', onContextMenu);
       el.removeEventListener('wheel', onWheel);
       el.removeEventListener('wheel', onWheelCapture, { capture: true });

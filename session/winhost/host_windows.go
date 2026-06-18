@@ -39,7 +39,7 @@ const headerReadTimeout = 5 * time.Minute
 type managedSession interface {
 	start() error
 	capture(full, withANSI bool) string
-	captureHistory(includeScreen bool) (string, bool, int)
+	captureHistory(includeScreen bool, cols, rows int) (string, bool, int)
 	sendKeys(b []byte) error
 	resize(cols, rows int) error
 	hasUpdated() (updated, hasPrompt bool)
@@ -245,7 +245,7 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		if !ok {
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
-		ansi, altScreen, lines := s.captureHistory(req.IncludeScreen)
+		ansi, altScreen, lines := s.captureHistory(req.IncludeScreen, req.Cols, req.Rows)
 		return &proto.Response{ID: req.ID, OK: true, Content: ansi, AltScreen: altScreen, ScrollbackLines: lines}
 	case proto.MethodSendKeys:
 		s, ok := h.getSession(req.Session)

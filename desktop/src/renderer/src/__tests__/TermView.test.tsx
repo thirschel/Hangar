@@ -1,0 +1,126 @@
+// @vitest-environment jsdom
+import { act, render } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// A shared fit() spy used for ordering assertions. Hoisted so the addon-fit mock
+// factory (which vitest hoists above imports) can close over it. fit() writes the
+// FITTED size onto the terminal it was loaded into, mimicking the real FitAddon
+// adopting the measured pane.
+const { fitSpy } = vi.hoisted(() => ({
+  fitSpy: vi.fn(function (this: { term: { cols: number; rows: number } }) {
+    this.term.cols = 100;
+    this.term.rows = 40;
+  }),
+}));
+
+// xterm pulls in a CSS side-effect import that jsdom cannot parse.
+vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
+
+// Minimal xterm stand-in covering every term.* / buffer.* / modes.* access in
+// TermView. cols/rows start at the 120x30 constructor default so the test can
+// prove the fit overwrote them to 100x40 BEFORE history priming and attach.
+vi.mock('@xterm/xterm', () => {
+  class FakeTerminal {
+    cols = 120;
+    rows = 30;
+    buffer = { active: { viewportY: 0, baseY: 0, type: 'normal' } };
+    modes = { mouseTrackingMode: 'none' };
+    loadAddon(addon: { term?: FakeTerminal }): void {
+      addon.term = this;
+    }
+    open(): void {}
+    focus(): void {}
+    reset(): void {}
+    scrollToBottom(): void {}
+    scrollToLine(): void {}
+    clearSelection(): void {}
+    paste(): void {}
+    dispose(): void {}
+    writeln(): void {}
+    write(_data: unknown, cb?: () => void): void {
+      cb?.();
+    }
+    getSelection(): string {
+      return '';
+    }
+    hasSelection(): boolean {
+      return false;
+    }
+    attachCustomKeyEventHandler(): void {}
+    onData(): { dispose: () => void } {
+      return { dispose: vi.fn() };
+    }
+    onScroll(): { dispose: () => void } {
+      return { dispose: vi.fn() };
+    }
+  }
+  return { Terminal: FakeTerminal };
+});
+
+vi.mock('@xterm/addon-fit', () => {
+  class FakeFitAddon {
+    term!: { cols: number; rows: number };
+    fit = fitSpy;
+  }
+  return { FitAddon: FakeFitAddon };
+});
+
+import { TermView } from '../components/TermView';
+
+describe('TermView startup ordering', () => {
+  beforeEach(() => {
+    // jsdom lacks a deterministic rAF and ResizeObserver; make them synchronous
+    // so the double-rAF settle runs inline during render().
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe(): void {}
+        unobserve(): void {}
+        disconnect(): void {}
+      },
+    );
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+
+    // Per-test cs stubs that RESOLVE so attach's .then() chain runs.
+    window.cs.getHistory = vi
+      .fn()
+      .mockResolvedValue({ ansi: '', altScreen: false, scrollbackLines: 0 });
+    window.cs.attachSession = vi.fn().mockResolvedValue({ id: 0, ok: true });
+    window.cs.resize = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fits, then primes history, then attaches -- all at the fitted 100x40 size', async () => {
+    const getHistory = vi.mocked(window.cs.getHistory);
+    const attachSession = vi.mocked(window.cs.attachSession);
+
+    await act(async () => {
+      render(<TermView sessionName="ws_test" />);
+    });
+    await vi.waitFor(() => expect(attachSession).toHaveBeenCalled());
+
+    // Order of operations: fit BEFORE getHistory BEFORE attachSession.
+    expect(fitSpy.mock.invocationCallOrder[0]).toBeLessThan(getHistory.mock.invocationCallOrder[0]);
+    expect(getHistory.mock.invocationCallOrder[0]).toBeLessThan(
+      attachSession.mock.invocationCallOrder[0],
+    );
+
+    // Both calls carry the FITTED size, not the 120x30 constructor default.
+    expect(attachSession).toHaveBeenCalledWith('ws_test', { cols: 100, rows: 40 });
+    expect(getHistory).toHaveBeenCalledWith('ws_test', false, { cols: 100, rows: 40 });
+
+    // Regression guard: nothing was sent at the pre-fit 120x30 default.
+    expect(attachSession).not.toHaveBeenCalledWith('ws_test', { cols: 120, rows: 30 });
+    expect(getHistory).not.toHaveBeenCalledWith('ws_test', expect.anything(), {
+      cols: 120,
+      rows: 30,
+    });
+  });
+});
