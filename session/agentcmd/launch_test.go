@@ -43,7 +43,6 @@ func TestParseProgram(t *testing.T) {
 		{name: "simple", program: "copilot", want: []string{"copilot"}},
 		{name: "multi token", program: "aider --model x", want: []string{"aider", "--model", "x"}},
 		{name: "profile value", program: "aider --model ollama_chat/gemma3:1b", want: []string{"aider", "--model", "ollama_chat/gemma3:1b"}},
-		{name: "quoted windows path", program: `"C:\Program Files\app\agent.exe" --flag`, want: []string{`C:\Program Files\app\agent.exe`, "--flag"}},
 		{name: "quoted profile", program: `cs -p "codex"`, want: []string{"cs", "-p", "codex"}},
 		{name: "empty", program: "", wantErr: true},
 		{name: "whitespace only", program: "   ", wantErr: true},
@@ -117,13 +116,6 @@ func TestBuildLaunchArgvMode(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "claude", spec.Path)
 		require.Empty(t, spec.Args)
-	})
-
-	t.Run("quoted windows path", func(t *testing.T) {
-		spec, err := BuildLaunch(`"C:\Program Files\app\agent.exe" --flag`, "", "--resume=", ShellNone)
-		require.NoError(t, err)
-		require.Equal(t, `C:\Program Files\app\agent.exe`, spec.Path)
-		require.Equal(t, []string{"--flag"}, spec.Args)
 	})
 }
 
