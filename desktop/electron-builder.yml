@@ -1,0 +1,44 @@
+appId: com.thirschel.hangar
+productName: Hangar
+copyright: Copyright © 2026 Hangar
+
+directories:
+  output: release
+  buildResources: build
+
+# The app code is the electron-vite output plus package.json; production
+# node_modules (e.g. electron-updater) are bundled automatically.
+files:
+  - out/**/*
+  - package.json
+
+# Ship the Go core-daemon and the runtime icons next to the app. CS_EXE resolves
+# resources/dist/cs.exe when packaged; the tray icon resolves resources/build/*.png.
+extraResources:
+  - from: ../dist/cs.exe
+    to: dist/cs.exe
+  - from: build
+    to: build
+    filter:
+      - '*.png'
+
+win:
+  target:
+    - nsis
+  icon: build/icon.ico
+  # No code-signing configured here — see PACKAGING.md. Set CSC_LINK / CSC_KEY_PASSWORD
+  # (or an Azure Trusted Signing config) to produce a signed installer.
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+  shortcutName: Hangar
+
+# Auto-update source. Update owner/repo to the fork that publishes releases; the
+# updater only runs in packaged builds and logs (does not crash) if no release exists.
+publish:
+  provider: github
+  owner: thirschel
+  repo: Hangar
