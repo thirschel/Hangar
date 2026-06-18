@@ -3,7 +3,6 @@
 package winhost
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"hangar/session/promptpolicy"
 	"hangar/session/winhost/proto"
 )
 
@@ -67,16 +67,21 @@ func withClient(fn func(*Client) error) error {
 
 // Shutdown stops a running host (if any). Used by `cs reset`.
 func Shutdown() error {
-	pipe, err := controlPipeName()
+	hi, err := loadHostInfoForAuth()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // not running
+		}
+		return err
+	}
+	c, err := connectAndHello(hi, 500*time.Millisecond)
 	if err != nil {
 		return err
 	}
-	c, err := dialClient(pipe, 500*time.Millisecond)
-	if err != nil {
-		return nil // not running
-	}
 	defer c.Close()
-	_ = c.Shutdown()
+	if err := c.Shutdown(); err != nil {
+		return err
+	}
 	resetClient()
 	return nil
 }
@@ -94,7 +99,7 @@ func HostInfo() (string, error) {
 	fmt.Fprintf(&b, "  state file:  %s\n", infoPath)
 	fmt.Fprintf(&b, "  client ver:  %d\n", proto.Version)
 
-	data, err := os.ReadFile(infoPath)
+	hi, err := readHostInfoFile()
 	if err != nil {
 		if os.IsNotExist(err) {
 			b.WriteString("  status:      not running (no state file)\n")
@@ -102,18 +107,22 @@ func HostInfo() (string, error) {
 		}
 		return "", err
 	}
-	var hi hostInfo
-	if err := json.Unmarshal(data, &hi); err != nil {
-		return "", fmt.Errorf("parse %s: %w", infoPath, err)
-	}
 	fmt.Fprintf(&b, "  pipe:        %s\n", hi.PipeName)
 	fmt.Fprintf(&b, "  pid:         %d\n", hi.PID)
 	fmt.Fprintf(&b, "  host ver:    %d\n", hi.Version)
 	fmt.Fprintf(&b, "  created:     %s\n", time.Unix(hi.CreatedUnix, 0).Format(time.RFC3339))
 
-	c, err := dialClient(hi.PipeName, 800*time.Millisecond)
+	expectedPipe, err := controlPipeName()
 	if err != nil {
-		fmt.Fprintf(&b, "  status:      state file present but host not reachable (%v)\n", err)
+		return "", err
+	}
+	if err := validateHostInfoForAuth(hi, expectedPipe, processCreationUnix); err != nil {
+		fmt.Fprintf(&b, "  status:      untrusted state file (%v)\n", err)
+		return b.String(), nil
+	}
+	c, err := connectAndHello(hi, 800*time.Millisecond)
+	if err != nil {
+		fmt.Fprintf(&b, "  status:      authentication failed or host not reachable (%v)\n", err)
 		return b.String(), nil
 	}
 	defer c.Close()
@@ -236,6 +245,8 @@ func (s *Session) HasUpdated() (updated bool, hasPrompt bool) {
 // here we'd double-approve. SendKeys (e.g. for trust prompts) is unaffected.
 func (s *Session) TapEnter() error { return nil }
 
+func (s *Session) TryAutoApprove(sessionID string) bool { return false }
+
 // SetAutoYes enables/disables host-side AutoYes for this session.
 func (s *Session) SetAutoYes(enabled bool) error {
 	return withClient(func(c *Client) error { return c.SetAutoYes(s.name, enabled) })
@@ -277,26 +288,20 @@ func (s *Session) DetachSafely() error {
 	return err
 }
 
-// CheckAndHandleTrustPrompt dismisses the one-time trust/confirmation prompt for
-// supported agents. It uses SendKeys (not TapEnter, which is a host-owned no-op
-// on Windows) so it works regardless of AutoYes state.
+// CheckAndHandleTrustPrompt dismisses only prompts classified as safe. Folder
+// trust and MCP trust prompts are intentionally not cleared here.
 func (s *Session) CheckAndHandleTrustPrompt() bool {
 	content, err := s.capturePlain()
 	if err != nil {
 		return false
 	}
-	switch {
-	case strings.Contains(s.program, "claude"), strings.Contains(s.program, "copilot"):
-		if strings.Contains(content, "Do you trust the files in this folder?") ||
-			strings.Contains(content, "new MCP server") {
-			_ = s.SendKeys("\r")
-			return true
-		}
-	case strings.Contains(s.program, "aider"), strings.Contains(s.program, "gemini"):
-		if strings.Contains(content, "Open documentation url for more info") {
-			_ = s.SendKeys("D\r")
-			return true
-		}
+	match, ok := promptpolicy.Classify(s.program, content)
+	if !ok || !promptpolicy.AllowsAutoApprove(match) {
+		return false
 	}
-	return false
+	if err := s.SendKeys(string(match.ApproveKeys)); err != nil {
+		return false
+	}
+	promptpolicy.AuditAutoApproval(s.name, s.program, match, "startup-policy")
+	return true
 }

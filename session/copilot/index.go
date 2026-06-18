@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -228,6 +226,12 @@ func eventsStat(path string) (int64, time.Time, error) {
 }
 
 func scanIndexContent(ctx context.Context, path string) (string, error) {
+	// Reject oversized files before allocating any read buffer (F-30).
+	if _, err := statAndCheckSize(path, maxEventsFileBytes); err != nil {
+		logWarningf("copilot index scan rejected: %v", err)
+		return "", nil // treat oversized file as empty haystack
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -237,22 +241,24 @@ func scanIndexContent(ctx context.Context, path string) (string, error) {
 	}
 	defer file.Close()
 
-	reader := bufio.NewReader(file)
+	// Use bufio.Scanner with an explicit per-line cap (F-30).
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024) // initial buffer 64 KiB
+	scanner.Buffer(buf, maxLineBytes)
+
 	var b strings.Builder
 	for b.Len() < indexCapBytes {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		line, readErr := reader.ReadString('\n')
-		if line != "" {
-			appendIndexContent(&b, strings.TrimSpace(line))
+		if !scanner.Scan() {
+			break
 		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			return "", readErr
-		}
+		appendIndexContent(&b, strings.TrimSpace(scanner.Text()))
+	}
+	if err := scanner.Err(); err != nil {
+		// bufio.ErrTooLong: partial haystack is acceptable.
+		logWarningf("copilot index scan error (oversized line or I/O) %s: %v", path, err)
 	}
 	return b.String(), nil
 }
@@ -301,7 +307,7 @@ func (ix *Index) persist(ctx context.Context, entries map[string]indexEntry) err
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(ix.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(ix.path), 0o700); err != nil {
 		return err
 	}
 
@@ -341,7 +347,7 @@ func (ix *Index) persist(ctx context.Context, entries map[string]indexEntry) err
 
 func (ix *Index) tryLock() func() {
 	lockPath := ix.path + ".lock"
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		if cslog.WarningLog != nil {
 			cslog.WarningLog.Printf("copilot index lock unavailable %s: %v", lockPath, err)

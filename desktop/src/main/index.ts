@@ -11,6 +11,8 @@ import {
   connectAttachStream,
   connectPipe,
   ensureHost,
+  randomClientNonce,
+  verifyAuthenticatedHello,
   type DirEntry,
   type FileContents,
 } from './host-client';
@@ -48,6 +50,7 @@ const DEFAULT_ROWS = 30;
 
 let mainWindow: BrowserWindow | null = null;
 let control: ControlClient | null = null;
+let authenticatedHello: Response | null = null;
 // Live attach streams keyed by session name, so the agent and an in-worktree
 // shell terminal can stream concurrently. Bounded in practice to the selected
 // workspace's agent (+ its shell), which are swapped when the selection changes.
@@ -67,19 +70,25 @@ async function getControlClient(): Promise<ControlClient> {
   }
   // Drop a dead client so a daemon restart triggers a fresh connect.
   control = null;
+  authenticatedHello = null;
   if (!setupPromise) {
     setupPromise = (async () => {
       try {
-        const pipeName = await ensureHost(CS_EXE);
-        const client = new ControlClient(await connectPipe(pipeName));
-        const hello = await client.call({ method: 'Hello', clientVersion: PROTO_VERSION });
-        log.info('Hello ->', hello.hostVersion, hello.ok);
-        if (!hello.ok) {
-          throw new Error(`Hello failed: ${hello.error || 'unknown error'}`);
+        const hostInfo = await ensureHost(CS_EXE);
+        const client = new ControlClient(await connectPipe(hostInfo.pipeName));
+        try {
+          const clientNonce = randomClientNonce();
+          const hello = await client.call({ method: 'Hello', clientVersion: PROTO_VERSION, clientNonce });
+          verifyAuthenticatedHello(hostInfo, clientNonce, hello);
+          log.info('Hello ->', hello.hostVersion, hello.ok);
+          control = client;
+          authenticatedHello = hello;
+          sendToRenderer('cs:ready', { hostVersion: hello.hostVersion, ok: hello.ok });
+          return client;
+        } catch (error) {
+          client.close();
+          throw error;
         }
-        control = client;
-        sendToRenderer('cs:ready', { hostVersion: hello.hostVersion, ok: hello.ok });
-        return client;
       } finally {
         // Always clear the in-flight promise so a future reconnect can re-run setup.
         setupPromise = null;
@@ -184,11 +193,20 @@ function sendToRenderer(channel: string, payload?: unknown): void {
 ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
   try {
     const client = await getControlClient();
+    if (request.method === 'Hello' && authenticatedHello) {
+      return authenticatedHello;
+    }
     return await client.call(request);
   } catch {
     // If the pipe dropped (daemon restarted), reconnect and retry once.
-    if (control?.isClosed()) control = null;
+    if (control?.isClosed()) {
+      control = null;
+      authenticatedHello = null;
+    }
     const client = await getControlClient();
+    if (request.method === 'Hello' && authenticatedHello) {
+      return authenticatedHello;
+    }
     return await client.call(request);
   }
 });
