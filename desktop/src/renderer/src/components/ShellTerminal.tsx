@@ -17,7 +17,14 @@ export const ShellTerminal = forwardRef<TermViewHandle, ShellTerminalProps>(func
   const [error, setError] = useState<string | null>(null);
   const inner = useRef<TermViewHandle>(null);
 
-  useImperativeHandle(ref, () => ({ refit: () => inner.current?.refit() }), []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      refit: () => inner.current?.refit(),
+      openFind: () => inner.current?.openFind(),
+    }),
+    [],
+  );
 
   const wsId = workspace?.id;
   const worktreePath = workspace?.worktreePath;

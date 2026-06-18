@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CenterPane } from './components/CenterPane';
+import type { TermViewHandle } from './components/TermView';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
@@ -85,6 +86,7 @@ export function App(): JSX.Element {
   });
   const [showHelp, setShowHelp] = useState(false);
   const ready = useRef(false);
+  const agentTermRef = useRef<TermViewHandle>(null);
   const workspacesRef = useRef<WorkspaceInfo[]>([]);
   const aliveRef = useRef<Map<string, boolean>>(new Map());
   const sessionNameRef = useRef<Map<string, string>>(new Map());
@@ -251,6 +253,17 @@ export function App(): JSX.Element {
         setShowCreate(true);
         return;
       }
+      // Find-in-terminal. A focused terminal opens its own find via xterm's key
+      // handler (which runs first, on the textarea target); in that case skip so
+      // we don't open a second box. Otherwise route to the agent terminal so
+      // Ctrl+F works regardless of where focus is.
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        if (!document.activeElement?.classList.contains('xterm-helper-textarea')) {
+          e.preventDefault();
+          agentTermRef.current?.openFind();
+        }
+        return;
+      }
       if (e.altKey && e.key >= '1' && e.key <= '9') {
         const w = workspacesRef.current[Number(e.key) - 1];
         if (w) {
@@ -294,6 +307,7 @@ export function App(): JSX.Element {
           break;
         case 'f':
         case 'F':
+          if (e.altKey) break;
           e.preventDefault();
           setStatusFilter((cur) => {
             const next = nextStatusFilter(cur);
@@ -614,6 +628,7 @@ export function App(): JSX.Element {
         />
         <CenterPane
           workspace={selected}
+          termRef={agentTermRef}
           onToggleAutoYes={toggleAutoYes}
           onRegenerate={() => setShowRegen(true)}
           regenerating={selectedRegenerating}

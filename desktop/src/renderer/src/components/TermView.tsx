@@ -16,6 +16,10 @@ export type TermViewHandle = {
   // Re-fit the terminal — call when the pane becomes visible (a hidden xterm
   // can't measure itself, so switching tabs needs an explicit refit).
   refit: () => void;
+  // Open the in-pane find box. Lets a global Ctrl+F open find even when the
+  // terminal's textarea isn't focused (xterm's own key handler only fires when
+  // it is).
+  openFind: () => void;
 };
 
 const SEARCH_OPTIONS = {
@@ -46,7 +50,11 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
   const [findCaseSensitive, setFindCaseSensitive] = useState(false);
   const [findResults, setFindResults] = useState({ resultIndex: -1, resultCount: 0 });
 
-  useImperativeHandle(ref, () => ({ refit: () => refitRef.current() }), []);
+  useImperativeHandle(
+    ref,
+    () => ({ refit: () => refitRef.current(), openFind: () => openFindRef.current() }),
+    [],
+  );
 
   const focusFindInput = useCallback((): void => {
     window.setTimeout(() => {

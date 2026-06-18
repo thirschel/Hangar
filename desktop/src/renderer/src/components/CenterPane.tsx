@@ -1,5 +1,6 @@
+import type { Ref } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
-import { TermView } from './TermView';
+import { TermView, type TermViewHandle } from './TermView';
 
 type CenterPaneProps = {
   workspace: WorkspaceInfo | null;
@@ -8,6 +9,7 @@ type CenterPaneProps = {
   regenerating: boolean;
   regenPhase?: string;
   onKillNow: () => void;
+  termRef?: Ref<TermViewHandle>;
 };
 
 const regenPhaseCopy: Record<string, string> = {
@@ -26,6 +28,7 @@ export function CenterPane({
   regenerating,
   regenPhase,
   onKillNow,
+  termRef,
 }: CenterPaneProps): JSX.Element {
   return (
     <section className="center-pane">
@@ -72,6 +75,7 @@ export function CenterPane({
               </div>
             )}
             <TermView
+              ref={termRef}
               key={workspace?.sessionName ?? 'none'}
               sessionName={workspace?.sessionName ?? null}
             />

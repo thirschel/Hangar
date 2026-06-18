@@ -73,4 +73,29 @@ describe('App', () => {
 
     expect(container.querySelector('.center-pane')).toBeInTheDocument();
   });
+
+  it('does not cycle the status filter on Ctrl+F (find-in-terminal)', async () => {
+    await renderApp();
+    localStorageMock.setItem.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', ctrlKey: true }));
+    });
+
+    const wroteStatusFilter = localStorageMock.setItem.mock.calls.some(
+      ([key]) => key === 'cs.statusFilter',
+    );
+    expect(wroteStatusFilter).toBe(false);
+  });
+
+  it('cycles the status filter on bare f', async () => {
+    await renderApp();
+    localStorageMock.setItem.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
+    });
+
+    expect(localStorageMock.setItem).toHaveBeenCalledWith('cs.statusFilter', expect.any(String));
+  });
 });
