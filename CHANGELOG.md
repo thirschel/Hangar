@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.3.0](https://github.com/thirschel/Hangar/compare/v1.2.0...v1.3.0) (2026-06-18)
+
+### Features
+
+* **desktop:** terminal overhaul — center dock, shell profiles, render fixes ([#47](https://github.com/thirschel/Hangar/issues/47)) ([7ddd12f](https://github.com/thirschel/Hangar/commit/7ddd12f36a25c0700c0d4caff695193498f86cfd))
+
 ## [1.2.0](https://github.com/thirschel/Hangar/compare/v1.1.1...v1.2.0) (2026-06-18)
 
 ### Features
