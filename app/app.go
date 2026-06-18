@@ -779,6 +779,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeySearch:
 		return m.enterSearch()
+	case keys.KeyStatusFilter:
+		m.list.SetStatusFilter(m.list.StatusFilter().Next())
+		return m, nil
 	case keys.KeyBrowse:
 		m.state = stateBrowse
 		m.menu.SetState(ui.StateBrowse)
