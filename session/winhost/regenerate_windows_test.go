@@ -42,7 +42,7 @@ func injectWorkspace(t *testing.T, h *host, id, program, worktree string) *works
 	h.workspaces.saveLocked()
 	h.workspaces.mu.Unlock()
 	h.mu.Lock()
-	h.sessions[w.SessionName] = newFake(w.SessionName, program, worktree, 80, 24, true)
+	h.sessions[w.SessionName] = newFake(w.SessionName, program, worktree, "cmd", 80, 24, true)
 	h.mu.Unlock()
 	return w
 }
@@ -179,6 +179,7 @@ func TestRegenerateNoHandoffFastPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.RegenerateAgent(w.ID, false, 90, 33); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -217,6 +218,7 @@ func TestRegenerateHandoffWritesAndSeeds(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.RegenerateAgent(w.ID, true, 90, 33); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -243,6 +245,7 @@ func TestForceRegenerateShortCircuits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.RegenerateAgent(w.ID, true, 80, 24); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -272,6 +275,7 @@ func TestRegenerateInactivityFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.RegenerateAgent(w.ID, true, 80, 24); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -296,12 +300,13 @@ func TestArchiveDuringRegenerateNoZombie(t *testing.T) {
 	pipe, h, cleanup := startTestHostWithHandle(t)
 	defer cleanup()
 	h.workspaces.thresholds = regenThresholds{stableMs: 10000, graceMs: 10000, inactivityMs: 10000, hardCapMs: 30000}
-	w := injectWorkspace(t, h, "archive1", "copilot", filepath.Join(home, "wt"))
+	w := injectWorkspace(t, h, "archive1", "copilot", filepath.Join(home, ".hangar", "worktrees", "wt"))
 	c, err := dialClient(pipe, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.RegenerateAgent(w.ID, true, 80, 24); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}
@@ -330,8 +335,8 @@ func TestRegenerateStartFailureRevivable(t *testing.T) {
 	defer cleanup()
 	w := injectWorkspace(t, h, "fail1", "copilot", filepath.Join(home, "wt"))
 	oldName := w.SessionName
-	h.newSession = func(name, program, workDir string, cols, rows int, autoYes bool) managedSession {
-		f := newFake(name, program, workDir, cols, rows, autoYes).(*fakeSession)
+	h.newSession = func(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
+		f := newFake(name, program, workDir, shell, cols, rows, autoYes).(*fakeSession)
 		f.failStart = true
 		return f
 	}
@@ -340,6 +345,7 @@ func TestRegenerateStartFailureRevivable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	authClient(t, c)
 	if err := c.RegenerateAgent(w.ID, false, 80, 24); err != nil {
 		t.Fatalf("regenerate: %v", err)
 	}

@@ -98,6 +98,23 @@ func (m *workspaceManager) load() {
 		return
 	}
 	for _, w := range list {
+		// workspaces.json is untrusted state on disk. Validate the fields that
+		// feed dangerous git/filesystem operations before accepting the entry:
+		// a poisoned baseSHA enables `git diff --output=` injection (F-08) and a
+		// poisoned worktreePath enables arbitrary deletion (F-09). Skip — rather
+		// than load — any entry that fails.
+		if w.BaseSHA != "" {
+			if err := git.ValidateSHA(w.BaseSHA); err != nil {
+				m.host.logger.Printf("workspaces.json: skipping workspace %q: %v", w.ID, err)
+				continue
+			}
+		}
+		if w.WorktreePath != "" {
+			if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
+				m.host.logger.Printf("workspaces.json: skipping workspace %q: unsafe worktree path: %v", w.ID, err)
+				continue
+			}
+		}
 		m.wss[w.ID] = w
 	}
 }
@@ -152,6 +169,8 @@ const bootReadyFloor = 3 * time.Second
 // long enough that the agent processes the text paste and the CR in distinct reads
 // so the CR submits rather than being absorbed into the input.
 const promptSubmitDelay = 350 * time.Millisecond
+
+const trustApprovalTTL = 15 * time.Second
 
 const (
 	// handoffPrompt and seedPrompt are SINGLE-LINE on purpose: a multi-line prompt
@@ -451,7 +470,19 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 	if shell == "" {
 		shell = "cmd"
 	}
-	if err := m.host.startManagedSessionWithShell(w.SessionName, agentcmd.ResumeCommand(w.Program, w.AgentSessionID), w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
+	// Re-validate the persisted AgentSessionID before reusing it on revive. A
+	// tampered workspaces.json could otherwise smuggle a poisoned id back into
+	// the launch path (F-01); if it no longer passes the trust-boundary gate we
+	// launch fresh (no resume) rather than trusting stored state.
+	program := w.Program
+	if w.AgentSessionID != "" {
+		if agentcmd.ValidSessionID(w.AgentSessionID) {
+			program = agentcmd.ResumeCommand(w.Program, w.AgentSessionID)
+		} else {
+			m.host.logger.Printf("workspace %s: rejecting invalid persisted AgentSessionID %q; launching without resume", w.ID, w.AgentSessionID)
+		}
+	}
+	if err := m.host.startManagedSessionWithShell(w.SessionName, program, w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -507,7 +538,7 @@ func (m *workspaceManager) runRegenerate(id string, handoff bool, cols, rows int
 		delete(m.regens, id)
 		m.mu.Unlock()
 	}()
-	defer m.setWorkspaceForceApprove(id, false)
+	defer m.clearWorkspaceTrustApproval(id)
 
 	cancelled := func() bool {
 		select {
@@ -545,15 +576,13 @@ func (m *workspaceManager) runRegenerate(id string, handoff bool, cols, rows int
 	m.host.logger.Printf("regenerate: restarted ws=%s handoff=%v", id, handoff)
 	if handoff {
 		m.setRegenPhase(id, "seeding")
-		// Engage force-approve so copilot's fresh-boot "trust this folder?" prompt is
-		// cleared, and wait until the new agent has actually booted and settled before
-		// seeding — a just-spawned CLI reads as not-busy and drops early input.
-		m.setWorkspaceForceApprove(id, true)
+		// Arm a one-shot folder-trust approval only while the restarted agent boots.
+		m.armWorkspaceTrustApproval(id, "regenerate-seed")
 		m.waitWorkspaceReady(id, cancelled)
+		m.clearWorkspaceTrustApproval(id)
 		m.submitPrompt(id, seedPrompt)
 		m.host.logger.Printf("regenerate: seed sent ws=%s", id)
 		m.logScreenTail(id, "after-seed-send")
-		m.setWorkspaceForceApprove(id, false)
 	}
 }
 
@@ -565,12 +594,13 @@ func (m *workspaceManager) runHandoff(id string, regen *regenState, cancelled fu
 	handoffPath := filepath.Join(worktree, "HANDOFF.md")
 	baseToken, _ := handoffFileToken(handoffPath)
 
+	m.armWorkspaceTrustApproval(id, "regenerate-handoff")
 	m.waitWorkspaceReady(id, cancelled)
+	m.clearWorkspaceTrustApproval(id)
 	if cancelled() {
 		m.writeTranscriptFallback(id, handoffPath)
 		return
 	}
-	m.setWorkspaceForceApprove(id, true)
 	m.submitPrompt(id, handoffPrompt)
 	m.host.logger.Printf("regenerate handoff: prompt sent to ws=%s", id)
 	m.logScreenTail(id, "after-handoff-send")
@@ -746,9 +776,15 @@ func (m *workspaceManager) workspaceWorktree(id string) string {
 	return ""
 }
 
-func (m *workspaceManager) setWorkspaceForceApprove(id string, enabled bool) {
+func (m *workspaceManager) armWorkspaceTrustApproval(id, reason string) {
 	if s := m.workspaceSession(id); s != nil {
-		s.setForceApprove(enabled)
+		s.armTrustApproval(reason, time.Now().Add(trustApprovalTTL))
+	}
+}
+
+func (m *workspaceManager) clearWorkspaceTrustApproval(id string) {
+	if s := m.workspaceSession(id); s != nil {
+		s.clearTrustApproval()
 	}
 }
 
@@ -879,24 +915,32 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	// Validate the agent program resolves *before* creating any worktree or
 	// session. For cmd, check PATH; for powershell/pwsh, also probe Get-Command
 	// (with profile loaded so functions like `cpa` are visible).
-	if fields := strings.Fields(program); len(fields) == 0 {
+	argv, perr := agentcmd.ParseProgram(program)
+	if perr != nil {
 		return proto.Errorf(req.ID, "no agent program configured")
-	} else if _, err := exec.LookPath(fields[0]); err != nil {
+	}
+	progName := argv[0]
+	if _, err := exec.LookPath(progName); err != nil {
 		if shell == "powershell" || shell == "pwsh" {
 			psExe := "powershell.exe"
 			if shell == "pwsh" {
 				psExe = "pwsh.exe"
 			}
-			// -WindowStyle Hidden prevents the blue PowerShell window flash.
-			// No -NoProfile so $PROFILE functions are visible to Get-Command.
-			probe := exec.Command(psExe, "-WindowStyle", "Hidden", "-Command",
-				fmt.Sprintf("if (Get-Command '%s' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }", fields[0]))
+			// The untrusted program name is bound via an environment variable and
+			// referenced through Get-Command -Name $env:HANGAR_PROBE_NAME — never
+			// string-interpolated — so a token like `x'); calc; ('` resolves to
+			// "not found" instead of executing (F-05). -WindowStyle Hidden avoids
+			// the blue PowerShell flash; no -NoProfile so $PROFILE functions are
+			// visible to Get-Command.
+			const probeScript = `if (Get-Command -Name $env:HANGAR_PROBE_NAME -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`
+			probe := exec.Command(psExe, "-WindowStyle", "Hidden", "-Command", probeScript)
+			probe.Env = append(os.Environ(), "HANGAR_PROBE_NAME="+progName)
 			hideConsole(probe)
 			if probeErr := probe.Run(); probeErr != nil {
-				return proto.Errorf(req.ID, "agent program %q not found on PATH or as a PowerShell command (set a valid agent such as 'copilot' or 'claude'): %v", fields[0], err)
+				return proto.Errorf(req.ID, "agent program %q not found on PATH or as a PowerShell command (set a valid agent such as 'copilot' or 'claude'): %v", progName, err)
 			}
 		} else {
-			return proto.Errorf(req.ID, "agent program %q not found on PATH (set a valid agent such as 'copilot' or 'claude'): %v", fields[0], err)
+			return proto.Errorf(req.ID, "agent program %q not found on PATH (set a valid agent such as 'copilot' or 'claude'): %v", progName, err)
 		}
 	}
 
@@ -1006,10 +1050,13 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	if req.DeleteWorktree {
 		wt := w.worktreeFor()
 
-		// Canonicalize and validate worktree path to prevent traversal
-		worktreePath, err := filepath.Abs(w.WorktreePath)
-		if err == nil {
-			worktreePath = filepath.Clean(worktreePath)
+		// Refuse to delete a worktree path that is not contained within the
+		// managed worktrees directory. workspaces.json is untrusted on-disk
+		// state, so a poisoned worktreePath must never reach a destructive
+		// `git worktree remove`/RemoveAll here (F-09).
+		if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
+			m.host.logger.Printf("SECURITY: refusing to delete uncontained worktree %q for workspace %s: %v", w.WorktreePath, w.ID, err)
+			return proto.Errorf(req.ID, "refusing to delete unsafe worktree path: %v", err)
 		}
 
 		// Remove worktree directory (retry loop for Windows handle release)
@@ -1207,6 +1254,12 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 	if req.SessionID == "" {
 		return proto.Errorf(req.ID, "sessionId required")
 	}
+	// req.SessionID arrives over the host pipe from the TUI/desktop client. The
+	// pipe is the trust boundary, so validate server-side rather than relying on
+	// the client; an invalid id can never reach the resume command line (F-01).
+	if !agentcmd.ValidSessionID(req.SessionID) {
+		return proto.Errorf(req.ID, "invalid session id")
+	}
 
 	// The resume flow reuses the normal workspace creation but sets the agent
 	// session ID so the agent resumes the conversation instead of starting fresh.
@@ -1219,6 +1272,31 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 			return proto.Errorf(req.ID, "cannot determine repo path: %v", err)
 		}
 	}
+
+	// F-03: the repoPath/OriginRoot arrives over the host pipe from the
+	// TUI/desktop client. The pipe is the trust boundary, so we enforce server
+	// side — never relying on the client — that:
+	//   1. the target is a real local git repository (so `git worktree add` only
+	//      ever runs a post-checkout hook from a genuine repo the user owns), and
+	//   2. resuming into a repo OTHER than the host's own working directory is
+	//      explicitly confirmed (the desktop client previously sent originRoot
+	//      with no confirmation at all).
+	absRepo, err := filepath.Abs(repoPath)
+	if err != nil {
+		return proto.Errorf(req.ID, "invalid repo path %q: %v", repoPath, err)
+	}
+	absRepo = filepath.Clean(absRepo)
+	if !git.IsLocalGitRepo(absRepo) {
+		return proto.Errorf(req.ID, "repo path %q is not a local git repository", absRepo)
+	}
+	cwd, _ := os.Getwd()
+	absCwd, _ := filepath.Abs(cwd)
+	crossRepo := !strings.EqualFold(filepath.Clean(absCwd), absRepo)
+	if crossRepo && !req.Confirmed {
+		m.host.logger.Printf("resumeCopilotSession: cross-repo resume into %q requires confirmation", absRepo)
+		return &proto.Response{ID: req.ID, OK: false, NeedsConfirm: true, AbsPath: absRepo}
+	}
+	repoPath = absRepo
 
 	cfg := config.LoadConfig()
 	// These are Copilot sessions — always use "copilot" for the resume command

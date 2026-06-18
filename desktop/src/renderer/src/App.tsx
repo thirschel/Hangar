@@ -150,7 +150,7 @@ export function App(): JSX.Element {
         if (!active) return;
         const hv = hello.hostVersion ?? 0;
         setHostVersion(hv);
-        if (hv < PROTO_VERSION) {
+        if (hv !== PROTO_VERSION) {
           setConnection('error');
           setStatusText(
             `daemon is v${hv} — the desktop app needs v${PROTO_VERSION}. Run \`cs reset\`, then relaunch.`,
@@ -653,12 +653,29 @@ export function App(): JSX.Element {
         <SessionBrowserModal
           onClose={() => setShowBrowser(false)}
           onResume={async (session) => {
-            const ws = await window.cs.resumeCopilotSession(session.id, {
+            const repoPath = session.originRoot || undefined;
+            // First attempt without confirmation. The host returns needsConfirm
+            // (with the resolved absolute path) when the resume targets a repo
+            // other than its own working directory — server-enforced, so the
+            // client cannot skip it (F-03).
+            let res = await window.cs.resumeCopilotSession(session.id, {
               title: session.name,
-              repoPath: session.originRoot || undefined,
+              repoPath,
+              confirmed: false,
             });
+            if (res.needsConfirm) {
+              const ok = window.confirm(
+                `Resume in "${res.absPath}"?\nA new worktree/branch will be created there.`,
+              );
+              if (!ok) return;
+              res = await window.cs.resumeCopilotSession(session.id, {
+                title: session.name,
+                repoPath,
+                confirmed: true,
+              });
+            }
             await refresh();
-            setSelectedId(ws.id);
+            if (res.workspace) setSelectedId(res.workspace.id);
           }}
         />
       )}

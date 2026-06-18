@@ -18,16 +18,27 @@ func sanitizeBranchName(s string) string {
 	s = strings.ReplaceAll(s, " ", "-")
 
 	// Remove any characters not allowed in our safe subset.
-	// Here we allow: letters, digits, dash, underscore, slash, and dot.
-	re := regexp.MustCompile(`[^a-z0-9\-_/.]+`)
+	// We deliberately exclude '/' and '.' so a crafted title such as "../../x"
+	// cannot survive into filepath.Join(worktreeDir, name) and traverse out of
+	// the managed worktrees directory (F-14). Only letters, digits, dash and
+	// underscore are kept.
+	re := regexp.MustCompile(`[^a-z0-9\-_]+`)
 	s = re.ReplaceAllString(s, "")
 
 	// Replace multiple dashes with a single dash (optional cleanup)
 	reDash := regexp.MustCompile(`-+`)
 	s = reDash.ReplaceAllString(s, "-")
 
-	// Trim leading and trailing dashes or slashes to avoid issues
-	s = strings.Trim(s, "-/")
+	// Trim leading and trailing dashes, underscores or dots to avoid odd refs.
+	s = strings.Trim(s, "-_.")
+
+	// If sanitization stripped everything (e.g. a title of "../.." or "/////"),
+	// fall back to a safe constant so the branch name is non-empty and the
+	// derived worktree path stays a child of the managed worktrees directory
+	// rather than collapsing onto the directory itself.
+	if s == "" {
+		s = "session"
+	}
 
 	return s
 }
