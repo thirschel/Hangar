@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "start": "electron-vite dev",
+    "postinstall": "node node_modules/electron/install.js",
     "build": "npm run typecheck && electron-vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
