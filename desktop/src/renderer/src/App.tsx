@@ -80,8 +80,9 @@ export function App(): JSX.Element {
   const waitingRef = useRef<Map<string, boolean>>(new Map());
   const connectionRef = useRef<ConnectionState>('connecting');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const refreshInFlightRef = useRef<Promise<WorkspaceInfo[]> | null>(null);
 
-  const refresh = useCallback(async (): Promise<WorkspaceInfo[]> => {
+  const refreshOnce = useCallback(async (): Promise<WorkspaceInfo[]> => {
     try {
       const list = await window.cs.listWorkspaces();
       // Notify when an agent session goes alive -> not alive (i.e. it exited).
@@ -141,6 +142,24 @@ export function App(): JSX.Element {
       return [];
     }
   }, []);
+
+  // Deduplicate concurrent refreshes: the workspace list is polled on an interval
+  // and also refreshed after actions, and a single ListWorkspaces can be slow
+  // (the daemon computes per-workspace git diff). Without this guard a slow call
+  // lets every subsequent tick enqueue another request on the one control
+  // connection, starving other RPCs (e.g. the session browser). While a refresh
+  // is in flight, additional callers share its result instead of piling on.
+  const refresh = useCallback((): Promise<WorkspaceInfo[]> => {
+    if (refreshInFlightRef.current) {
+      return refreshInFlightRef.current;
+    }
+    const p = refreshOnce();
+    refreshInFlightRef.current = p;
+    void p.finally(() => {
+      refreshInFlightRef.current = null;
+    });
+    return p;
+  }, [refreshOnce]);
 
   useEffect(() => {
     let active = true;

@@ -28,6 +28,16 @@ import (
 // repaint source; the authoritative attach repaint is the emulator snapshot.
 const rawRingMax = 256 * 1024
 
+// procExitWaitTimeout bounds how long close() waits for the child process to exit
+// (and release the worktree) after the ConPTY is closed. Children normally exit
+// within a few milliseconds; the cap only guards against a wedged process.
+const procExitWaitTimeout = 3 * time.Second
+
+// gracefulExitWait is how long close() lets a child exit on its own after the
+// ConPTY closes before force-terminating it. Well-behaved TUIs (the agent) exit
+// almost immediately; an interactive shell (cmd.exe) never does and gets killed.
+const gracefulExitWait = 500 * time.Millisecond
+
 // subscriber receives live raw output from a session while a client is attached.
 type subscriber struct {
 	ch chan []byte
@@ -80,6 +90,7 @@ type conptySession struct {
 	statusPrompt bool   // cached detectPrompt result (waiting for input)
 
 	drainDone   chan struct{}
+	procDone    chan struct{} // closed once the child process has fully exited
 	autoYesStop chan struct{}
 	closeOnce   sync.Once
 }
@@ -155,6 +166,7 @@ func (s *conptySession) start() error {
 	s.aliveFlag = true
 	s.mu.Unlock()
 	s.drainDone = make(chan struct{})
+	s.procDone = make(chan struct{})
 	go s.drain()
 	go s.wait()
 	go s.autoYesLoop()
@@ -381,6 +393,7 @@ func (s *conptySession) wait() {
 		s.exitCode = s.cmd.ProcessState.ExitCode()
 	}
 	s.mu.Unlock()
+	close(s.procDone) // the child has exited and released its working directory
 	_ = s.close()
 }
 
@@ -628,6 +641,28 @@ func (s *conptySession) close() error {
 		close(s.autoYesStop) // stop the AutoYes ticker
 		if s.pty != nil {
 			err = s.pty.Close()
+		}
+		// Closing the ConPTY does not reliably terminate the child on Windows: a
+		// well-behaved TUI exits on its own, but an interactive shell keeps
+		// running, which orphans the process and keeps its working directory (the
+		// worktree) locked. Give it a short grace period to exit, then force-kill
+		// it, and wait (bounded) for it to actually go so a subsequent worktree
+		// delete (archive) or temp cleanup does not race a live process. procDone
+		// is nil only if the session never started.
+		if s.procDone == nil {
+			return
+		}
+		select {
+		case <-s.procDone:
+			return // exited cleanly on ConPTY close
+		case <-time.After(gracefulExitWait):
+		}
+		if s.cmd != nil && s.cmd.Process != nil {
+			_ = s.cmd.Process.Kill()
+		}
+		select {
+		case <-s.procDone:
+		case <-time.After(procExitWaitTimeout):
 		}
 	})
 	return err
