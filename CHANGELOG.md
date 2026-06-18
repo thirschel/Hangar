@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.1.0](https://github.com/thirschel/Hangar/compare/v1.0.0...v1.1.0) (2026-06-18)
+
+### Features
+
+* **desktop:** add help icon and keyboard shortcuts modal ([#43](https://github.com/thirschel/Hangar/issues/43)) ([f304156](https://github.com/thirschel/Hangar/commit/f30415626f7f0be4db366ad29add41be495db751))
+
 ## 1.0.0 (2026-06-18)
 
 ### Features
