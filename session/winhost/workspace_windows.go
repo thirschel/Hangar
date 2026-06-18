@@ -43,8 +43,8 @@ type workspace struct {
 	ExistingBranch bool   `json:"existingBranch"`
 	CreatedUnix    int64  `json:"createdUnix"`
 	RunCommand     string `json:"runCommand"`
-	AgentSessionID string `json:"agentSessionId"`  // stable agent session UUID for resume (copilot)
-	Shell          string `json:"shell,omitempty"` // "cmd", "powershell", "pwsh"; empty = config default
+	AgentSessionID string `json:"agentSessionId"`          // stable agent session UUID for resume (copilot)
+	Shell          string `json:"shell,omitempty"`         // "cmd", "powershell", "pwsh"; empty = config default
 	CopilotResume  bool   `json:"copilotResume,omitempty"` // agent is copilot or a detected copilot wrapper (e.g. "cpa") -> resumable
 }
 
