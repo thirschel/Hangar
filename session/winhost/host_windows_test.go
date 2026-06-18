@@ -23,6 +23,9 @@ type fakeSession struct {
 	workDir       string
 	mu            sync.Mutex
 	buf           []byte
+	history       []byte
+	historyAlt    bool
+	historyLines  int
 	changed       bool
 	autoYes       bool
 	trustApproval bool
@@ -37,7 +40,10 @@ type fakeSession struct {
 func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
 	return &fakeSession{
 		name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true,
-		buf: []byte(fmt.Sprintf("[echo session %q running %q]\n", name, program)),
+		buf:          []byte(fmt.Sprintf("[echo session %q running %q]\n", name, program)),
+		history:      []byte(fmt.Sprintf("[history session %q]\r\n", name)),
+		historyAlt:   true,
+		historyLines: 7,
 	}
 }
 
@@ -97,6 +103,15 @@ func (f *fakeSession) capture(full, withANSI bool) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return string(f.buf)
+}
+func (f *fakeSession) captureHistory(includeScreen bool) (string, bool, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	content := string(f.history)
+	if includeScreen {
+		content += string(f.buf)
+	}
+	return content, f.historyAlt, f.historyLines
 }
 func (f *fakeSession) sendKeys(b []byte) error {
 	f.mu.Lock()
@@ -282,6 +297,41 @@ func TestHostLifecycle(t *testing.T) {
 	}
 	if exists, _, _ := c.HasSession("s1"); exists {
 		t.Fatal("expected session gone after kill")
+	}
+}
+
+func TestHostCaptureHistory(t *testing.T) {
+	pipe, cleanup := startTestHost(t)
+	defer cleanup()
+
+	c, err := dialClient(pipe, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	authClient(t, c)
+
+	if err := c.CreateSession("hist", "copilot", "", 80, 24, false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	content, altScreen, lines, err := c.CaptureHistory("hist", true)
+	if err != nil {
+		t.Fatalf("capture history: %v", err)
+	}
+	if !strings.Contains(content, `[history session "hist"]`) {
+		t.Fatalf("capture history missing history content: %q", content)
+	}
+	if !strings.Contains(content, "echo session") {
+		t.Fatalf("capture history with includeScreen did not append screen content: %q", content)
+	}
+	if !altScreen {
+		t.Fatal("capture history did not return fake alt-screen flag")
+	}
+	if lines != 7 {
+		t.Fatalf("capture history line count = %d, want 7", lines)
+	}
+	if _, _, _, err := c.CaptureHistory("nope", false); err == nil {
+		t.Fatal("expected error capturing history for nonexistent session")
 	}
 }
 

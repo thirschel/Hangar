@@ -101,6 +101,7 @@ export interface Request {
     | 'GenerateWorkspaceTitle'
     | 'RegenerateAgent'
     | 'ForceRegenerate'
+    | 'CaptureHistory'
     | string;
   session?: string;
   program?: string;
@@ -113,6 +114,7 @@ export interface Request {
   data?: string;
   mode?: string;
   withANSI?: boolean;
+  includeScreen?: boolean;
   clientVersion?: number;
   clientNonce?: string;
   // Workspace methods (v2)
@@ -146,6 +148,8 @@ export interface Response {
   hostCreatedUnix?: number;
   hostNonceProof?: string;
   content?: string;
+  altScreen?: boolean;
+  scrollbackLines?: number;
   exists?: boolean;
   alive?: boolean;
   updated?: boolean;
