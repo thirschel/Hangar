@@ -10,6 +10,7 @@ import { RemoveWorkspaceModal } from './components/RemoveWorkspaceModal';
 import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import { SessionBrowserModal } from './components/SessionBrowserModal';
 import { WelcomeModal } from './components/WelcomeModal';
+import { HelpModal } from './components/HelpModal';
 import { playNotificationSound } from './notificationSound';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
@@ -288,8 +289,6 @@ export function App(): JSX.Element {
           if (document.activeElement === searchInputRef.current) {
             setSidebarFilter('');
             searchInputRef.current?.blur();
-          } else if (showHelp) {
-            setShowHelp(false);
           }
           break;
         case 's': {
@@ -382,7 +381,7 @@ export function App(): JSX.Element {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, sidebarMode, showHelp]);
+  }, [selectedId, sidebarMode]);
 
   workspacesRef.current = workspaces;
   connectionRef.current = connection;
@@ -547,6 +546,15 @@ export function App(): JSX.Element {
         </div>
         <button
           type="button"
+          className="top-bar__help"
+          title="Keyboard shortcuts (?)"
+          aria-label="Keyboard shortcuts"
+          onClick={() => setShowHelp(true)}
+        >
+          ?
+        </button>
+        <button
+          type="button"
           className="top-bar__settings"
           title="Settings (Ctrl+,)"
           onClick={() => setShowSettings(true)}
@@ -704,52 +712,7 @@ export function App(): JSX.Element {
 
       {showWelcome && <WelcomeModal onClose={() => setShowWelcome(false)} />}
 
-      {showHelp && (
-        <div className="help-overlay" onClick={() => setShowHelp(false)} role="presentation">
-          <div className="help-overlay__content" onClick={(e) => e.stopPropagation()}>
-            <h2>Keyboard Shortcuts</h2>
-            <div className="help-overlay__grid">
-              <div className="help-group">
-                <h3>Navigation</h3>
-                <dl>
-                  <dt>j / ↓</dt><dd>Select next workspace</dd>
-                  <dt>k / ↑</dt><dd>Select previous workspace</dd>
-                  <dt>Alt+1–9</dt><dd>Jump to workspace by index</dd>
-                </dl>
-              </div>
-              <div className="help-group">
-                <h3>Workspace Actions</h3>
-                <dl>
-                  <dt>n / Ctrl+N</dt><dd>New workspace</dd>
-                  <dt>p</dt><dd>Push branch</dd>
-                  <dt>D</dt><dd>Kill / archive workspace</dd>
-                  <dt>b</dt><dd>Browse Copilot sessions</dd>
-                </dl>
-              </div>
-              <div className="help-group">
-                <h3>Sidebar</h3>
-                <dl>
-                  <dt>s / S</dt><dd>Cycle sidebar mode ↔</dd>
-                  <dt>/</dt><dd>Search / filter workspaces</dd>
-                  <dt>J / K</dt><dd>Reorder (Manual mode only)</dd>
-                </dl>
-              </div>
-              <div className="help-group">
-                <h3>General</h3>
-                <dl>
-                  <dt>?</dt><dd>Toggle this help</dd>
-                  <dt>Ctrl+,</dt><dd>Settings</dd>
-                  <dt>q</dt><dd>Quit</dd>
-                  <dt>Esc</dt><dd>Close search / help</dd>
-                </dl>
-              </div>
-            </div>
-            <button className="help-overlay__close" type="button" onClick={() => setShowHelp(false)}>
-              Close (Esc / ?)
-            </button>
-          </div>
-        </div>
-      )}
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
     </div>
   );
 }
