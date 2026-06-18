@@ -312,6 +312,29 @@ export function readHostInfo(): HostInfo {
   };
 }
 
+export function processCreationUnix(pid: number): number {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error(`invalid pid ${pid}`);
+  }
+  // Get-Process .StartTime is the process creation time, matching Go's
+  // GetProcessTimes creation FILETIME within the ±1s tolerance enforced below.
+  const output = execFileSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `[DateTimeOffset]::new((Get-Process -Id ${pid}).StartTime.ToUniversalTime(), [TimeSpan]::Zero).ToUnixTimeSeconds()`,
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  ).trim();
+  const seconds = Number.parseInt(output, 10);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) {
+    throw new Error(`could not parse process creation time for pid ${pid}: ${output}`);
+  }
+  return seconds;
+}
+
 export function validateHostInfo(hi: HostInfo): void {
   const expectedPipe = controlPipeName();
   if (hi.pipeName !== expectedPipe) {
@@ -325,6 +348,16 @@ export function validateHostInfo(hi: HostInfo): void {
   }
   if (!Number.isSafeInteger(hi.pid) || hi.pid <= 0 || !Number.isSafeInteger(hi.createdUnix) || hi.createdUnix <= 0) {
     throw new Error('untrusted host.json: invalid pid or creation time');
+  }
+  let got: number;
+  try {
+    got = processCreationUnix(hi.pid);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`untrusted host.json: process creation check failed: ${message}`);
+  }
+  if (Math.abs(got - hi.createdUnix) > 1) {
+    throw new Error('untrusted host.json: pid/creation mismatch');
   }
 }
 
