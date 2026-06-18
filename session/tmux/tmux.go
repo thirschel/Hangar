@@ -2,14 +2,14 @@ package tmux
 
 import (
 	"bytes"
-	"hangar/cmd"
-	"hangar/log"
-	"hangar/session/agentcmd"
-	"hangar/session/promptpolicy"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hangar/cmd"
+	"hangar/log"
+	"hangar/session/agentcmd"
+	"hangar/session/promptpolicy"
 	"io"
 	"os"
 	"os/exec"

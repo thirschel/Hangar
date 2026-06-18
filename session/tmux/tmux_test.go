@@ -1,8 +1,8 @@
 package tmux
 
 import (
-	cmd2 "hangar/cmd"
 	"fmt"
+	cmd2 "hangar/cmd"
 	"math/rand"
 	"os"
 	"os/exec"

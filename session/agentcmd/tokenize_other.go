@@ -13,9 +13,9 @@ import "fmt"
 // shell) can never act as a command separator.
 func tokenizeProgram(s string) ([]string, error) {
 	var (
-		tokens  []string
-		cur     []rune
-		hasTok  bool
+		tokens   []string
+		cur      []rune
+		hasTok   bool
 		inSingle bool
 		inDouble bool
 		escaped  bool
