@@ -37,6 +37,7 @@ export const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { keys: 's / S', description: 'Cycle sidebar mode ↔' },
       { keys: '/', description: 'Search / filter workspaces' },
+      { keys: 'f', description: 'Filter workspaces by status' },
       { keys: 'J / K', description: 'Reorder (Manual mode only)' },
     ],
   },

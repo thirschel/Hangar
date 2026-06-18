@@ -36,7 +36,7 @@ func TestBuildView_ManualEqualsInput(t *testing.T) {
 		mkInstance(t, "b"),
 		mkInstance(t, "c"),
 	}
-	rows := buildView(items, ModeManual, "")
+	rows := buildView(items, ModeManual, "", StatusAll)
 	require.Equal(t, []string{"a", "b", "c"}, instanceTitles(rows))
 
 	// Numbering is continuous and 1-based over visible instances.
@@ -51,7 +51,7 @@ func TestBuildView_FilterByTitle(t *testing.T) {
 		mkInstance(t, "backend"),
 		mkInstance(t, "frontend-tests"),
 	}
-	rows := buildView(items, ModeManual, "front")
+	rows := buildView(items, ModeManual, "front", StatusAll)
 	require.Equal(t, []string{"frontend", "frontend-tests"}, instanceTitles(rows))
 	// Numbering remains continuous over the filtered set.
 	require.Equal(t, 1, rows[0].number)
@@ -60,9 +60,86 @@ func TestBuildView_FilterByTitle(t *testing.T) {
 
 func TestBuildView_FilterCaseInsensitive(t *testing.T) {
 	items := []*session.Instance{mkInstance(t, "MyService")}
-	require.Len(t, buildView(items, ModeManual, "myservice"), 1)
-	require.Len(t, buildView(items, ModeManual, "SERVICE"), 1)
-	require.Len(t, buildView(items, ModeManual, "nomatch"), 0)
+	require.Len(t, buildView(items, ModeManual, "myservice", StatusAll), 1)
+	require.Len(t, buildView(items, ModeManual, "SERVICE", StatusAll), 1)
+	require.Len(t, buildView(items, ModeManual, "nomatch", StatusAll), 0)
+}
+
+func mkStatusInstance(t *testing.T, title string, status session.Status, waiting bool) *session.Instance {
+	t.Helper()
+	if waiting {
+		inst := newPausedTestInstance(t, title, t.TempDir())
+		inst.SetStatus(session.Running)
+		inst.RefreshWaitingForUser(false, true)
+		return inst
+	}
+	inst := mkInstance(t, title)
+	inst.SetStatus(status)
+	return inst
+}
+
+func TestStatusFilter_Cycling(t *testing.T) {
+	require.Equal(t, StatusWaiting, StatusAll.Next())
+	require.Equal(t, StatusBusy, StatusWaiting.Next())
+	require.Equal(t, StatusIdle, StatusBusy.Next())
+	require.Equal(t, StatusPaused, StatusIdle.Next())
+	require.Equal(t, StatusAll, StatusPaused.Next())
+}
+
+func TestInstanceStatusBucket(t *testing.T) {
+	require.Equal(t, StatusWaiting, instanceStatusBucket(mkStatusInstance(t, "waiting", session.Running, true)))
+	require.Equal(t, StatusBusy, instanceStatusBucket(mkStatusInstance(t, "busy", session.Running, false)))
+	require.Equal(t, StatusBusy, instanceStatusBucket(mkStatusInstance(t, "loading", session.Loading, false)))
+	require.Equal(t, StatusIdle, instanceStatusBucket(mkStatusInstance(t, "idle", session.Ready, false)))
+	require.Equal(t, StatusPaused, instanceStatusBucket(mkStatusInstance(t, "paused", session.Paused, false)))
+}
+
+func TestCountByStatus(t *testing.T) {
+	items := []*session.Instance{
+		mkStatusInstance(t, "waiting", session.Running, true),
+		mkStatusInstance(t, "busy", session.Running, false),
+		mkStatusInstance(t, "loading", session.Loading, false),
+		mkStatusInstance(t, "idle", session.Ready, false),
+		mkStatusInstance(t, "paused", session.Paused, false),
+	}
+	require.Equal(t, StatusCounts{Waiting: 1, Busy: 2, Idle: 1, Paused: 1, Total: 5}, CountByStatus(items))
+}
+
+func TestBuildView_StatusFilters(t *testing.T) {
+	items := []*session.Instance{
+		mkStatusInstance(t, "waiting", session.Running, true),
+		mkStatusInstance(t, "busy", session.Running, false),
+		mkStatusInstance(t, "idle", session.Ready, false),
+		mkStatusInstance(t, "paused", session.Paused, false),
+	}
+	tests := []struct {
+		filter StatusFilter
+		want   []string
+	}{
+		{StatusAll, []string{"waiting", "busy", "idle", "paused"}},
+		{StatusWaiting, []string{"waiting"}},
+		{StatusBusy, []string{"busy"}},
+		{StatusIdle, []string{"idle"}},
+		{StatusPaused, []string{"paused"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.filter.String(), func(t *testing.T) {
+			rows := buildView(items, ModeManual, "", tc.filter)
+			require.Equal(t, tc.want, instanceTitles(rows))
+		})
+	}
+}
+
+func TestBuildView_StatusFilterComposesWithModeAndTextFilter(t *testing.T) {
+	items := []*session.Instance{
+		mkStatusInstance(t, "frontend-waiting", session.Running, true),
+		mkStatusInstance(t, "backend-waiting", session.Running, true),
+		mkStatusInstance(t, "frontend-busy", session.Running, false),
+	}
+
+	rows := buildView(items, ModePinnedPending, "front", StatusWaiting)
+	require.Equal(t, []string{pendingHeader, workspacesHeader}, headersOf(rows))
+	require.Equal(t, []string{"frontend-waiting"}, instanceTitles(rows))
 }
 
 func TestMatchesFilter_TitleAndPath(t *testing.T) {

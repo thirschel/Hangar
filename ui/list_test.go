@@ -202,6 +202,47 @@ func TestFilter_ComposesWithEveryMode(t *testing.T) {
 	}
 }
 
+func TestSetStatusFilter_ChangesVisibleRows(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s, false)
+	waiting := mkStatusInstance(t, "waiting", session.Running, true)
+	busy := mkStatusInstance(t, "busy", session.Running, false)
+	idle := mkStatusInstance(t, "idle", session.Ready, false)
+	paused := mkStatusInstance(t, "paused", session.Paused, false)
+	l.AddInstance(waiting)
+	l.AddInstance(busy)
+	l.AddInstance(idle)
+	l.AddInstance(paused)
+
+	require.Equal(t, StatusCounts{Waiting: 1, Busy: 1, Idle: 1, Paused: 1, Total: 4}, l.StatusCounts())
+
+	l.SetStatusFilter(StatusBusy)
+	require.Equal(t, []string{"busy"}, titlesOf(l.visibleInstances()))
+
+	l.SetMode(ModeManual)
+	l.SetMode(ModeManual)
+	l.SetStatusFilter(StatusIdle)
+	require.Equal(t, []string{"idle"}, titlesOf(l.visibleInstances()))
+
+	l.SetStatusFilter(StatusAll)
+	require.Equal(t, []string{"waiting", "busy", "idle", "paused"}, titlesOf(l.visibleInstances()))
+}
+
+func TestSetStatusFilter_ClampsSelectionToVisibleInstance(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s, false)
+	busy := mkStatusInstance(t, "busy", session.Running, false)
+	idle := mkStatusInstance(t, "idle", session.Ready, false)
+	l.AddInstance(busy)
+	l.AddInstance(idle)
+	l.SelectInstance(idle)
+	require.Same(t, idle, l.GetSelectedInstance())
+
+	l.SetStatusFilter(StatusBusy)
+	require.Same(t, busy, l.GetSelectedInstance())
+	require.Equal(t, []string{"busy"}, titlesOf(l.visibleInstances()))
+}
+
 func TestMotion_PulsesOnReorderWhenEnabled(t *testing.T) {
 	l := newTestList("a", "b", "c")
 	l.SetSize(80, 40) // big enough that motion isn't auto-disabled
@@ -239,11 +280,18 @@ func TestString_RendersAllModesSearchAndEmptyWithoutPanic(t *testing.T) {
 		require.NotEmpty(t, l.String())
 	}
 
+	l.SetMode(ModeManual)
+	l.SetStatusFilter(StatusIdle)
+	out := l.String()
+	require.Contains(t, out, "manual · idle")
+	require.Contains(t, out, "3 idle")
+	l.SetStatusFilter(StatusAll)
+
 	// Search bar open with a query.
 	l.SetMode(ModeManual)
 	l.SetSearching(true)
 	l.SetFilter("alph")
-	out := l.String()
+	out = l.String()
 	require.Contains(t, out, "Search:")
 
 	// No-match state.
