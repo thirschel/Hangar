@@ -73,4 +73,26 @@ describe('App', () => {
 
     expect(container.querySelector('.center-pane')).toBeInTheDocument();
   });
+
+  it('cycles status filter on bare f', async () => {
+    await renderApp();
+    localStorageMock.setItem.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
+    });
+
+    expect(localStorageMock.setItem).toHaveBeenCalledWith('cs.statusFilter', 'waiting');
+  });
+
+  it('does not write status filter for other bare keys', async () => {
+    await renderApp();
+    localStorageMock.setItem.mockClear();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z' }));
+    });
+
+    expect(localStorageMock.setItem).not.toHaveBeenCalledWith('cs.statusFilter', expect.any(String));
+  });
 });
