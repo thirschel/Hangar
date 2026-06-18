@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.4.0](https://github.com/thirschel/Hangar/compare/v1.3.0...v1.4.0) (2026-06-18)
+
+### Features
+
+* workspace status filtering with counts (TUI + desktop) ([#48](https://github.com/thirschel/Hangar/issues/48)) ([a08bede](https://github.com/thirschel/Hangar/commit/a08bede76ffe1a808a90b9fc3315f1b888124f48)), closes [#2f81f7](https://github.com/thirschel/Hangar/issues/2f81f7)
+
 ## [1.3.0](https://github.com/thirschel/Hangar/compare/v1.2.0...v1.3.0) (2026-06-18)
 
 ### Features
