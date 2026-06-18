@@ -40,6 +40,7 @@ const (
 
 	// Search / filter
 	KeySearch
+	KeyStatusFilter
 	KeySearchApply  // menu hint: enter applies the search
 	KeySearchCancel // menu hint: esc clears the search
 )
@@ -57,6 +58,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"s":          KeyModeCycle,
 	"S":          KeyModeCycleBack,
 	"/":          KeySearch,
+	"f":          KeyStatusFilter,
 	"N":          KeyPrompt,
 	"enter":      KeyEnter,
 	"o":          KeyEnter,
@@ -154,6 +156,10 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeySearch: key.NewBinding(
 		key.WithKeys("/"),
 		key.WithHelp("/", "search"),
+	),
+	KeyStatusFilter: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "filter status"),
 	),
 
 	// -- Special keybindings --

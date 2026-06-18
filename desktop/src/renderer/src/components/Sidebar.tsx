@@ -2,6 +2,12 @@ import { useRef, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { MODE_LABELS, type SidebarMode } from './sidebar-modes';
+import {
+  STATUS_FILTERS,
+  type StatusCounts,
+  type StatusFilter,
+  workspaceStatus,
+} from './workspace-status';
 
 type SidebarProps = {
   workspaces: WorkspaceInfo[];
@@ -15,6 +21,9 @@ type SidebarProps = {
   sidebarMode: SidebarMode;
   filter: string;
   onFilterChange: (value: string) => void;
+  statusFilter: StatusFilter;
+  counts: StatusCounts;
+  onStatusFilterChange: (value: StatusFilter) => void;
   searchInputRef?: RefObject<HTMLInputElement>;
 };
 
@@ -31,7 +40,7 @@ function WorkspaceRow({
   onArchive: () => void;
   onSettings: () => void;
 }): JSX.Element {
-  const status = !w.alive ? 'exited' : w.waiting ? 'waiting' : w.busy ? 'busy' : 'idle';
+  const status = workspaceStatus(w);
   const statusTitle =
     status === 'exited'
       ? 'Agent exited'
@@ -91,6 +100,42 @@ function WorkspaceRow({
           ⚙
         </button>
       </div>
+    </div>
+  );
+}
+
+const STATUS_LABELS: Record<StatusFilter, string> = {
+  all: 'All',
+  waiting: 'Waiting',
+  busy: 'Busy',
+  idle: 'Idle',
+  exited: 'Exited',
+};
+
+function StatusFilterBar({
+  active,
+  counts,
+  onChange,
+}: {
+  active: StatusFilter;
+  counts: StatusCounts;
+  onChange: (value: StatusFilter) => void;
+}): JSX.Element {
+  return (
+    <div className="status-filter-bar" aria-label="Filter workspaces by status">
+      {STATUS_FILTERS.map((status) => (
+        <button
+          key={status}
+          className={`status-chip status-chip--${status}${active === status ? ' is-active' : ''}`}
+          type="button"
+          title={`Show ${STATUS_LABELS[status].toLowerCase()} workspaces`}
+          aria-pressed={active === status}
+          onClick={() => onChange(status)}
+        >
+          <span className="status-chip__label">{STATUS_LABELS[status]}</span>
+          <span className="status-chip__count">{counts[status]}</span>
+        </button>
+      ))}
     </div>
   );
 }
@@ -225,6 +270,9 @@ export function Sidebar({
   sidebarMode,
   filter,
   onFilterChange,
+  statusFilter,
+  counts,
+  onStatusFilterChange,
   searchInputRef,
 }: SidebarProps): JSX.Element {
   const internalRef = useRef<HTMLInputElement>(null);
@@ -268,18 +316,23 @@ export function Sidebar({
           data-is-input="true"
         />
       </div>
+      <StatusFilterBar active={statusFilter} counts={counts} onChange={onStatusFilterChange} />
 
       <nav className="workspace-list" aria-label="Workspaces">
-        {workspaces.length === 0 && !filter && (
+        {workspaces.length === 0 && !filter && statusFilter === 'all' && (
           <div className="empty-state">
             <div className="empty-state__title">No workspaces yet</div>
             <p>Click + to start a parallel agent in its own git worktree.</p>
           </div>
         )}
-        {workspaces.length === 0 && filter && (
+        {workspaces.length === 0 && (filter || statusFilter !== 'all') && (
           <div className="empty-state">
             <div className="empty-state__title">No matches</div>
-            <p>No workspaces match &ldquo;{filter}&rdquo;</p>
+            <p>
+              No workspaces match
+              {filter ? <> &ldquo;{filter}&rdquo;</> : null}
+              {statusFilter !== 'all' ? ` in ${STATUS_LABELS[statusFilter].toLowerCase()}` : null}
+            </p>
           </div>
         )}
         {workspaces.length > 0 &&

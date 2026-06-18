@@ -12,6 +12,13 @@ import { WorkspaceSettingsModal } from './components/WorkspaceSettingsModal';
 import { SessionBrowserModal } from './components/SessionBrowserModal';
 import { WelcomeModal } from './components/WelcomeModal';
 import { HelpModal } from './components/HelpModal';
+import {
+  countByStatus,
+  filterByStatus,
+  isStatusFilter,
+  nextStatusFilter,
+  type StatusFilter,
+} from './components/workspace-status';
 import { playNotificationSound } from './notificationSound';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
@@ -30,6 +37,7 @@ const GUTTER_W = 6;
 // Sidebar state persistence keys.
 const SIDEBAR_MODE_KEY = 'cs.sidebarMode';
 const SIDEBAR_ORDER_KEY = 'cs.workspaceOrder';
+const STATUS_FILTER_KEY = 'cs.statusFilter';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -66,6 +74,10 @@ export function App(): JSX.Element {
     return SIDEBAR_MODES.includes(saved as SidebarMode) ? (saved as SidebarMode) : 'manual';
   });
   const [sidebarFilter, setSidebarFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(() => {
+    const saved = localStorage.getItem(STATUS_FILTER_KEY);
+    return isStatusFilter(saved) ? saved : 'all';
+  });
   const [workspaceOrder, setWorkspaceOrder] = useState<string[]>(() => {
     try {
       const arr = JSON.parse(localStorage.getItem(SIDEBAR_ORDER_KEY) ?? '[]') as unknown;
@@ -285,6 +297,15 @@ export function App(): JSX.Element {
           e.preventDefault();
           searchInputRef.current?.focus();
           break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          setStatusFilter((cur) => {
+            const next = nextStatusFilter(cur);
+            localStorage.setItem(STATUS_FILTER_KEY, next);
+            return next;
+          });
+          break;
         case 'Escape':
           e.preventDefault();
           if (document.activeElement === searchInputRef.current) {
@@ -388,6 +409,7 @@ export function App(): JSX.Element {
   connectionRef.current = connection;
 
   // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
+  const statusCounts = countByStatus(workspaces);
   const displayedWorkspaces = (() => {
     let list = [...workspaces];
 
@@ -425,6 +447,8 @@ export function App(): JSX.Element {
         (w) => w.title.toLowerCase().includes(q) || w.branch.toLowerCase().includes(q),
       );
     }
+
+    list = filterByStatus(list, statusFilter);
 
     return list;
   })();
@@ -599,6 +623,12 @@ export function App(): JSX.Element {
           sidebarMode={sidebarMode}
           filter={sidebarFilter}
           onFilterChange={setSidebarFilter}
+          statusFilter={statusFilter}
+          counts={statusCounts}
+          onStatusFilterChange={(v) => {
+            localStorage.setItem(STATUS_FILTER_KEY, v);
+            setStatusFilter(v);
+          }}
           searchInputRef={searchInputRef}
         />
         <CenterPane

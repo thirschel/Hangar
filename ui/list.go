@@ -35,6 +35,10 @@ var listDescStyle = lipgloss.NewStyle().
 	Padding(0, 1, 1, 1).
 	Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
 
+var statusCountsStyle = lipgloss.NewStyle().
+	Padding(0, 1).
+	Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+
 var selectedTitleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
 	Background(lipgloss.Color("#dde4f0")).
@@ -83,6 +87,8 @@ type List struct {
 	mode SidebarMode
 	// filter is the active search query (empty = no filter).
 	filter string
+	// statusFilter is the active status filter (StatusAll = no filter).
+	statusFilter StatusFilter
 	// searching is true while the search input bar is open (even with an empty
 	// query), so the sidebar renders the input line.
 	searching bool
@@ -121,10 +127,10 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 }
 
 // recompute rebuilds the cached view-model from the canonical items, the active
-// mode, and the filter, then updates the animator. Call after any change to
-// items/mode/filter/selection.
+// mode, and the filters, then updates the animator. Call after any change to
+// items/mode/filter/statusFilter/selection.
 func (l *List) recompute() {
-	l.rows = buildView(l.items, l.mode, l.filter)
+	l.rows = buildView(l.items, l.mode, l.filter, l.statusFilter)
 	if l.animator == nil {
 		return
 	}
@@ -194,6 +200,22 @@ func (l *List) SetFilter(filter string) {
 	l.filter = filter
 	l.recompute()
 }
+
+// StatusFilter returns the active status filter.
+func (l *List) StatusFilter() StatusFilter { return l.statusFilter }
+
+// SetStatusFilter sets the active status filter and recomputes the view.
+func (l *List) SetStatusFilter(filter StatusFilter) {
+	idx := indexOfInstance(l.items, l.selected)
+	l.statusFilter = filter
+	l.recompute()
+	if l.selected != nil && !l.isVisible(l.selected) {
+		l.selected = l.nearestVisible(idx)
+	}
+}
+
+// StatusCounts returns counts over the full canonical item set.
+func (l *List) StatusCounts() StatusCounts { return CountByStatus(l.items) }
 
 // Searching reports whether the search input bar is currently open.
 func (l *List) Searching() bool { return l.searching }
@@ -441,6 +463,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 func (l *List) String() string {
 	titleText := fmt.Sprintf(" Instances · %s ", l.mode)
+	if l.statusFilter != StatusAll {
+		titleText = fmt.Sprintf(" Instances · %s · %s ", l.mode, l.statusFilter)
+	}
 	const autoYesText = " auto-yes "
 
 	// Write the title.
@@ -466,6 +491,11 @@ func (l *List) String() string {
 	b.WriteString("\n")
 	b.WriteString("\n")
 
+	if countsText := formatStatusCounts(l.StatusCounts()); countsText != "" {
+		b.WriteString(statusCountsStyle.Render(countsText))
+		b.WriteString("\n\n")
+	}
+
 	// Search input bar (rendered while searching, even with an empty query).
 	if l.searching {
 		query := l.filter
@@ -480,8 +510,12 @@ func (l *List) String() string {
 	// Render the view-model rows: non-selectable headers interleaved with
 	// workspace rows. Numbering is continuous across visible instances.
 	hasMultipleRepos := len(l.repos) > 1
-	if len(l.rows) == 0 && l.filter != "" && len(l.items) > 0 {
-		b.WriteString(emptySearchStyle.Render(fmt.Sprintf("no matches for %q", l.filter)))
+	if len(l.rows) == 0 && len(l.items) > 0 && (l.filter != "" || l.statusFilter != StatusAll) {
+		msg := fmt.Sprintf("no matches for %q", l.filter)
+		if l.filter == "" {
+			msg = fmt.Sprintf("no %s sessions", l.statusFilter)
+		}
+		b.WriteString(emptySearchStyle.Render(msg))
 	}
 	for i, row := range l.rows {
 		switch row.kind {
@@ -500,6 +534,26 @@ func (l *List) String() string {
 		}
 	}
 	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+}
+
+func formatStatusCounts(counts StatusCounts) string {
+	if counts.Total == 0 {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	if counts.Waiting > 0 {
+		parts = append(parts, fmt.Sprintf("%d waiting", counts.Waiting))
+	}
+	if counts.Busy > 0 {
+		parts = append(parts, fmt.Sprintf("%d busy", counts.Busy))
+	}
+	if counts.Idle > 0 {
+		parts = append(parts, fmt.Sprintf("%d idle", counts.Idle))
+	}
+	if counts.Paused > 0 {
+		parts = append(parts, fmt.Sprintf("%d paused", counts.Paused))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // Down selects the next visible instance row, skipping headers and wrapping.

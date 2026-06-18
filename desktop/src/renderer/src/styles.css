@@ -39,7 +39,7 @@
 
   /* Status (sidebar dots) */
   --status-idle: #57a64a;
-  --status-busy: #57a64a;
+  --status-busy: #2f81f7;
   --status-waiting: #e0af68;
   --status-exited: #6e6e75;
 
@@ -721,6 +721,61 @@ body.is-row-resizing .center-terminal__resizer::after {
   color: var(--text-faint);
 }
 
+.status-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) var(--space-2);
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.status-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.status-chip.is-active {
+  border-color: var(--accent);
+  background: var(--bg-selected);
+  color: var(--text);
+}
+.status-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.status-chip--waiting::before {
+  background: var(--status-waiting);
+}
+.status-chip--busy::before {
+  background: var(--status-busy);
+}
+.status-chip--idle::before {
+  background: var(--status-idle);
+}
+.status-chip--exited::before {
+  background: var(--status-exited);
+}
+.status-chip__count {
+  color: var(--text-faint);
+}
+.status-chip.is-active .status-chip__count {
+  color: var(--text-muted);
+}
+
 /* Help modal */
 .modal--help .help-grid {
   display: grid;
@@ -1056,7 +1111,7 @@ body.is-row-resizing .center-terminal__resizer::after {
   flex: none;
   box-sizing: border-box;
   border-radius: 50%;
-  border: 2px solid rgba(87, 166, 74, 0.25);
+  border: 2px solid rgba(47, 129, 247, 0.25);
   border-top-color: var(--status-busy);
   animation: cs-spin 0.7s linear infinite;
 }

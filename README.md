@@ -274,6 +274,7 @@ The `cs` TUI menu at the bottom of the screen shows available commands:
 ##### Sidebar view
 
 - `s` / `S` - Cycle the sidebar mode forward / backward: **Manual → Group by repo → Recent activity → Pinned-pending**. The active mode is shown in the sidebar title and persists across restarts.
+- `f` - Cycle the session-only status filter: **All → Waiting → Busy → Idle → Paused**. The sidebar always shows per-status counts.
 - `/` - Search/filter sessions by title or repo path. While searching, letters edit the query and only the arrow keys navigate; `enter` keeps the filter, `esc` clears it and restores your previous selection.
 
 #### Actions

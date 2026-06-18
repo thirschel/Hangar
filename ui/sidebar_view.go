@@ -67,6 +67,87 @@ func ValidSidebarMode(v int) SidebarMode {
 	return SidebarMode(v)
 }
 
+// StatusFilter selects which workspace status bucket is visible in the sidebar.
+type StatusFilter int
+
+const (
+	// StatusAll disables status filtering.
+	StatusAll StatusFilter = iota
+	StatusWaiting
+	StatusBusy
+	StatusIdle
+	StatusPaused
+)
+
+const statusFilterCount = int(StatusPaused) + 1
+
+// StatusCounts is a compact summary of workspace status buckets.
+type StatusCounts struct {
+	Waiting int
+	Busy    int
+	Idle    int
+	Paused  int
+	Total   int
+}
+
+func (f StatusFilter) String() string {
+	switch f {
+	case StatusWaiting:
+		return "waiting"
+	case StatusBusy:
+		return "busy"
+	case StatusIdle:
+		return "idle"
+	case StatusPaused:
+		return "paused"
+	default:
+		return "all"
+	}
+}
+
+// Next returns the next status filter in the forward cycle.
+func (f StatusFilter) Next() StatusFilter {
+	return StatusFilter((int(f) + 1) % statusFilterCount)
+}
+
+func instanceStatusBucket(inst *session.Instance) StatusFilter {
+	if inst.IsWaitingForUser() {
+		return StatusWaiting
+	}
+	switch inst.Status {
+	case session.Paused:
+		return StatusPaused
+	case session.Ready:
+		return StatusIdle
+	default:
+		return StatusBusy
+	}
+}
+
+// CountByStatus summarizes the canonical item set. Loading instances count as
+// Busy because they are not yet available for interaction.
+func CountByStatus(items []*session.Instance) StatusCounts {
+	var counts StatusCounts
+	counts.Total = len(items)
+	for _, inst := range items {
+		switch instanceStatusBucket(inst) {
+		case StatusWaiting:
+			counts.Waiting++
+		case StatusBusy:
+			counts.Busy++
+		case StatusIdle:
+			counts.Idle++
+		case StatusPaused:
+			counts.Paused++
+		}
+	}
+	return counts
+}
+
+func matchesStatus(inst *session.Instance, filter StatusFilter) bool {
+	return filter == StatusAll || instanceStatusBucket(inst) == filter
+}
+
 // rowKind distinguishes section headers from workspace rows in the view-model.
 type rowKind int
 
@@ -114,10 +195,10 @@ func extractItem(inst *session.Instance) sidebarItem {
 // buildView is the pure, deterministic sidebar view-model builder. It filters the
 // canonical items, extracts plain view data, and dispatches to a mode builder.
 // It has no timers and no I/O, so it is trivially unit-testable.
-func buildView(items []*session.Instance, mode SidebarMode, filter string) []displayRow {
+func buildView(items []*session.Instance, mode SidebarMode, filter string, statusFilter StatusFilter) []displayRow {
 	its := make([]sidebarItem, 0, len(items))
 	for _, inst := range items {
-		if !matchesFilter(inst, filter) {
+		if !matchesFilter(inst, filter) || !matchesStatus(inst, statusFilter) {
 			continue
 		}
 		its = append(its, extractItem(inst))
