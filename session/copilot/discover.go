@@ -415,6 +415,34 @@ func logWarningf(format string, args ...any) {
 	}
 }
 
+// isAbsPath reports whether p is an absolute path under either Unix or Windows
+// semantics. Copilot session state is authored on Windows and stores Windows
+// paths (e.g. D:\repo); recognising those regardless of the host OS keeps
+// validateOriginRoot deterministic when this parser runs on Linux (CI) as well
+// as in production on Windows.
+func isAbsPath(p string) bool {
+	if filepath.IsAbs(p) {
+		return true
+	}
+	return isWindowsAbsPath(p)
+}
+
+// isWindowsAbsPath reports whether p is a Windows absolute path: drive-letter
+// rooted (C:\dir or C:/dir) or a UNC path (\\server\share). It lets a non-Windows
+// build still treat Windows-authored Copilot paths as absolute.
+func isWindowsAbsPath(p string) bool {
+	if len(p) >= 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/') {
+		c := p[0]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return true
+		}
+	}
+	if len(p) >= 2 && p[0] == '\\' && p[1] == '\\' {
+		return true
+	}
+	return false
+}
+
 // validateOriginRoot vets an OriginRoot/gitRoot value read from untrusted
 // Copilot state (workspace.yaml git_root, or events.jsonl context.gitRoot). It
 // returns the cleaned path, or "" when the value is structurally unusable
@@ -430,7 +458,7 @@ func logWarningf(format string, args ...any) {
 // hook (F-03).
 func validateOriginRoot(p string) string {
 	p = strings.TrimSpace(p)
-	if p == "" || !filepath.IsAbs(p) {
+	if p == "" || !isAbsPath(p) {
 		return ""
 	}
 	clean := filepath.Clean(p)
