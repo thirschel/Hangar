@@ -1958,8 +1958,31 @@ body.is-row-resizing .center-terminal__resizer::after {
 }
 
 .update-btn {
-  padding: 4px 12px;
-  font-size: 0.85em;
+  border-radius: var(--radius-sm);
+  padding: 7px 15px;
+  font-size: var(--fs-md);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease),
+    filter var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+.update-btn:not(.modal__primary) {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-control);
+  color: var(--text-secondary);
+}
+.update-btn:not(.modal__primary):hover:not(:disabled) {
+  background: var(--bg-hover-strong);
+  border-color: var(--accent);
+}
+.update-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.update-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .update-status {
