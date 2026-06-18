@@ -453,8 +453,17 @@ func (s *conptySession) capture(full, withANSI bool) string {
 	return sb + "\n" + scr
 }
 
-func (s *conptySession) captureHistory(includeScreen bool) (ansi string, altScreen bool, lines int) {
-	ansi = scrollbackANSI(s.emu)
+func (s *conptySession) captureHistory(includeScreen bool, cols, rows int) (ansi string, altScreen bool, lines int) {
+	// Render scrollback at the client's display width so lines align with the
+	// fitted xterm grid. vt never reflows scrollback, so this clips/reveals
+	// stored rows to w (it cannot re-wrap). Fall back to the live emulator
+	// width when the caller omits a size. rows is accepted for request
+	// symmetry/forward-compat but unused (scrollback clipping is width-only).
+	w := cols
+	if w <= 0 {
+		w = s.emu.Width()
+	}
+	ansi = scrollbackANSI(s.emu, w)
 	if includeScreen {
 		ansi += s.emu.Render()
 	}
@@ -701,12 +710,14 @@ func scrollbackPlain(se *vt.SafeEmulator) string {
 	return strings.Join(lines, "\n")
 }
 
-func scrollbackANSI(se *vt.SafeEmulator) string {
+func scrollbackANSI(se *vt.SafeEmulator, w int) string {
 	n := se.ScrollbackLen()
 	if n == 0 {
 		return ""
 	}
-	w := se.Width()
+	if w <= 0 {
+		w = se.Width()
+	}
 	var b strings.Builder
 	for y := 0; y < n; y++ {
 		renderScrollbackANSIRow(&b, se, y, w)
