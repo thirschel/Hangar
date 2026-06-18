@@ -1,0 +1,22 @@
+name: PR Title
+
+# Enforces Conventional Commits on pull-request titles. Because PRs are
+# squash-merged, the PR title becomes the single commit on main that
+# semantic-release parses to decide the next version + changelog entry, so the
+# title must be a valid conventional-commit subject (e.g. `feat: ...`, `fix: ...`).
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  lint:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

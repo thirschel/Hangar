@@ -1,49 +1,75 @@
 name: Release
 
+# Fully automated release pipeline driven by Conventional Commits.
+# semantic-release (job `release`) decides the next semver, updates CHANGELOG.md,
+# bumps the version in main.go + desktop/package.json, commits + tags, and creates
+# the GitHub release. Downstream jobs build artifacts and attach them to that
+# release. Everything runs in one workflow run, so there is no cross-workflow tag
+# trigger to worry about; the release commit carries [skip ci] to avoid a loop.
+
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
+  workflow_dispatch:
 
 permissions: {}
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  build:
+  release:
+    name: Semantic Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      published: ${{ steps.semantic.outputs.published }}
+      version: ${{ steps.semantic.outputs.version }}
+      tag: ${{ steps.semantic.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install release tooling
+        run: npm ci
+
+      - name: Semantic release
+        id: semantic
+        env:
+          # Prefer a GitHub App/PAT (RELEASE_TOKEN) so the chore(release) commit and
+          # tag can be pushed to a protected main; falls back to GITHUB_TOKEN when
+          # main is unprotected. The [skip ci] in the commit prevents a re-trigger.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
+
+  goreleaser:
+    name: Go Artifacts
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       id-token: write
       attestations: write
-    name: Build Release
-    runs-on: ubuntu-latest
-
     steps:
-      - name: Check out code into the Go module directory
+      - name: Checkout release tag
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
+          ref: ${{ needs.release.outputs.tag }}
           fetch-depth: 0
-
-      - name: Validate tag matches version in main.go
-        run: |
-          # Extract version from main.go
-          VERSION=$(grep -E '^[[:space:]]*version[[:space:]]*=' main.go | sed -E 's/.*"([^"]+)".*/\1/')
-          
-          # Get the tag name (remove refs/tags/ prefix)
-          TAG_NAME=${GITHUB_REF#refs/tags/}
-          
-          # Remove 'v' prefix from tag if present
-          TAG_VERSION=${TAG_NAME#v}
-          
-          echo "Version in main.go: $VERSION"
-          echo "Tag version: $TAG_VERSION"
-          
-          # Compare versions
-          if [ "$VERSION" != "$TAG_VERSION" ]; then
-            echo "ERROR: Tag version ($TAG_VERSION) does not match version in main.go ($VERSION)"
-            echo "Please ensure the tag matches the version defined in main.go"
-            exit 1
-          fi
-          
-          echo "✅ Tag version matches main.go version: $VERSION"
 
       - name: Set up Go 1.25
         uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4
@@ -53,14 +79,21 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
-      - name: Run GoReleaser
+      - name: Build artifacts with GoReleaser (no publish)
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: latest
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_REPO_TOKEN: ${{ secrets.BREW_TOKEN }}
+
+      - name: Upload Go artifacts to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          find dist -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'checksums.txt*' \) -print0 \
+            | xargs -0 gh release upload "$TAG" --clobber
 
       - name: Generate Go SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
@@ -73,17 +106,26 @@ jobs:
         with:
           subject-path: dist/*.tar.gz,dist/*.zip,dist/checksums.txt
 
-  desktop-release:
+      - name: Upload Go SBOM to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release upload "$TAG" dist/sbom-go.spdx.json --clobber
+
+  desktop:
     name: Build Desktop Installer
-    needs: build
+    needs: release
+    if: needs.release.outputs.published == 'true'
     runs-on: windows-latest
     permissions:
       contents: write
       id-token: write
       attestations: write
-
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Checkout release tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.release.outputs.tag }}
 
       - name: Set up Go
         uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4
@@ -112,16 +154,6 @@ jobs:
         working-directory: desktop
         run: npx @cyclonedx/cyclonedx-npm --output-file ../dist/sbom-desktop.cdx.json --omit dev
 
-      - name: Upload SBOM to release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = "${{ github.ref_name }}"
-          if (Test-Path dist/sbom-desktop.cdx.json) {
-            gh release upload $tag dist/sbom-desktop.cdx.json --clobber
-          }
-
       - name: Run tests
         working-directory: desktop
         run: npm run test
@@ -133,18 +165,21 @@ jobs:
       - name: Attest desktop installer
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
-          subject-path: desktop/release/claude-squad-Setup-*.exe
+          subject-path: desktop/release/Hangar-Setup-*.exe
 
-      - name: Upload installer to release
+      - name: Upload installer + SBOM to release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
         run: |
-          $tag = "${{ github.ref_name }}"
-          $installer = Get-ChildItem -Path desktop/release -Filter "claude-squad-Setup-*.exe" | Select-Object -First 1
+          if (Test-Path dist/sbom-desktop.cdx.json) {
+            gh release upload $env:TAG dist/sbom-desktop.cdx.json --clobber
+          }
+          $installer = Get-ChildItem -Path desktop/release -Filter "Hangar-Setup-*.exe" | Select-Object -First 1
           if ($installer) {
-            gh release upload $tag $installer.FullName --clobber
-            Write-Output "Uploaded $($installer.Name) to release $tag"
+            gh release upload $env:TAG $installer.FullName --clobber
+            Write-Output "Uploaded $($installer.Name) to release $env:TAG"
           } else {
             Write-Error "No installer .exe found in desktop/release/"
             exit 1
