@@ -191,6 +191,18 @@ describe('isAllowedNavigationUrl', () => {
     ).toBe(false);
   });
 
+  it('blocks an encoded-separator traversal that string-matches the prefix', () => {
+    // %2f is not decoded by URL.pathname, so a raw prefix check would pass; resolving
+    // via fileURLToPath rejects encoded separators outright.
+    const app = 'file:///C:/Users/tester/app/renderer/index.html';
+    expect(
+      isAllowedNavigationUrl(
+        app,
+        'file:///C:/Users/tester/app/renderer/..%2f..%2fWindows/System32/x.html',
+      ),
+    ).toBe(false);
+  });
+
   it('blocks a sibling directory that shares the renderer name prefix', () => {
     const app = 'file:///C:/Users/tester/app/renderer/index.html';
     expect(isAllowedNavigationUrl(app, 'file:///C:/Users/tester/app/renderer-evil/x.html')).toBe(
