@@ -103,7 +103,7 @@ export function getSettings(): Settings {
 // applySettings merges a partial Settings patch back into the two stores. Daemon
 // fields go to config.json (preserving its other keys); app fields to desktop.json.
 export function applySettings(patch: Partial<Settings>): Settings {
-  mkdirSync(csDir(), { recursive: true });
+  mkdirSync(csDir(), { recursive: true, mode: 0o700 });
 
   const cfg = readDaemonConfig();
   if (patch.defaultProgram !== undefined)
@@ -117,7 +117,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
     if (dir) cfg.worktree_dir = dir;
     else delete cfg.worktree_dir;
   }
-  writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n');
+  writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 
   const app = readAppSettings();
   if (patch.notifications !== undefined) app.notifications = patch.notifications;
@@ -129,7 +129,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
       ? Math.min(60000, Math.max(500, n))
       : APP_DEFAULTS.uiRefreshMs;
   }
-  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n');
+  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n', { mode: 0o600 });
 
   return getSettings();
 }

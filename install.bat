@@ -4,6 +4,8 @@ setlocal
 set "INSTALL_DIR=%LOCALAPPDATA%\bin"
 set "SOURCE=%~dp0cs.exe"
 
+:: For release builds, verify the git tag you checked out before running this local source installer.
+
 :: Build if cs.exe doesn't exist
 if not exist "%SOURCE%" (
     echo cs.exe not found, building...
@@ -35,4 +37,4 @@ if %errorlevel% neq 0 (
     echo %INSTALL_DIR% is already in PATH.
 )
 
-echo Done. Run "cs" to start claude-squad.
+echo Done. Run "cs" to start Hangar.

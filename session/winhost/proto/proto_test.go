@@ -25,7 +25,7 @@ func TestFrameRoundTrip(t *testing.T) {
 
 func TestResponseRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
-	resp := &Response{ID: 7, OK: true, HostVersion: Version, Content: "hello\nworld",
+	resp := &Response{ID: 7, OK: true, HostVersion: Version, HostPID: 1234, HostCreatedUnix: 1710000000, HostNonceProof: "abcd", Content: "hello\nworld",
 		Sessions: []SessionInfo{{Name: "a", Alive: true, Program: "claude"}}}
 	if err := WriteFrame(&buf, resp); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
@@ -34,7 +34,8 @@ func TestResponseRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadResponse: %v", err)
 	}
-	if got.ID != 7 || !got.OK || got.HostVersion != Version || got.Content != "hello\nworld" ||
+	if got.ID != 7 || !got.OK || got.HostVersion != Version || got.HostPID != 1234 ||
+		got.HostCreatedUnix != 1710000000 || got.HostNonceProof != "abcd" || got.Content != "hello\nworld" ||
 		len(got.Sessions) != 1 || got.Sessions[0].Name != "a" || !got.Sessions[0].Alive {
 		t.Fatalf("round-trip mismatch: %+v", got)
 	}
@@ -87,8 +88,8 @@ func TestReadFrameTruncatedBodyErrors(t *testing.T) {
 }
 
 func TestRegenerateFieldsRoundTrip(t *testing.T) {
-	if Version != 6 {
-		t.Fatalf("Version = %d, want 6", Version)
+	if Version != 9 {
+		t.Fatalf("Version = %d, want 9", Version)
 	}
 	var buf bytes.Buffer
 	req := &Request{ID: 1, Method: MethodRegenerateAgent, WorkspaceID: "ws1", Handoff: true, Cols: 100, Rows: 40}

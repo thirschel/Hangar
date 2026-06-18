@@ -2,6 +2,8 @@ package ui
 
 import (
 	"hangar/session"
+	"hangar/session/git"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -266,6 +268,17 @@ func TestListTracksReposByFullPath(t *testing.T) {
 func newPausedTestInstance(t *testing.T, title string, repoPath string) *session.Instance {
 	t.Helper()
 
+	// A worktree path must live under the managed worktrees directory or
+	// FromInstanceData rejects it (the F-09 arbitrary-deletion guard). Point HOME
+	// at a temp dir and place the worktree under the resolved worktrees dir.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	wtDir, err := git.WorktreesDir()
+	require.NoError(t, err)
+	worktreePath := filepath.Join(wtDir, title)
+	require.NoError(t, os.MkdirAll(worktreePath, 0o700))
+
 	inst, err := session.FromInstanceData(session.InstanceData{
 		Title:   title,
 		Path:    repoPath,
@@ -274,7 +287,7 @@ func newPausedTestInstance(t *testing.T, title string, repoPath string) *session
 		Program: "echo",
 		Worktree: session.GitWorktreeData{
 			RepoPath:     repoPath,
-			WorktreePath: filepath.Join(t.TempDir(), title),
+			WorktreePath: worktreePath,
 			SessionName:  title,
 			BranchName:   "test-branch",
 		},

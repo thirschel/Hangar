@@ -1,6 +1,7 @@
 package git
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -26,6 +27,12 @@ func (d *DiffStats) IsEmpty() bool {
 func (g *GitWorktree) Diff() *DiffStats {
 	stats := &DiffStats{}
 
+	sha := g.GetBaseCommitSHA()
+	if err := ValidateSHA(sha); err != nil {
+		stats.Error = fmt.Errorf("invalid base commit SHA: %w", err)
+		return stats
+	}
+
 	// -N stages untracked files (intent to add), including them in the diff
 	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
 	if err != nil {
@@ -33,7 +40,7 @@ func (g *GitWorktree) Diff() *DiffStats {
 		return stats
 	}
 
-	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA())
+	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", sha)
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -57,6 +64,12 @@ func (g *GitWorktree) Diff() *DiffStats {
 func (g *GitWorktree) DiffNumstat() *DiffStats {
 	stats := &DiffStats{}
 
+	sha := g.GetBaseCommitSHA()
+	if err := ValidateSHA(sha); err != nil {
+		stats.Error = fmt.Errorf("invalid base commit SHA: %w", err)
+		return stats
+	}
+
 	// -N stages untracked files (intent to add), including them in the diff
 	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
 	if err != nil {
@@ -64,7 +77,7 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 		return stats
 	}
 
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", sha)
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -84,11 +97,15 @@ type FileDiffStat struct {
 // ChangedFiles returns the files changed between the worktree and the base
 // branch, each with added/removed line counts (via `git diff --numstat`).
 func (g *GitWorktree) ChangedFiles() ([]FileDiffStat, error) {
+	sha := g.GetBaseCommitSHA()
+	if err := ValidateSHA(sha); err != nil {
+		return nil, fmt.Errorf("invalid base commit SHA: %w", err)
+	}
 	// -N stages untracked files (intent to add) so they show up in the diff.
 	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
 		return nil, err
 	}
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
+	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", sha)
 	if err != nil {
 		return nil, err
 	}
@@ -110,10 +127,14 @@ func (g *GitWorktree) ChangedFiles() ([]FileDiffStat, error) {
 
 // FileDiff returns the unified diff for a single file vs the base branch.
 func (g *GitWorktree) FileDiff(path string) (string, error) {
+	sha := g.GetBaseCommitSHA()
+	if err := ValidateSHA(sha); err != nil {
+		return "", fmt.Errorf("invalid base commit SHA: %w", err)
+	}
 	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
 		return "", err
 	}
-	return g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA(), "--", path)
+	return g.runGitCommand(g.worktreePath, "--no-pager", "diff", sha, "--", path)
 }
 
 // Each line is formatted as <added>\t<removed>\t<path>. Binary files report

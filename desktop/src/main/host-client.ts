@@ -1,8 +1,13 @@
 import { execFileSync, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import net from 'node:net';
-
-export { PROTO_VERSION } from '../shared/proto-version';
+import os from 'node:os';
+import path from 'node:path';
+import { PROTO_VERSION } from '../shared/proto-version';
+export { PROTO_VERSION };
 const MAX_FRAME = 16 << 20;
+const HELLO_PROOF_PREFIX = 'hangar-winhost-hello-v7\n';
 
 export interface SessionInfo {
   name: string;
@@ -50,6 +55,14 @@ export interface FileDiffInfo {
   path: string;
   added: number;
   removed: number;
+}
+
+export interface HostInfo {
+  pipeName: string;
+  pid: number;
+  createdUnix: number;
+  nonce: string;
+  version: number;
 }
 
 // Files tab (read-only worktree browser) — shared between main and preload.
@@ -103,6 +116,7 @@ export interface Request {
   withANSI?: boolean;
   includeScreen?: boolean;
   clientVersion?: number;
+  clientNonce?: string;
   // Workspace methods (v2)
   repoPath?: string;
   title?: string;
@@ -121,6 +135,8 @@ export interface Request {
   shell?: string;
   // ResumeCopilotSession
   sessionId?: string;
+  // Cross-repo resume confirmation (v8): acknowledge a NeedsConfirm response.
+  confirmed?: boolean;
 }
 
 export interface Response {
@@ -128,6 +144,9 @@ export interface Response {
   ok: boolean;
   error?: string;
   hostVersion?: number;
+  hostPid?: number;
+  hostCreatedUnix?: number;
+  hostNonceProof?: string;
   content?: string;
   altScreen?: boolean;
   scrollbackLines?: number;
@@ -151,6 +170,9 @@ export interface Response {
   // Copilot session browser (v6)
   copilotSessions?: CopilotSessionInfo[];
   skipped?: number;
+  // Cross-repo resume confirmation (v8)
+  needsConfirm?: boolean;
+  absPath?: string;
 }
 
 type PendingCall = {
@@ -275,6 +297,126 @@ export function controlPipeName(): string {
   return `\\\\.\\pipe\\hangar-host-${currentUserSid()}`;
 }
 
+export function hostInfoPath(): string {
+  return path.join(os.homedir(), '.hangar', 'host.json');
+}
+
+function isLowerHexBytes(value: string, nbytes: number): boolean {
+  return new RegExp(`^[0-9a-f]{${nbytes * 2}}$`).test(value);
+}
+
+export function readHostInfo(): HostInfo {
+  const raw = JSON.parse(readFileSync(hostInfoPath(), 'utf8')) as Partial<HostInfo>;
+  return {
+    pipeName: typeof raw.pipeName === 'string' ? raw.pipeName : '',
+    pid: typeof raw.pid === 'number' ? raw.pid : 0,
+    createdUnix: typeof raw.createdUnix === 'number' ? raw.createdUnix : 0,
+    nonce: typeof raw.nonce === 'string' ? raw.nonce : '',
+    version: typeof raw.version === 'number' ? raw.version : 0,
+  };
+}
+
+export function processCreationUnix(pid: number): number {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    throw new Error(`invalid pid ${pid}`);
+  }
+  // Get-Process .StartTime is the process creation time, matching Go's
+  // GetProcessTimes creation FILETIME within the ±1s tolerance enforced below.
+  const output = execFileSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `[DateTimeOffset]::new((Get-Process -Id ${pid}).StartTime.ToUniversalTime(), [TimeSpan]::Zero).ToUnixTimeSeconds()`,
+    ],
+    { encoding: 'utf8', windowsHide: true },
+  ).trim();
+  const seconds = Number.parseInt(output, 10);
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) {
+    throw new Error(`could not parse process creation time for pid ${pid}: ${output}`);
+  }
+  return seconds;
+}
+
+export function validateHostInfo(hi: HostInfo): void {
+  const expectedPipe = controlPipeName();
+  if (hi.pipeName !== expectedPipe) {
+    throw new Error('untrusted host.json: unexpected pipe name');
+  }
+  if (hi.version !== PROTO_VERSION) {
+    throw new Error(`session-host protocol mismatch: host=${hi.version} client=${PROTO_VERSION}`);
+  }
+  if (!isLowerHexBytes(hi.nonce, 32)) {
+    throw new Error('untrusted host.json: invalid nonce');
+  }
+  if (!Number.isSafeInteger(hi.pid) || hi.pid <= 0 || !Number.isSafeInteger(hi.createdUnix) || hi.createdUnix <= 0) {
+    throw new Error('untrusted host.json: invalid pid or creation time');
+  }
+  let got: number;
+  try {
+    got = processCreationUnix(hi.pid);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`untrusted host.json: process creation check failed: ${message}`);
+  }
+  if (Math.abs(got - hi.createdUnix) > 1) {
+    throw new Error('untrusted host.json: pid/creation mismatch');
+  }
+}
+
+function tryLoadValidHostInfo(): HostInfo | null {
+  if (!existsSync(hostInfoPath())) {
+    return null;
+  }
+  const hi = readHostInfo();
+  validateHostInfo(hi);
+  return hi;
+}
+
+export function randomClientNonce(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function hostNonceProof(
+  hi: HostInfo,
+  clientNonce: string,
+  hostVersion: number,
+  hostPid: number,
+  hostCreatedUnix: number,
+): string {
+  if (!isLowerHexBytes(clientNonce, 32)) {
+    throw new Error('invalid hello challenge');
+  }
+  const hmac = crypto.createHmac('sha256', Buffer.from(hi.nonce, 'hex'));
+  hmac.update(`${HELLO_PROOF_PREFIX}${clientNonce}\n${hostVersion}\n${hostPid}\n${hostCreatedUnix}\n${hi.pipeName}`, 'utf8');
+  return hmac.digest('hex');
+}
+
+export function verifyAuthenticatedHello(hi: HostInfo, clientNonce: string, response: Response): void {
+  if (!response.ok) {
+    throw new Error(`Hello failed: ${response.error || 'unknown error'}`);
+  }
+  const hostVersion = response.hostVersion;
+  const hostPid = response.hostPid;
+  const hostCreatedUnix = response.hostCreatedUnix;
+  if (hostVersion !== PROTO_VERSION) {
+    throw new Error(`session-host protocol mismatch: host=${hostVersion ?? 0} client=${PROTO_VERSION}`);
+  }
+  if (hostPid !== hi.pid || hostCreatedUnix !== hi.createdUnix) {
+    throw new Error('session-host identity mismatch');
+  }
+  if (!response.hostNonceProof || !isLowerHexBytes(response.hostNonceProof, 32)) {
+    throw new Error('session-host authentication failed');
+  }
+  const want = hostNonceProof(hi, clientNonce, hostVersion, hostPid, hostCreatedUnix);
+  const gotBuf = Buffer.from(response.hostNonceProof, 'utf8');
+  const wantBuf = Buffer.from(want, 'utf8');
+  if (gotBuf.length !== wantBuf.length || !crypto.timingSafeEqual(gotBuf, wantBuf)) {
+    throw new Error('session-host authentication failed');
+  }
+}
+
 export function connectPipe(pipeName: string, timeoutMs = 2000): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
     const socket = net.connect({ path: pipeName });
@@ -294,14 +436,41 @@ export function connectPipe(pipeName: string, timeoutMs = 2000): Promise<net.Soc
   });
 }
 
-export async function ensureHost(csExe: string): Promise<string> {
-  const pipeName = controlPipeName();
+async function pipeConnectable(pipeName: string, timeoutMs: number): Promise<boolean> {
   try {
-    const socket = await connectPipe(pipeName, 800);
+    const socket = await connectPipe(pipeName, timeoutMs);
     socket.end();
-    return pipeName;
+    return true;
   } catch {
-    // Spawn below.
+    return false;
+  }
+}
+
+async function waitForValidHostInfo(timeoutMs: number): Promise<HostInfo | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await delay(150);
+    const hi = tryLoadValidHostInfo();
+    if (hi) {
+      return hi;
+    }
+  }
+  return null;
+}
+
+export async function ensureHost(csExe: string): Promise<HostInfo> {
+  const pipeName = controlPipeName();
+  const hi = tryLoadValidHostInfo();
+  if (hi) {
+    return hi;
+  }
+
+  if (await pipeConnectable(pipeName, 800)) {
+    const published = await waitForValidHostInfo(2_000);
+    if (published) {
+      return published;
+    }
+    throw new Error('unauthenticated session-host pipe exists; refusing to connect without valid host.json');
   }
 
   const child = spawn(csExe, ['session-host'], {
@@ -311,19 +480,12 @@ export async function ensureHost(csExe: string): Promise<string> {
   });
   child.unref();
 
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    await delay(300);
-    try {
-      const socket = await connectPipe(pipeName, 500);
-      socket.end();
-      return pipeName;
-    } catch {
-      // Keep polling until the daemon creates the SID pipe.
-    }
+  const published = await waitForValidHostInfo(10_000);
+  if (published) {
+    return published;
   }
 
-  throw new Error('session-host did not become ready');
+  throw new Error('session-host did not publish a valid host.json');
 }
 
 export async function connectAttachStream(
