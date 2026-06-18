@@ -475,6 +475,60 @@ body.is-col-resizing .side-panel {
   color: var(--text-secondary);
 }
 
+/* Clickable breadcrumb segment with a copy-to-clipboard tooltip. */
+.breadcrumb__item {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: color var(--dur-fast) var(--ease);
+}
+.breadcrumb__item:hover {
+  color: var(--text-strong);
+}
+.breadcrumb__item:focus-visible {
+  box-shadow: var(--shadow-focus);
+}
+
+.breadcrumb__tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  box-sizing: content-box;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  box-shadow: var(--shadow-md);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out),
+    width var(--dur-slow) var(--ease-out);
+  z-index: 50;
+}
+.breadcrumb__tip.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.breadcrumb__tip--copied {
+  color: var(--text-strong);
+  font-family: var(--font-ui);
+}
+.breadcrumb__tip-label {
+  display: inline-block;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
 .sidebar,
 .review-panel,
 .center-pane {
