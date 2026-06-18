@@ -365,13 +365,23 @@ export function validateHostInfo(hi: HostInfo): void {
   }
 }
 
-function tryLoadValidHostInfo(): HostInfo | null {
+export function tryLoadValidHostInfo(): HostInfo | null {
   if (!existsSync(hostInfoPath())) {
     return null;
   }
-  const hi = readHostInfo();
-  validateHostInfo(hi);
-  return hi;
+  try {
+    const hi = readHostInfo();
+    validateHostInfo(hi);
+    return hi;
+  } catch {
+    // A corrupt, stale (dead pid), or version-mismatched host.json means there is
+    // no usable daemon to reuse. Return null — matching this function's contract
+    // and waitForValidHostInfo's `if (hi)` expectation — so ensureHost falls
+    // through to (re)spawn a fresh daemon, or, if a live pipe exists, refuse
+    // safely. A force-killed daemon (e.g. dev-worktree.ps1) leaves a stale
+    // host.json behind, which must not brick the next launch by throwing here.
+    return null;
+  }
 }
 
 export function randomClientNonce(): string {
