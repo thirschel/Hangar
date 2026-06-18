@@ -149,12 +149,18 @@ function createWindow(): void {
     height: 820,
     minWidth: 1080,
     minHeight: 680,
+    icon: buildAsset('icon.png'),
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: path.join(__dirname, '..\\preload\\index.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // Let the renderer play the notification chime without a prior user
+      // gesture, and keep it responsive while hidden/minimized to the tray so
+      // the sound fires even when the window isn't focused.
+      autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false,
     },
   });
 
@@ -234,7 +240,17 @@ ipcMain.handle(
       session: args.session,
       includeScreen: args.includeScreen ?? false,
     });
-    if (!r.ok) throw new Error(r.error || 'CaptureHistory failed');
+    if (!r.ok) {
+      // A workspace session that isn't live yet (e.g. just after a daemon
+      // restart, before attach revives it) has no scrollback to prime. Treat
+      // it as empty history rather than throwing, so Electron doesn't log a
+      // handler rejection for this best-effort call; attach revives the session
+      // and streams live output a moment later.
+      if ((r.error ?? '').includes('no such session')) {
+        return { ansi: '', altScreen: false, scrollbackLines: 0 };
+      }
+      throw new Error(r.error || 'CaptureHistory failed');
+    }
     return {
       ansi: r.content ?? '',
       altScreen: r.altScreen ?? false,
@@ -395,8 +411,17 @@ ipcMain.handle('cs:install-update', async () => {
 ipcMain.handle(
   'cs:notify',
   async (_event, n: { title: string; body: string; workspaceId?: string }): Promise<void> => {
-    if (!getSettings().notifications || !Notification.isSupported()) return;
-    const notification = new Notification({ title: n.title, body: n.body, icon: buildAsset('icon.png') });
+    const settings = getSettings();
+    if (!settings.notifications || !Notification.isSupported()) return;
+    // Suppress the OS default chime: when the user enabled the in-app sound we
+    // play our own (below), and when they muted it there should be no sound at
+    // all. Either way the native ding would double up, so silence it here.
+    const notification = new Notification({
+      title: n.title,
+      body: n.body,
+      icon: buildAsset('icon.png'),
+      silent: true,
+    });
     notification.on('click', () => {
       if (mainWindow) {
         if (mainWindow.isMinimized()) mainWindow.restore();
@@ -406,6 +431,7 @@ ipcMain.handle(
       if (n.workspaceId) sendToRenderer('cs:focus-workspace', n.workspaceId);
     });
     notification.show();
+    if (settings.notificationSound) sendToRenderer('cs:play-notification-sound');
   },
 );
 
@@ -428,6 +454,10 @@ ipcMain.on('term:resize', (_event, args: { session: string; cols: number; rows: 
 });
 
 app.whenReady().then(() => {
+  // Windows taskbar + toast identity. Without an explicit AppUserModelId the OS
+  // attributes the app (and its taskbar icon/notifications) to the generic
+  // electron.exe rather than to Hangar.
+  if (process.platform === 'win32') app.setAppUserModelId('com.thirschel.hangar');
   // Hide the default application menu bar (File / Edit / View / Window / Help).
   Menu.setApplicationMenu(null);
   createWindow();

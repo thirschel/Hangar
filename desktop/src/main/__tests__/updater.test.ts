@@ -52,6 +52,7 @@ function mockSettings(autoUpdate: boolean) {
     branchPrefix: '',
     workspaceDir: '',
     notifications: true,
+    notificationSound: true,
     minimizeToTray: true,
     uiRefreshMs: 2000,
     autoUpdate,

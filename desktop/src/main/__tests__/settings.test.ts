@@ -59,6 +59,7 @@ describe('settings', () => {
       branchPrefix: '',
       workspaceDir: '',
       notifications: true,
+      notificationSound: true,
       minimizeToTray: true,
       autoUpdate: false,
       uiRefreshMs: 2000,
@@ -111,6 +112,7 @@ describe('settings', () => {
     });
     expect(readWrittenJson(appSettingsPath)).toEqual({
       notifications: true,
+      notificationSound: true,
       minimizeToTray: true,
       autoUpdate: false,
       uiRefreshMs: 2500,
@@ -123,6 +125,7 @@ describe('settings', () => {
       branchPrefix: 'feature/',
       workspaceDir: 'C:\\worktrees',
       notifications: true,
+      notificationSound: true,
       minimizeToTray: true,
       autoUpdate: false,
       uiRefreshMs: 2500,
@@ -134,6 +137,7 @@ describe('settings', () => {
 
     expect(readWrittenJson(appSettingsPath)).toEqual({
       notifications: true,
+      notificationSound: true,
       minimizeToTray: true,
       autoUpdate: true,
       uiRefreshMs: 2000,
