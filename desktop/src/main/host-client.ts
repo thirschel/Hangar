@@ -328,9 +328,14 @@ export function processCreationUnix(pid: number): number {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `[DateTimeOffset]::new((Get-Process -Id ${pid}).StartTime.ToUniversalTime(), [TimeSpan]::Zero).ToUnixTimeSeconds()`,
+      `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; if ($p) { [DateTimeOffset]::new($p.StartTime.ToUniversalTime(), [TimeSpan]::Zero).ToUnixTimeSeconds() }`,
     ],
-    { encoding: 'utf8', windowsHide: true },
+    // stdio stderr 'ignore' keeps PowerShell's noise out of the app console — a
+    // stale host.json (e.g. after dev-worktree.ps1 force-kills the daemon) points
+    // at a dead pid, and Get-Process would otherwise spew an error block. The
+    // -ErrorAction guard makes a missing process yield empty stdout, which the
+    // parse check below rejects, so the caller falls through to respawn.
+    { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] },
   ).trim();
   const seconds = Number.parseInt(output, 10);
   if (!Number.isSafeInteger(seconds) || seconds <= 0) {

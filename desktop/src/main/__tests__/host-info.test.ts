@@ -63,6 +63,17 @@ describe('tryLoadValidHostInfo', () => {
     expect(tryLoadValidHostInfo()).toBeNull();
   });
 
+  it('returns null when the pid is gone (powershell probe yields no output)', () => {
+    // A force-killed daemon (e.g. dev-worktree.ps1) leaves host.json pointing at
+    // a dead pid; Get-Process finds nothing, so the guarded probe prints nothing.
+    fsMock.readFileSync.mockReturnValue(hostJson());
+    cpMock.execFileSync.mockImplementation((cmd: string) =>
+      cmd === 'whoami' ? `"machine\\user","${SID}"\n` : '',
+    );
+
+    expect(tryLoadValidHostInfo()).toBeNull();
+  });
+
   it('returns null when host.json is corrupt', () => {
     fsMock.readFileSync.mockReturnValue('{ not valid json');
 
