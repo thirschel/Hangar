@@ -56,7 +56,30 @@ type workspaceManager struct {
 	thresholds  regenThresholds
 	bootFloor   time.Duration // min wait for a (re)started agent to be input-ready
 	submitDelay time.Duration // settle between typing a prompt and the submit Enter
+
+	// diffMu guards diffCache. Diff stats are computed off the request path (by a
+	// background refresher) so ListWorkspaces never runs git: git add -N . walks
+	// the whole worktree and a pathological tree (e.g. a symlink into the Windows
+	// assembly cache) can make it take minutes, which previously blocked the
+	// single control connection and starved every other RPC (the session browser).
+	diffMu    sync.Mutex
+	diffCache map[string]cachedDiff
 }
+
+// cachedDiff is a last-known added/removed line count for a workspace.
+type cachedDiff struct {
+	added   int
+	removed int
+}
+
+const (
+	// diffRefreshInterval is how often the background refresher recomputes each
+	// workspace's diff stats.
+	diffRefreshInterval = 4 * time.Second
+	// diffComputeTimeout bounds a single workspace's git diff so one bad worktree
+	// cannot stall the refresher (or a cold-start read) for more than this long.
+	diffComputeTimeout = 8 * time.Second
+)
 
 func newWorkspaceManager(h *host) *workspaceManager {
 	m := &workspaceManager{
@@ -64,6 +87,7 @@ func newWorkspaceManager(h *host) *workspaceManager {
 		wss:       map[string]*workspace{},
 		regens:    map[string]*regenState{},
 		tombstone: map[string]bool{},
+		diffCache: map[string]cachedDiff{},
 		thresholds: regenThresholds{
 			stableMs: 1500, graceMs: 4000, inactivityMs: 30000, hardCapMs: 300000,
 		},
@@ -392,10 +416,9 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		regenerating, phase = true, regen.phase
 	}
 	running, previewURL := m.host.runs.info(w.ID)
-	added, removed := 0, 0
-	if stats := w.worktreeFor().DiffNumstat(); stats != nil && stats.Error == nil {
-		added, removed = stats.Added, stats.Removed
-	}
+	// Diff stats are served from the cache populated by the background refresher,
+	// so building a workspace info never runs git on the request path.
+	added, removed := m.cachedDiffFor(w.ID)
 	return proto.WorkspaceInfo{
 		ID: w.ID, Title: w.Title, Program: w.Program, RepoPath: w.RepoPath,
 		WorktreePath: w.WorktreePath, Branch: w.Branch, SessionName: w.SessionName,
@@ -404,6 +427,84 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		Busy: busy, Waiting: waiting,
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 	}
+}
+
+// --- diff stat cache (kept warm off the request path) ---
+
+// cachedDiffFor returns the last-known added/removed counts for a workspace, or
+// (0, 0) before the background refresher has computed them. Callers must not run
+// git here: this is read on the hot ListWorkspaces path.
+func (m *workspaceManager) cachedDiffFor(id string) (added, removed int) {
+	m.diffMu.Lock()
+	defer m.diffMu.Unlock()
+	d := m.diffCache[id]
+	return d.added, d.removed
+}
+
+// startDiffRefresh launches the background goroutine that keeps diffCache warm.
+// It is started only by the production daemon (RunHost), never in unit tests, so
+// tests do not race the test's own git operations on the same worktree.
+func (m *workspaceManager) startDiffRefresh() {
+	go m.diffRefreshLoop()
+}
+
+// diffRefreshLoop periodically recomputes every workspace's diff stats off the
+// request path (bounded per workspace by diffComputeTimeout) and prunes entries
+// for archived workspaces, so ListWorkspaces is always a fast cache read.
+func (m *workspaceManager) diffRefreshLoop() {
+	defer recoverGoroutine("workspace.diffRefreshLoop")
+	ticker := time.NewTicker(diffRefreshInterval)
+	defer ticker.Stop()
+	for {
+		m.refreshAllDiffs()
+		select {
+		case <-m.host.shutdownCh:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// refreshAllDiffs recomputes diff stats for every current workspace without
+// holding m.mu during the git work, then stores the results and drops stale keys.
+func (m *workspaceManager) refreshAllDiffs() {
+	m.mu.Lock()
+	type job struct {
+		id string
+		wt *git.GitWorktree
+	}
+	jobs := make([]job, 0, len(m.wss))
+	live := make(map[string]struct{}, len(m.wss))
+	for id, w := range m.wss {
+		jobs = append(jobs, job{id: id, wt: w.worktreeFor()})
+		live[id] = struct{}{}
+	}
+	m.mu.Unlock()
+
+	for _, j := range jobs {
+		select {
+		case <-m.host.shutdownCh:
+			return
+		default:
+		}
+		stats := j.wt.DiffNumstatTimeout(diffComputeTimeout)
+		if stats == nil || stats.Error != nil {
+			// Keep the previous value on error/timeout rather than flapping to 0.
+			continue
+		}
+		m.diffMu.Lock()
+		m.diffCache[j.id] = cachedDiff{added: stats.Added, removed: stats.Removed}
+		m.diffMu.Unlock()
+	}
+
+	// Drop cache entries for workspaces that no longer exist.
+	m.diffMu.Lock()
+	for id := range m.diffCache {
+		if _, ok := live[id]; !ok {
+			delete(m.diffCache, id)
+		}
+	}
+	m.diffMu.Unlock()
 }
 
 // --- RPC handlers ---

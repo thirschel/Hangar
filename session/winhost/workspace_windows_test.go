@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -443,5 +444,43 @@ func TestDefaultTitle(t *testing.T) {
 		if got := defaultTitle(in); got != want {
 			t.Errorf("defaultTitle(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestDiffCachePruneAndKeepOnError verifies the background diff refresher prunes
+// cache entries for workspaces that no longer exist, and keeps the previous
+// counts (rather than flapping to 0) when a workspace's git diff errors/times out.
+func TestDiffCachePruneAndKeepOnError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	h := newHost(io.Discard, time.Minute)
+	m := h.workspaces
+
+	// A live workspace whose worktree path does not exist, so DiffNumstatTimeout
+	// errors immediately and the refresher must keep its previously cached value.
+	m.mu.Lock()
+	m.wss["live"] = &workspace{
+		ID:           "live",
+		WorktreePath: filepath.Join(home, "does-not-exist"),
+		BaseSHA:      "0000000000000000000000000000000000000000",
+	}
+	m.mu.Unlock()
+	m.diffMu.Lock()
+	m.diffCache["live"] = cachedDiff{added: 5, removed: 3}
+	m.diffCache["stale"] = cachedDiff{added: 9, removed: 9} // no longer in wss
+	m.diffMu.Unlock()
+
+	m.refreshAllDiffs()
+
+	if a, r := m.cachedDiffFor("live"); a != 5 || r != 3 {
+		t.Fatalf("live diff should be kept on git error, got (%d,%d) want (5,3)", a, r)
+	}
+	m.diffMu.Lock()
+	_, staleStillCached := m.diffCache["stale"]
+	m.diffMu.Unlock()
+	if staleStillCached {
+		t.Fatal("stale cache entry should have been pruned")
 	}
 }

@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"fmt"
 	"hangar/log"
 	"os"
@@ -64,6 +65,25 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
+	}
+
+	return string(output), nil
+}
+
+// runGitCommandContext is like runGitCommand but binds the git process to ctx,
+// so a slow traversal (e.g. a worktree containing a pathological symlink tree)
+// is killed when ctx is cancelled or times out instead of blocking for minutes.
+func (g *GitWorktree) runGitCommandContext(ctx context.Context, path string, args ...string) (string, error) {
+	baseArgs := []string{"-C", path}
+	cmd := exec.CommandContext(ctx, "git", append(baseArgs, args...)...)
+	hideConsole(cmd)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", fmt.Errorf("git command timed out: %w", ctxErr)
+		}
 		return "", fmt.Errorf("git command failed: %s (%w)", output, err)
 	}
 
