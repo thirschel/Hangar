@@ -86,7 +86,7 @@ export default function Home() {
           <p className={styles.eyebrow}>A hangar for all your copilots.</p>
           <h1 id="hero-title">Hangar</h1>
           <p className={styles.positioning}>
-            A lightweight harness around your favorite CLI coding agent — run several in parallel on native Windows, each in its own isolated git worktree, and review their work before it ships.
+            A lightweight harness around your favorite CLI coding agent for managing agent sessions.
           </p>
           <div className={styles.ctaGroup} aria-label="Primary actions">
             <a
