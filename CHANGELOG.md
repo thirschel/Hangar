@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.5.0](https://github.com/thirschel/Hangar/compare/v1.4.0...v1.5.0) (2026-06-19)
+
+### Features
+
+* **polish:** reliable regenerate prompt submission, perf, last-output time, docs & CI ([#49](https://github.com/thirschel/Hangar/issues/49)) ([0073ee6](https://github.com/thirschel/Hangar/commit/0073ee65d854a70bb68f40b221a3d4486a61e412))
+
 ## [1.4.0](https://github.com/thirschel/Hangar/compare/v1.3.0...v1.4.0) (2026-06-18)
 
 ### Features
