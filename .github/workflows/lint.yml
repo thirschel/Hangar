@@ -34,10 +34,10 @@ jobs:
           cache: false
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          version: v1.60.1
-          args: --timeout=3m --out-format=line-number --fast --max-issues-per-linter=0 --max-same-issues=0
+          version: v2.12.2
+          args: --timeout=3m --max-issues-per-linter=0 --max-same-issues=0
           skip-cache: false
           only-new-issues: true
 

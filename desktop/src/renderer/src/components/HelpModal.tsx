@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { Fragment, useRef } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 import { SHORTCUT_GROUPS } from './shortcuts';

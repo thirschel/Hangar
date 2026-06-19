@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
 import { CenterTerminal } from './CenterTerminal';

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';

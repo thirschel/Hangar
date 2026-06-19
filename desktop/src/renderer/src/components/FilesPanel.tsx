@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useEffect, useState } from 'react';
 import type { DirEntry, FileContents, WorkspaceInfo } from '../../../main/host-client';
 
