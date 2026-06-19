@@ -39,6 +39,7 @@ export type TermData = {
 
 export type TermClosed = {
   session: string;
+  exitCode?: number;
 };
 
 export type TermError = {
@@ -66,6 +67,10 @@ export type RunOutput = {
   running: boolean;
   exitCode: number;
 };
+
+export type LogWhich = 'host' | 'desktop' | 'hangar';
+export type LogPaths = { hostLog: string; desktopLog: string; hangarLog: string };
+export type LogContent = { path: string; content: string; truncated: boolean };
 
 type Unsubscribe = () => void;
 
@@ -239,6 +244,11 @@ const api = {
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
+  getLogPaths: (): Promise<LogPaths> => ipcRenderer.invoke('cs:get-log-paths'),
+  openLogFolder: (): Promise<void> => ipcRenderer.invoke('cs:open-log-folder'),
+  openLogFile: (which: LogWhich): Promise<void> => ipcRenderer.invoke('cs:open-log-file', { which }),
+  readLog: (which: LogWhich, maxBytes?: number): Promise<LogContent> =>
+    ipcRenderer.invoke('cs:read-log', { which, maxBytes }),
   setSettings: (patch: Partial<Settings>): Promise<Settings> =>
     ipcRenderer.invoke('cs:set-settings', patch),
   getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke('cs:get-app-info'),

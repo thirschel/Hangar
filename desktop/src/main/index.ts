@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { open as openFile, stat as statFile } from 'node:fs/promises';
 import type net from 'node:net';
 import {
   ControlClient,
@@ -55,6 +56,52 @@ const CS_EXE =
     : path.resolve(app.getAppPath(), '..', 'dist', 'cs.exe'));
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 30;
+const DEFAULT_LOG_BYTES = 65_536;
+type LogWhich = 'host' | 'desktop' | 'hangar';
+type LogPaths = { hostLog: string; desktopLog: string; hangarLog: string };
+type ReadLogResult = { path: string; content: string; truncated: boolean };
+
+function hostVerbose(): boolean {
+  return getSettings().verboseLogging || !!process.env.HANGAR_DEBUG;
+}
+
+function diagnosticLogPaths(): LogPaths {
+  return {
+    hostLog: path.join(os.homedir(), '.hangar', 'host.log'),
+    desktopLog: log.file,
+    hangarLog: path.join(os.tmpdir(), 'hangar.log'),
+  };
+}
+
+function diagnosticLogPath(which: LogWhich): string {
+  const paths = diagnosticLogPaths();
+  switch (which) {
+    case 'host':
+      return paths.hostLog;
+    case 'desktop':
+      return paths.desktopLog;
+    case 'hangar':
+      return paths.hangarLog;
+    default:
+      throw new Error('unknown log file');
+  }
+}
+
+function assertLogWhich(which: unknown): asserts which is LogWhich {
+  if (which !== 'host' && which !== 'desktop' && which !== 'hangar') {
+    throw new Error('unknown log file');
+  }
+}
+
+function programNameOnly(program: string): string {
+  const trimmed = program.trim();
+  const match = trimmed.match(/^"([^"]+)"|^(\S+)/);
+  return path.basename(match?.[1] || match?.[2] || trimmed || '');
+}
+
+function describeResponse(r: Response): Record<string, unknown> {
+  return { ok: r.ok, error: r.error, alive: r.alive, exitCode: r.exitCode };
+}
 
 let mainWindow: BrowserWindow | null = null;
 let control: ControlClient | null = null;
@@ -83,7 +130,7 @@ async function getControlClient(): Promise<ControlClient> {
   if (!setupPromise) {
     setupPromise = (async () => {
       try {
-        const hostInfo = await ensureHost(CS_EXE);
+        const hostInfo = await ensureHost(CS_EXE, { verbose: hostVerbose() });
         const client = new ControlClient(await connectPipe(hostInfo.pipeName));
         try {
           const clientNonce = randomClientNonce();
@@ -116,26 +163,57 @@ async function attachSession(
   cols = DEFAULT_COLS,
   rows = DEFAULT_ROWS,
 ): Promise<Response> {
+  const start = Date.now();
+  log.info('attachSession start', { session: sessionName, cols, rows });
   const client = await getControlClient();
   if (attachments.has(sessionName)) {
+    log.info('attachSession already attached', { session: sessionName, elapsedMs: Date.now() - start });
     return { id: 0, ok: true };
   }
 
   const attached = await client.call({ method: 'Attach', session: sessionName, cols, rows });
+  log.info('attachSession Attach result', { session: sessionName, ...describeResponse(attached) });
   if (!attached.ok || !attached.attachPipe || !attached.attachToken) {
     throw new Error(`Attach: ${attached.error || 'missing attach pipe/token'}`);
   }
 
-  const socket = await connectAttachStream(attached.attachPipe, attached.attachToken);
+  let socket: net.Socket;
+  const connectStart = Date.now();
+  try {
+    socket = await connectAttachStream(attached.attachPipe, attached.attachToken);
+    log.info('attachSession stream connected', { session: sessionName, elapsedMs: Date.now() - connectStart });
+  } catch (error) {
+    log.error('attachSession stream failed', {
+      session: sessionName,
+      elapsedMs: Date.now() - connectStart,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
   attachments.set(sessionName, socket);
   socket.on('data', (chunk) => sendToRenderer('term:data', { session: sessionName, chunk: new Uint8Array(chunk) }));
-  socket.on('close', () => {
+  socket.on('close', async () => {
     attachments.delete(sessionName);
-    sendToRenderer('term:closed', { session: sessionName });
+    log.info('attachSession socket close', { session: sessionName });
+    try {
+      const has = await client.call({ method: 'HasSession', session: sessionName });
+      const payload = has.exitCode === undefined ? { session: sessionName } : { session: sessionName, exitCode: has.exitCode };
+      sendToRenderer('term:closed', payload);
+    } catch (error) {
+      log.error('attachSession HasSession after close failed', {
+        session: sessionName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      sendToRenderer('term:closed', { session: sessionName });
+    }
   });
-  socket.on('error', (error) => sendToRenderer('term:error', { session: sessionName, message: error.message }));
+  socket.on('error', (error) => {
+    log.error('attachSession socket error', { session: sessionName, error: error.message });
+    sendToRenderer('term:error', { session: sessionName, message: error.message });
+  });
 
   sendToRenderer('term:ready', { session: sessionName });
+  log.info('attachSession ready', { session: sessionName, elapsedMs: Date.now() - start });
   return attached;
 }
 
@@ -223,24 +301,29 @@ function sendToRenderer(channel: string, payload?: unknown): void {
 }
 
 ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
-  try {
+  const callHost = async (): Promise<Response> => {
     const client = await getControlClient();
     if (request.method === 'Hello' && authenticatedHello) {
       return authenticatedHello;
     }
-    return await client.call(request);
+    return client.call(request);
+  };
+
+  let response: Response;
+  try {
+    response = await callHost();
   } catch {
     // If the pipe dropped (daemon restarted), reconnect and retry once.
     if (control?.isClosed()) {
       control = null;
       authenticatedHello = null;
     }
-    const client = await getControlClient();
-    if (request.method === 'Hello' && authenticatedHello) {
-      return authenticatedHello;
-    }
-    return await client.call(request);
+    response = await callHost();
   }
+  if ((request.method === 'CreateSession' || request.method === 'CreateWorkspace') && !response.ok) {
+    log.error('cs:call response error', { method: request.method, error: response.error });
+  }
+  return response;
 });
 
 ipcMain.handle(
@@ -298,6 +381,9 @@ ipcMain.handle(
   ): Promise<string> => {
     const session = `sh_${args.workspaceId}`;
     const program = args.program?.trim() || defaultShellProgram();
+    const programName = programNameOnly(program);
+    const start = Date.now();
+    log.info('cs:ensure-shell start', { session, program: programName });
     const client = await getControlClient();
     const has = await client.call({ method: 'HasSession', session });
     const tracked = shellSessionPrograms.get(session);
@@ -311,6 +397,7 @@ ipcMain.handle(
       if (!killed.ok) throw new Error(killed.error || 'failed to restart shell');
     }
     if (!has.ok || !has.exists || programChanged) {
+      const createStart = Date.now();
       const created = await client.call({
         method: 'CreateSession',
         session,
@@ -319,12 +406,23 @@ ipcMain.handle(
         cols: args.cols ?? DEFAULT_COLS,
         rows: args.rows ?? DEFAULT_ROWS,
       });
+      log[created.ok ? 'info' : 'error']('cs:ensure-shell CreateSession result', {
+        session,
+        program: programName,
+        ok: created.ok,
+        error: created.error,
+        elapsedMs: Date.now() - createStart,
+      });
       if (!created.ok) throw new Error(created.error || 'failed to start shell');
       shellSessionPrograms.set(session, program);
+      log.info('cs:ensure-shell ready', { session, program: programName, created: true, elapsedMs: Date.now() - start });
     } else if (tracked === undefined) {
       // Reattached to a pre-existing session; record its assumed program so a
       // later explicit shell switch still triggers a respawn.
       shellSessionPrograms.set(session, program);
+      log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
+    } else {
+      log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
     }
     shellSessions.add(session);
     return session;
@@ -412,6 +510,51 @@ ipcMain.handle('cs:open-external', async (_event, url: string): Promise<void> =>
     }
   } catch {
     // Ignore malformed URLs.
+  }
+});
+
+
+ipcMain.handle('cs:get-log-paths', async (): Promise<LogPaths> => diagnosticLogPaths());
+
+ipcMain.handle('cs:open-log-folder', async (): Promise<void> => {
+  const result = await shell.openPath(path.join(os.homedir(), '.hangar'));
+  if (result) throw new Error(result);
+});
+
+ipcMain.handle('cs:open-log-file', async (_event, args: { which: LogWhich }): Promise<void> => {
+  assertLogWhich(args?.which);
+  const result = await shell.openPath(diagnosticLogPath(args.which));
+  if (result) throw new Error(result);
+});
+
+ipcMain.handle('cs:read-log', async (_event, args: { which: LogWhich; maxBytes?: number }): Promise<ReadLogResult> => {
+  assertLogWhich(args?.which);
+  const file = diagnosticLogPath(args.which);
+  const requested = Number(args?.maxBytes ?? DEFAULT_LOG_BYTES);
+  const maxBytes = Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : DEFAULT_LOG_BYTES;
+  try {
+    const st = await statFile(file);
+    if (st.size <= maxBytes) {
+      const handle = await openFile(file, 'r');
+      try {
+        return { path: file, content: (await handle.readFile()).toString('utf8'), truncated: false };
+      } finally {
+        await handle.close();
+      }
+    }
+    const handle = await openFile(file, 'r');
+    try {
+      const buffer = Buffer.alloc(maxBytes);
+      await handle.read(buffer, 0, maxBytes, st.size - maxBytes);
+      return { path: file, content: buffer.toString('utf8'), truncated: true };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+      return { path: file, content: '', truncated: false };
+    }
+    throw error;
   }
 });
 

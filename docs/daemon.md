@@ -164,9 +164,24 @@ causes:
 
 Run `cs debug` to print the resolved config and log-file paths.
 
-**Where are the logs?** Hangar's `cs` engine writes to `hangar.log` in the OS temp dir
-(`/tmp/hangar.log` on Linux/WSL). On WSL that is the **Linux** `/tmp` — open it from inside WSL
-(or via `\\wsl$\<distro>\tmp\hangar.log` from Windows), not `C:\tmp`.
+**Blank Agent and/or Terminal pane on native Windows (desktop app).** A new workspace opens but the
+Agent pane — and a freshly opened Terminal — stay completely empty. This means the ConPTY child
+(the agent, or the shell) exited or produced no output. When the host can tell the child has exited
+it now prints `[agent process exited (code N) — see host.log via Settings → Diagnostics]` into the
+pane instead of leaving it blank; the matching `conpty exited … (no output produced)` line in
+`host.log` has the exit code and lifetime. On a **locked-down / corporate** machine this is commonly
+endpoint-security (EDR), AppLocker, or antivirus blocking pseudo-console/process creation. To
+diagnose: open **Settings → Diagnostics** in the desktop app to read/open `host.log`, and turn on
+**Verbose logging (`HANGAR_DEBUG`)** there (restart the app so the session host re-spawns with it),
+then reproduce and check `host.log` for the `conpty started` / `conpty exited` / `attach …` lines.
+
+**Where are the logs?** The `cs` engine writes `hangar.log` to the OS temp dir (`/tmp/hangar.log` on
+Linux/WSL — that is the **Linux** `/tmp`, openable from inside WSL or via
+`\\wsl$\<distro>\tmp\hangar.log` from Windows, not `C:\tmp`). On **native Windows** the session host
+writes `~/.hangar/host.log` (ConPTY session lifecycle, attach, and — with `HANGAR_DEBUG` set —
+verbose per-read detail) and the desktop app writes `~/.hangar/desktop.log` (attach/shell/host-spawn
+diagnostics). The desktop's **Settings → Diagnostics** tab opens or tails any of the three and toggles
+`HANGAR_DEBUG` for the next session-host launch.
 
 **Where is state stored, and how do I reset it?** All state lives in `~/.hangar/`: `state.json`
 holds your sessions/instances, `config.json` the configuration, and `daemon.pid` the autoyes daemon.

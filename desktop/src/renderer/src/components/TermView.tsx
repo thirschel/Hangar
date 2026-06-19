@@ -172,7 +172,11 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       }
     });
     const unsubClosed = window.cs.onClosed((c) => {
-      if (c.session === session) term.writeln(`\r\n\x1b[90m${endedLabel}\x1b[0m`);
+      if (c.session === session) {
+        const label =
+          typeof c.exitCode === 'number' ? `${endedLabel} (exit ${c.exitCode})` : endedLabel;
+        term.writeln(`\r\n\x1b[90m${label}\x1b[0m`);
+      }
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -207,8 +211,13 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       if (disposed) return;
       window.cs
         .attachSession(session, { cols: term.cols, rows: term.rows })
-        .then(() => {
+        .then((attached) => {
           if (disposed) return;
+          if (attached?.alive === false) {
+            term.writeln(
+              `\r\n\x1b[33m[agent process exited (code ${attached.exitCode ?? '?'}) — see host.log via Settings → Diagnostics]\x1b[0m`,
+            );
+          }
           resize();
           term.focus();
         })

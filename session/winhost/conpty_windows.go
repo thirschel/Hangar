@@ -7,8 +7,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	stdlog "log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	cslog "hangar/log"
 	"hangar/session/agentcmd"
 	"hangar/session/promptpolicy"
 	"hangar/session/winhost/proto"
@@ -52,6 +55,7 @@ type conptySession struct {
 	program string
 	workDir string
 	shell   string // "cmd", "powershell", "pwsh"
+	logger  *stdlog.Logger
 
 	pty xpty.Pty
 	cmd *exec.Cmd
@@ -79,6 +83,10 @@ type conptySession struct {
 	// the render/hash/classify work entirely — making idle and detached sessions
 	// effectively free.
 	writeGen atomic.Uint64
+	// drainedBytes tracks total ConPTY output bytes observed by drain(); wait()
+	// uses it to surface invisible child failures that produce no output.
+	drainedBytes    atomic.Uint64
+	firstByteLogged atomic.Bool
 
 	mu           sync.Mutex
 	autoYes      bool
@@ -97,6 +105,7 @@ type conptySession struct {
 	lastChangeMs int64  // last time the screen content changed due to agent output (UnixMilli)
 	lastInputMs  int64  // last time the user sent keystrokes (UnixMilli)
 	statusPrompt bool   // cached detectPrompt result (waiting for input)
+	startTime    time.Time
 
 	drainDone   chan struct{}
 	procDone    chan struct{} // closed once the child process has fully exited
@@ -109,12 +118,13 @@ type pendingTrustApproval struct {
 	expiresAt time.Time
 }
 
-func newConptySession(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
+func newConptySession(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *stdlog.Logger) managedSession {
 	return &conptySession{
 		name:        name,
 		program:     program,
 		workDir:     workDir,
 		shell:       shell,
+		logger:      logger,
 		cols:        cols,
 		rows:        rows,
 		detCols:     cols,
@@ -127,7 +137,31 @@ func newConptySession(name, program, workDir, shell string, cols, rows int, auto
 	}
 }
 
+func debugLoggingEnabled() bool {
+	return parseDebugLoggingValue(os.Getenv("HANGAR_DEBUG"))
+}
+
+func parseDebugLoggingValue(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	return !strings.EqualFold(v, "0") && !strings.EqualFold(v, "false")
+}
+
+func (s *conptySession) logf(format string, args ...any) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Printf(format, args...)
+}
+
 func (s *conptySession) start() error {
+	started := time.Now()
+	s.mu.Lock()
+	s.startTime = started
+	s.mu.Unlock()
+
 	// Build the launch spec ONCE: the program string is tokenized with
 	// platform-correct (CommandLineToArgvW) semantics and, in the default path,
 	// launched directly via argv with NO shell interpreter. This removes the
@@ -137,27 +171,43 @@ func (s *conptySession) start() error {
 	// element.
 	spec, err := agentcmd.BuildLaunch(s.program, "", "--resume=", agentcmd.ParseShellKind(s.shell))
 	if err != nil {
+		s.logf("conpty start failed session=%q phase=build-launch shell=%q err=%v", s.name, s.shell, err)
 		return err
 	}
+	if debugLoggingEnabled() {
+		s.logf("conpty start argv session=%q shellKind=%s path=%q args=%q shellScriptBytes=%d envCount=%d",
+			s.name, launchShellName(spec.Shell), spec.Path, spec.Args, len(spec.Script), len(spec.Env))
+	}
+
+	conptyCreateStart := time.Now()
 	pty, err := xpty.NewPty(s.cols, s.rows)
+	conptyCreateDur := time.Since(conptyCreateStart)
 	if err != nil {
+		s.logf("conpty start failed session=%q phase=create-conpty duration=%s err=%v", s.name, conptyCreateDur, err)
 		return fmt.Errorf("create conpty: %w", err)
 	}
 
 	var cmd *exec.Cmd
+	execPath := spec.Path
+	argCount := len(spec.Args)
 	switch spec.Shell {
 	case agentcmd.ShellPowerShell:
 		// Explicit opt-in shell mode (e.g. PowerShell-function agents like `cpa`).
 		// The script is the trusted program text; any resume id is charset-
 		// restricted and/or env-bound so it cannot inject.
+		execPath = "powershell.exe"
+		argCount = 2
 		cmd = exec.Command("powershell.exe", "-NoLogo", "-Command", spec.Script)
 		cmd.Env = append(os.Environ(), spec.Env...)
 	case agentcmd.ShellPwsh:
+		execPath = "pwsh.exe"
+		argCount = 2
 		cmd = exec.Command("pwsh.exe", "-NoLogo", "-Command", spec.Script)
 		cmd.Env = append(os.Environ(), spec.Env...)
 	default: // ShellNone: direct argv exec, no shell.
 		if spec.Path == "" {
 			_ = pty.Close()
+			s.logf("conpty start failed session=%q phase=build-command shellKind=%s err=empty program", s.name, launchShellName(spec.Shell))
 			return fmt.Errorf("empty program")
 		}
 		cmd = exec.Command(spec.Path, spec.Args...)
@@ -165,10 +215,14 @@ func (s *conptySession) start() error {
 	if s.workDir != "" {
 		cmd.Dir = s.workDir
 	}
+	startPhase := time.Now()
 	if err := pty.Start(cmd); err != nil {
 		_ = pty.Close()
+		s.logf("conpty start failed session=%q phase=start-program shellKind=%s execPath=%q programName=%q argCount=%d workDir=%q duration=%s err=%v",
+			s.name, launchShellName(spec.Shell), execPath, filepath.Base(execPath), argCount, s.workDir, time.Since(startPhase), err)
 		return fmt.Errorf("start program: %w", err)
 	}
+	startDur := time.Since(startPhase)
 	s.pty = pty
 	s.cmd = cmd
 	s.mu.Lock()
@@ -179,7 +233,24 @@ func (s *conptySession) start() error {
 	go s.drain()
 	go s.wait()
 	go s.autoYesLoop()
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	s.logf("conpty started session=%q pid=%d shellKind=%s execPath=%q programName=%q argCount=%d workDir=%q conptyCreate=%s start=%s",
+		s.name, pid, launchShellName(spec.Shell), execPath, filepath.Base(execPath), argCount, s.workDir, conptyCreateDur, startDur)
 	return nil
+}
+
+func launchShellName(shell agentcmd.ShellKind) string {
+	switch shell {
+	case agentcmd.ShellPowerShell:
+		return "powershell"
+	case agentcmd.ShellPwsh:
+		return "pwsh"
+	default:
+		return "none"
+	}
 }
 
 // drain continuously reads ConPTY output and feeds the emulator + raw ring +
@@ -189,9 +260,30 @@ func (s *conptySession) drain() {
 	defer close(s.drainDone)
 	defer recoverGoroutine("conpty.drain")
 	buf := make([]byte, 4096)
+	debugReads := debugLoggingEnabled()
+	readEvery := cslog.NewEvery(time.Second)
+	var intervalBytes uint64
 	for {
 		n, err := s.pty.Read(buf)
 		if n > 0 {
+			total := s.drainedBytes.Add(uint64(n))
+			if s.firstByteLogged.CompareAndSwap(false, true) {
+				s.mu.Lock()
+				started := s.startTime
+				s.mu.Unlock()
+				latency := time.Duration(0)
+				if !started.IsZero() {
+					latency = time.Since(started)
+				}
+				s.logf("conpty first byte session=%q latency=%s bytes=%d totalBytes=%d", s.name, latency, n, total)
+			}
+			if debugReads {
+				intervalBytes += uint64(n)
+				if readEvery.ShouldLog() {
+					s.logf("conpty drain progress session=%q intervalBytes=%d totalBytes=%d", s.name, intervalBytes, total)
+					intervalBytes = 0
+				}
+			}
 			data := buf[:n]
 			s.subMu.Lock()
 			_, _ = s.emu.Write(data) // SafeEmulator is internally locked
@@ -214,6 +306,7 @@ func (s *conptySession) drain() {
 			s.subMu.Unlock()
 		}
 		if err != nil {
+			s.logf("conpty drain ended session=%q err=%v totalBytes=%d", s.name, err, s.drainedBytes.Load())
 			s.subMu.Lock()
 			for sub := range s.subs {
 				close(sub.ch)
@@ -402,7 +495,18 @@ func (s *conptySession) wait() {
 	if s.cmd.ProcessState != nil {
 		s.exitCode = s.cmd.ProcessState.ExitCode()
 	}
+	exitCode := s.exitCode
+	started := s.startTime
 	s.mu.Unlock()
+	lifetime := time.Duration(0)
+	if !started.IsZero() {
+		lifetime = time.Since(started)
+	}
+	noOutput := ""
+	if s.drainedBytes.Load() == 0 {
+		noOutput = " (no output produced)"
+	}
+	s.logf("conpty exited session=%q exitCode=%d lifetime=%s%s", s.name, exitCode, lifetime, noOutput)
 	close(s.procDone) // the child has exited and released its working directory
 	_ = s.close()
 }

@@ -26,6 +26,7 @@ export type AppSettings = {
   setupComplete: boolean;
   terminalProfiles: ShellProfile[];
   defaultTerminalProfileId: string;
+  verboseLogging: boolean;
 };
 
 export type ShellProfile = { id: string; label: string; command: string; args?: string[] };
@@ -44,6 +45,7 @@ export type Settings = {
   autoUpdate: boolean;
   terminalProfiles: ShellProfile[];
   defaultTerminalProfileId: string;
+  verboseLogging?: boolean;
 };
 
 const APP_DEFAULTS: AppSettings = {
@@ -55,6 +57,7 @@ const APP_DEFAULTS: AppSettings = {
   setupComplete: false,
   terminalProfiles: [],
   defaultTerminalProfileId: '',
+  verboseLogging: false,
 };
 
 function csDir(): string {
@@ -196,6 +199,7 @@ export function getSettings(): Settings {
     autoUpdate: app.autoUpdate,
     terminalProfiles: app.terminalProfiles,
     defaultTerminalProfileId: app.defaultTerminalProfileId,
+    verboseLogging: app.verboseLogging,
   };
 }
 
@@ -223,6 +227,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
   if (patch.notificationSound !== undefined) app.notificationSound = patch.notificationSound;
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
   if (patch.autoUpdate !== undefined) app.autoUpdate = patch.autoUpdate;
+  if (patch.verboseLogging !== undefined) app.verboseLogging = patch.verboseLogging;
   if (patch.terminalProfiles !== undefined) app.terminalProfiles = patch.terminalProfiles;
   if (patch.defaultTerminalProfileId !== undefined) app.defaultTerminalProfileId = patch.defaultTerminalProfileId;
   if (patch.uiRefreshMs !== undefined) {

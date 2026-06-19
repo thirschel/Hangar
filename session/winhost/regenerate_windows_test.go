@@ -4,13 +4,15 @@ package winhost
 
 import (
 	"encoding/json"
-	"hangar/session/agentcmd"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"hangar/session/agentcmd"
 )
 
 func testHome(t *testing.T) string {
@@ -42,7 +44,7 @@ func injectWorkspace(t *testing.T, h *host, id, program, worktree string) *works
 	h.workspaces.saveLocked()
 	h.workspaces.mu.Unlock()
 	h.mu.Lock()
-	h.sessions[w.SessionName] = newFake(w.SessionName, program, worktree, "cmd", 80, 24, true)
+	h.sessions[w.SessionName] = newFake(w.SessionName, program, worktree, "cmd", 80, 24, true, nil)
 	h.mu.Unlock()
 	return w
 }
@@ -335,8 +337,8 @@ func TestRegenerateStartFailureRevivable(t *testing.T) {
 	defer cleanup()
 	w := injectWorkspace(t, h, "fail1", "copilot", filepath.Join(home, "wt"))
 	oldName := w.SessionName
-	h.newSession = func(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
-		f := newFake(name, program, workDir, shell, cols, rows, autoYes).(*fakeSession)
+	h.newSession = func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
+		f := newFake(name, program, workDir, shell, cols, rows, autoYes, logger).(*fakeSession)
 		f.failStart = true
 		return f
 	}

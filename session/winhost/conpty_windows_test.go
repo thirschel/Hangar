@@ -106,7 +106,7 @@ func mustClassify(t *testing.T, program, text string) promptpolicy.Match {
 // reads as waiting; changing output reads as busy; settled output reads as idle.
 func TestAgentStatus(t *testing.T) {
 	// Prompt on screen -> waiting (not busy).
-	s := newConptySession("t", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s := newConptySession("t", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	_, _ = s.emu.Write([]byte("Do you want to run this command?\r\n" +
 		"  3. No, and tell Copilot what to do differently (Esc to stop)"))
 	s.updateStatus()
@@ -115,7 +115,7 @@ func TestAgentStatus(t *testing.T) {
 	}
 
 	// Changing output, no prompt -> busy.
-	s2 := newConptySession("t2", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s2 := newConptySession("t2", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	_, _ = s2.emu.Write([]byte("thinking...\r\nwriting code\r\n"))
 	s2.updateStatus()
 	if busy, waiting := s2.agentStatus(); !busy || waiting {
@@ -131,7 +131,7 @@ func TestAgentStatus(t *testing.T) {
 
 	// Content changing right after user input is the keystrokes echoing to the
 	// screen, not the agent working -> not busy.
-	s3 := newConptySession("t3", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s3 := newConptySession("t3", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	s3.mu.Lock()
 	s3.lastInputMs = time.Now().UnixMilli()
 	s3.mu.Unlock()
@@ -147,7 +147,7 @@ func TestAgentStatus(t *testing.T) {
 // client is attached.
 func TestMaybeAutoYesPausesWhileAttached(t *testing.T) {
 	mk := func() *conptySession {
-		s := newConptySession("t", "copilot", "", "cmd", 80, 24, true).(*conptySession)
+		s := newConptySession("t", "copilot", "", "cmd", 80, 24, true, nil).(*conptySession)
 		_, _ = s.emu.Write([]byte("Press enter to continue"))
 		return s
 	}
@@ -177,7 +177,7 @@ func TestMaybeAutoYesPausesWhileAttached(t *testing.T) {
 }
 
 func TestMaybeAutoYesForceApprovalIsScopedToTrustFolder(t *testing.T) {
-	s := newConptySession("t", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s := newConptySession("t", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	s.armTrustApproval("unit", time.Now().Add(time.Minute))
 	_, _ = s.emu.Write([]byte("Do you want to run this command?\r\nNo, and tell Copilot what to do differently"))
 	s.maybeAutoYes()
@@ -192,7 +192,7 @@ func TestMaybeAutoYesForceApprovalIsScopedToTrustFolder(t *testing.T) {
 		t.Fatal("shell prompt must not be force-approved")
 	}
 
-	s2 := newConptySession("t2", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s2 := newConptySession("t2", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	s2.mu.Lock()
 	s2.attachedCnt = 1
 	s2.mu.Unlock()
@@ -216,7 +216,7 @@ func TestMaybeAutoYesForceApprovalIsScopedToTrustFolder(t *testing.T) {
 // generation advanced (drain wrote output) or a trust approval is pending; an
 // idle session whose generation is unchanged is skipped and costs nothing.
 func TestAutoYesTickNeededSkipsWhenWriteGenUnchanged(t *testing.T) {
-	s := newConptySession("gate", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s := newConptySession("gate", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 
 	// The first tick (not yet primed) always runs so the status baseline is
 	// established, even before any output (write generation still 0).
@@ -261,7 +261,7 @@ func TestAutoYesTickNeededSkipsWhenWriteGenUnchanged(t *testing.T) {
 // the next gated tick still runs and policy-evaluates the on-screen prompt;
 // otherwise the prompt would never be auto-approved (the agent would hang).
 func TestSetAutoYesWakesGatedLoopOnStaticScreen(t *testing.T) {
-	s := newConptySession("wake", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s := newConptySession("wake", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 
 	// A prompt arrives and is rendered; the gated loop processes it and catches up
 	// to this generation. AutoYes is still off, so nothing was approved.
@@ -294,11 +294,11 @@ func TestUpdateStatusFromMatchesUpdateStatus(t *testing.T) {
 	content := []byte("Do you want to run this command?\r\n" +
 		"  3. No, and tell Copilot what to do differently (Esc to stop)")
 
-	a := newConptySession("a", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	a := newConptySession("a", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	_, _ = a.emu.Write(content)
 	a.updateStatus()
 
-	b := newConptySession("b", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	b := newConptySession("b", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	_, _ = b.emu.Write(content)
 	b.updateStatusFrom(plainScreen(b.emu))
 
@@ -323,7 +323,7 @@ func TestUpdateStatusFromMatchesUpdateStatus(t *testing.T) {
 // re-processing the same plain screen does not advance lastChangeMs (which would
 // falsely re-mark the agent busy), so a skipped unchanged tick loses nothing.
 func TestUpdateStatusFromUnchangedContentIsNoOp(t *testing.T) {
-	s := newConptySession("noop", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	s := newConptySession("noop", "copilot", "", "cmd", 80, 24, false, nil).(*conptySession)
 	_, _ = s.emu.Write([]byte("thinking...\r\nwriting code\r\n"))
 	plain := plainScreen(s.emu)
 
@@ -350,7 +350,7 @@ func TestUpdateStatusFromUnchangedContentIsNoOp(t *testing.T) {
 // over the prerendered screen the loop shares (maybeAutoYesFrom).
 func TestMaybeAutoYesFromMatchesMaybeAutoYes(t *testing.T) {
 	mk := func(name string) *conptySession {
-		s := newConptySession(name, "copilot", "", "cmd", 80, 24, true).(*conptySession)
+		s := newConptySession(name, "copilot", "", "cmd", 80, 24, true, nil).(*conptySession)
 		_, _ = s.emu.Write([]byte("Press enter to continue"))
 		return s
 	}
@@ -376,7 +376,7 @@ func TestMaybeAutoYesFromMatchesMaybeAutoYes(t *testing.T) {
 }
 
 func TestScrollbackANSI(t *testing.T) {
-	s := newConptySession("hist", "copilot", "", "cmd", 40, 3, false).(*conptySession)
+	s := newConptySession("hist", "copilot", "", "cmd", 40, 3, false, nil).(*conptySession)
 	_, _ = s.emu.Write([]byte("\x1b[31mRED-00\x1b[0m\r\n" +
 		"PLAIN-01\r\n" +
 		"\x1b[32mGREEN-02\x1b[0m\r\n" +
@@ -410,7 +410,7 @@ func TestScrollbackANSI(t *testing.T) {
 }
 
 func TestCaptureHistoryAltScreen(t *testing.T) {
-	s := newConptySession("alt", "copilot", "", "cmd", 40, 3, false).(*conptySession)
+	s := newConptySession("alt", "copilot", "", "cmd", 40, 3, false, nil).(*conptySession)
 	_, _ = s.emu.Write([]byte("\x1b[?1049hALT-SCREEN"))
 	if !s.emu.IsAltScreen() {
 		t.Fatal("emulator did not enter alternate screen")

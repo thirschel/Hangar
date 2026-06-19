@@ -5,6 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PROTO_VERSION } from '../shared/proto-version';
+import { log } from './logger';
 export { PROTO_VERSION };
 const MAX_FRAME = 16 << 20;
 const HELLO_PROOF_PREFIX = 'hangar-winhost-hello-v7\n';
@@ -543,16 +544,21 @@ async function waitForValidHostInfo(timeoutMs: number): Promise<HostInfo | null>
   return null;
 }
 
-export async function ensureHost(csExe: string): Promise<HostInfo> {
+export async function ensureHost(csExe: string, opts?: { verbose?: boolean }): Promise<HostInfo> {
+  const start = Date.now();
   const pipeName = controlPipeName();
+  log.info('ensureHost start', { pipeName, verbose: !!opts?.verbose });
   const hi = tryLoadValidHostInfo();
   if (hi) {
+    log.info('ensureHost reuse', { pipeName, pid: hi.pid, elapsedMs: Date.now() - start });
     return hi;
   }
 
   if (await pipeConnectable(pipeName, 800)) {
+    log.info('ensureHost pipe connectable; waiting for host.json', { pipeName });
     const published = await waitForValidHostInfo(2_000);
     if (published) {
+      log.info('ensureHost adopted published host', { pipeName, pid: published.pid, elapsedMs: Date.now() - start });
       return published;
     }
     throw new Error('unauthenticated session-host pipe exists; refusing to connect without valid host.json');
@@ -562,14 +568,19 @@ export async function ensureHost(csExe: string): Promise<HostInfo> {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
+    // HANGAR_DEBUG only affects a newly spawned daemon; a running daemon is unaffected until it restarts.
+    env: { ...process.env, ...(opts?.verbose ? { HANGAR_DEBUG: '1' } : {}) },
   });
+  log.info('ensureHost spawned session-host', { pipeName, pid: child.pid, verbose: !!opts?.verbose });
   child.unref();
 
   const published = await waitForValidHostInfo(10_000);
   if (published) {
+    log.info('ensureHost spawn ready', { pipeName, pid: published.pid, elapsedMs: Date.now() - start });
     return published;
   }
 
+  log.error('ensureHost spawn failed', { pipeName, elapsedMs: Date.now() - start });
   throw new Error('session-host did not publish a valid host.json');
 }
 
@@ -577,9 +588,21 @@ export async function connectAttachStream(
   attachPipe: string,
   attachToken: string,
 ): Promise<net.Socket> {
-  const socket = await connectPipe(attachPipe);
-  socket.write(frame(Buffer.from(attachToken, 'utf8')));
-  return socket;
+  const start = Date.now();
+  log.info('connectAttachStream start', { pipeName: attachPipe });
+  try {
+    const socket = await connectPipe(attachPipe);
+    socket.write(frame(Buffer.from(attachToken, 'utf8')));
+    log.info('connectAttachStream connected', { pipeName: attachPipe, elapsedMs: Date.now() - start });
+    return socket;
+  } catch (error) {
+    log.error('connectAttachStream failed', {
+      pipeName: attachPipe,
+      elapsedMs: Date.now() - start,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
 }
 
 function delay(ms: number): Promise<void> {

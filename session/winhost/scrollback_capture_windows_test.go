@@ -18,7 +18,7 @@ import (
 // it at a wider one, while never changing the stored-row count (vt does not
 // reflow scrollback). A width of 0 falls back to the live emulator width.
 func TestScrollbackANSIClipsAndRevealsToWidth(t *testing.T) {
-	s := newConptySession("hist", "copilot", "", "cmd", 40, 3, false).(*conptySession)
+	s := newConptySession("hist", "copilot", "", "cmd", 40, 3, false, nil).(*conptySession)
 	// Each line has a left marker at column 0 and a right-edge marker pushed to
 	// column 20 (well past the narrow width 8). Writing more than the height (3)
 	// lines forces rows into scrollback.
@@ -61,7 +61,7 @@ func TestScrollbackANSIClipsAndRevealsToWidth(t *testing.T) {
 // scrollback: a line wrapped at the original width keeps its stored row boundary
 // after a wider Resize (the wrapped halves are not merged back together).
 func TestScrollbackNoReflowOnResize(t *testing.T) {
-	s := newConptySession("nr", "copilot", "", "cmd", 10, 2, false).(*conptySession)
+	s := newConptySession("nr", "copilot", "", "cmd", 10, 2, false, nil).(*conptySession)
 	// 16 chars wrap at width 10 into stored rows "ABCDEFGHIJ" then "KLMNOP". Two
 	// more short lines evict BOTH wrapped rows fully into scrollback.
 	_, _ = s.emu.Write([]byte("ABCDEFGHIJKLMNOP\r\n"))
@@ -100,7 +100,7 @@ func TestScrollbackNoReflowOnResize(t *testing.T) {
 // through to scrollbackANSI as the render width, ignores Rows, and falls back to
 // the emulator width when Cols is 0.
 func TestCaptureHistoryWidthPlumbing(t *testing.T) {
-	s := newConptySession("plumb", "copilot", "", "cmd", 40, 3, false).(*conptySession)
+	s := newConptySession("plumb", "copilot", "", "cmd", 40, 3, false, nil).(*conptySession)
 	line := "LEFT" + strings.Repeat(" ", 16) + "RIGHTEDGE\r\n"
 	for i := 0; i < 6; i++ {
 		_, _ = s.emu.Write([]byte(line))
