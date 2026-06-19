@@ -14,10 +14,11 @@ installer that bundles the Go core-daemon (`cs.exe`).
    go build -ldflags "-s -w" -o dist\cs.exe .
    ```
 
-2. The app icons are committed in `build/`: **`icon.ico`** (installer/exe, multi-size
-   16/32/48/64/128/256 — used by `electron-builder.yml` → `win.icon`), **`icon.png`** (256,
-   the window + notification icon), and **`tray.png`** (32) + **`tray@2x.png`** (64) for the
-   system tray. To rebrand, replace those files. `npm run make-icons` only writes a no-dep
+2. The app icons are committed in `build/`: **`icon.ico`** (installer/exe **and the runtime
+   window + taskbar icon**, multi-size 16/32/48/64/128/256 — used by `electron-builder.yml` →
+   `win.icon` at build time and `BrowserWindow.icon` at runtime; shipped via `extraResources`),
+   **`icon.png`** (256, the notification/toast icon), and **`tray.png`** (32) +
+   **`tray@2x.png`** (64) for the system tray. To rebrand, replace those files. `npm run make-icons` only writes a no-dep
    **placeholder** and **no-ops when `build/icon.ico` exists**, so it won't clobber the real icons.
 
 ## Build the app
@@ -30,7 +31,8 @@ npm run dist    # full NSIS installer in release/Hangar-Setup-<version>.exe
 ```
 
 At runtime the packaged app finds the daemon at
-`process.resourcesPath\dist\cs.exe` and the tray icon at
+`process.resourcesPath\dist\cs.exe`, the window/taskbar icon at
+`process.resourcesPath\build\icon.ico`, and the tray icon at
 `process.resourcesPath\build\tray.png` (`src/main/assets.ts`).
 
 ## Auto-update
