@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.5.2](https://github.com/thirschel/Hangar/compare/v1.5.1...v1.5.2) (2026-06-19)
+
+### Bug Fixes
+
+* **desktop:** stop dev runs shadowing the packaged Windows taskbar icon ([#63](https://github.com/thirschel/Hangar/issues/63)) ([3954eb7](https://github.com/thirschel/Hangar/commit/3954eb7c72ac4c38987caa0921e91c7c3ed9a099))
+
 ## [1.5.1](https://github.com/thirschel/Hangar/compare/v1.5.0...v1.5.1) (2026-06-19)
 
 ### Bug Fixes
