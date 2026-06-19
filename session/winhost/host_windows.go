@@ -25,6 +25,10 @@ import (
 // zero connected clients (tmux-server-like, without lingering forever).
 const defaultIdleTimeout = 5 * time.Minute
 
+// slowDispatchThreshold: handlers taking at least this long are logged, since a
+// connection's RPCs are processed serially and a slow one delays all the others.
+const slowDispatchThreshold = 750 * time.Millisecond
+
 // bodyReadTimeout bounds how long the host waits for a frame body once its
 // header has arrived (anti-stuck-client). The header read itself is bounded by
 // headerReadTimeout to prevent abandoned connections from parking goroutines.
@@ -160,7 +164,15 @@ func (h *host) handleConn(conn net.Conn) {
 		if !authenticated && req.Method != proto.MethodHello {
 			resp = proto.Errorf(req.ID, "authenticated Hello required")
 		} else {
+			dispatchStart := time.Now()
 			resp = h.safeDispatch(req)
+			// A connection's requests are handled serially, so a slow handler
+			// delays every later RPC on that pipe (which can cascade into client
+			// timeouts and blank panes during rapid workspace/shell switching).
+			// Log slow handlers so the offending method is visible in host.log.
+			if d := time.Since(dispatchStart); d >= slowDispatchThreshold {
+				h.logger.Printf("slow dispatch method=%s took=%s session=%q workspace=%q", req.Method, d.Round(time.Millisecond), req.Session, req.WorkspaceID)
+			}
 			if req.Method == proto.MethodHello && resp.OK {
 				authenticated = true
 			}
