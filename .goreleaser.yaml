@@ -1,7 +1,9 @@
 version: 2.9
 
+project_name: hangar_daemon
+
 builds:
-  - binary: claude-squad
+  - binary: hangar-daemon
     goos:
       - darwin
       - linux

@@ -5,8 +5,8 @@ set -o pipefail
 
 REPO_OWNER="thirschel"
 REPO_NAME="Hangar"
-PROJECT_NAME="Hangar"
-RELEASE_BINARY_NAME="claude-squad"
+PROJECT_NAME="hangar_daemon"
+RELEASE_BINARY_NAME="hangar-daemon"
 CHECKSUMS_NAME="checksums.txt"
 CHECKSUMS_SIGNATURE_NAME="${CHECKSUMS_NAME}.sig"
 CHECKSUMS_CERTIFICATE_NAME="${CHECKSUMS_NAME}.pem"
@@ -228,7 +228,7 @@ find_release_binary() {
     local extension=$2
     local candidate
 
-    for candidate in "${RELEASE_BINARY_NAME}${extension}" "cs${extension}" "hangar${extension}"; do
+    for candidate in "${RELEASE_BINARY_NAME}${extension}" "claude-squad${extension}" "cs${extension}" "hangar${extension}"; do
         if [ -f "${tmp_dir}/${candidate}" ]; then
             printf '%s\n' "${tmp_dir}/${candidate}"
             return 0
@@ -272,7 +272,7 @@ extract_and_install() {
 
     local source_binary
     if ! source_binary=$(find_release_binary "$tmp_dir" "$extension"); then
-        echo "Installation failed, archive did not contain ${RELEASE_BINARY_NAME}${extension}, cs${extension}, or hangar${extension}"
+        echo "Installation failed, archive did not contain ${RELEASE_BINARY_NAME}${extension}, claude-squad${extension}, cs${extension}, or hangar${extension}"
         rm -rf "$tmp_dir"
         exit 1
     fi
