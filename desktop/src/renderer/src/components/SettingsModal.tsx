@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 import type { Settings, ShellProfile } from '../../../main/settings';
+import type { LogContent, LogPaths, LogWhich } from '../../../preload';
 
 type AppInfo = {
   version: string;
@@ -20,7 +21,7 @@ type UpdateStatusInfo = {
   error?: string;
 };
 
-type SettingsTab = 'general' | 'terminal';
+type SettingsTab = 'general' | 'terminal' | 'diagnostics';
 
 type CsApiWithUpdates = typeof window.cs & {
   getAppInfo?: () => Promise<AppInfo>;
@@ -260,9 +261,22 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
             >
               Terminal
             </button>
+            <button
+              id="settings-tab-diagnostics"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'diagnostics'}
+              aria-controls="settings-panel-diagnostics"
+              className={
+                activeTab === 'diagnostics' ? 'settings-tab settings-tab--active' : 'settings-tab'
+              }
+              onClick={() => setActiveTab('diagnostics')}
+            >
+              Diagnostics
+            </button>
           </div>
 
-          {activeTab === 'general' ? (
+          {activeTab === 'general' && (
             <div
               id="settings-panel-general"
               role="tabpanel"
@@ -447,7 +461,9 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
                 </div>
               </div>
             </div>
-          ) : (
+          )}
+
+          {activeTab === 'terminal' && (
             <div
               id="settings-panel-terminal"
               role="tabpanel"
@@ -540,8 +556,144 @@ export function SettingsModal({ onClose, onSaved }: SettingsModalProps): JSX.Ele
               </div>
             </div>
           )}
+
+          {activeTab === 'diagnostics' && (
+            <DiagnosticsPanel settings={settings} patch={patch} />
+          )}
         </>
       )}
     </Modal>
+  );
+}
+
+type DiagnosticsPanelProps = {
+  settings: Settings;
+  patch: (p: Partial<Settings>) => void;
+};
+
+function DiagnosticsPanel({ settings, patch }: DiagnosticsPanelProps): JSX.Element {
+  const [logPaths, setLogPaths] = useState<LogPaths | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    window.cs
+      .getLogPaths()
+      .then((paths) => {
+        if (active) setLogPaths(paths);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <div
+      id="settings-panel-diagnostics"
+      role="tabpanel"
+      aria-labelledby="settings-tab-diagnostics"
+      className="settings-tab-panel"
+    >
+      <div className="diagnostics-section">
+        <div className="terminal-profiles__title">Logs</div>
+        <div className="diagnostics-actions">
+          <button type="button" onClick={() => void window.cs.openLogFolder()}>
+            Open logs folder
+          </button>
+          <button type="button" onClick={() => void window.cs.openLogFile('host')}>
+            Open host.log
+          </button>
+          <button type="button" onClick={() => void window.cs.openLogFile('desktop')}>
+            Open desktop.log
+          </button>
+          <button type="button" onClick={() => void window.cs.openLogFile('hangar')}>
+            Open hangar.log
+          </button>
+        </div>
+        {logPaths && (
+          <dl className="diagnostics-paths" aria-label="Log paths">
+            <div>
+              <dt>host.log</dt>
+              <dd>{logPaths.hostLog}</dd>
+            </div>
+            <div>
+              <dt>desktop.log</dt>
+              <dd>{logPaths.desktopLog}</dd>
+            </div>
+            <div>
+              <dt>hangar.log</dt>
+              <dd>{logPaths.hangarLog}</dd>
+            </div>
+          </dl>
+        )}
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.verboseLogging ?? false}
+          onChange={(e) => patch({ verboseLogging: e.target.checked })}
+        />
+        <span>Verbose logging (HANGAR_DEBUG)</span>
+      </label>
+      <div className="diagnostics-helper">
+        Logs extra detail. Takes effect after the session-host daemon restarts (e.g. restart the
+        app).
+      </div>
+
+      <LogViewer />
+    </div>
+  );
+}
+
+function LogViewer(): JSX.Element {
+  const [which, setWhich] = useState<LogWhich>('host');
+  const [log, setLog] = useState<LogContent | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async (nextWhich: LogWhich = which): Promise<void> => {
+    setLoading(true);
+    setError(null);
+    try {
+      setLog(await window.cs.readLog(nextWhich, 65536));
+    } catch (e) {
+      setLog(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [which]);
+
+  useEffect(() => {
+    void refresh(which);
+  }, [refresh, which]);
+
+  return (
+    <div className="log-viewer">
+      <div className="log-viewer__header">
+        <label className="field log-viewer__select">
+          <span>Log file</span>
+          <select value={which} onChange={(e) => setWhich(e.target.value as LogWhich)}>
+            <option value="host">host.log</option>
+            <option value="desktop">desktop.log</option>
+            <option value="hangar">hangar.log</option>
+          </select>
+        </label>
+        <button type="button" className="update-btn" onClick={() => void refresh()} disabled={loading}>
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+      {log && (
+        <div className="log-viewer__meta">
+          <span>{log.path}</span>
+          {log.truncated && <strong>Showing last 64 KiB</strong>}
+        </div>
+      )}
+      {error && <div className="log-viewer__error">{error}</div>}
+      <pre className="log-viewer__content" aria-label="Log content">
+        {log?.content ?? (loading ? 'Loading…' : '')}
+      </pre>
+    </div>
   );
 }

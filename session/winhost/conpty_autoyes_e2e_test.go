@@ -33,7 +33,7 @@ func TestHostAutoYesApprovesCopilot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := newConptySession("e2e", "copilot", work, "cmd", 120, 40, true /* autoYes */).(*conptySession)
+	s := newConptySession("e2e", "copilot", work, "cmd", 120, 40, true /* autoYes */, nil).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}

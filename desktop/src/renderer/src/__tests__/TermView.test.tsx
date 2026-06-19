@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // factory (which vitest hoists above imports) can close over it. fit() writes the
 // FITTED size onto the terminal it was loaded into, mimicking the real FitAddon
 // adopting the measured pane.
-const { fitSpy } = vi.hoisted(() => ({
+const { fitSpy, writelnSpy } = vi.hoisted(() => ({
   fitSpy: vi.fn(function (this: { term: { cols: number; rows: number } }) {
     this.term.cols = 100;
     this.term.rows = 40;
   }),
+  writelnSpy: vi.fn(),
 }));
 
 // xterm pulls in a CSS side-effect import that jsdom cannot parse.
@@ -36,7 +37,9 @@ vi.mock('@xterm/xterm', () => {
     clearSelection(): void {}
     paste(): void {}
     dispose(): void {}
-    writeln(): void {}
+    writeln(data?: string): void {
+      writelnSpy(data);
+    }
     write(_data: unknown, cb?: () => void): void {
       cb?.();
     }
@@ -91,6 +94,7 @@ describe('TermView startup ordering', () => {
       .mockResolvedValue({ ansi: '', altScreen: false, scrollbackLines: 0 });
     window.cs.attachSession = vi.fn().mockResolvedValue({ id: 0, ok: true });
     window.cs.resize = vi.fn();
+    writelnSpy.mockClear();
   });
 
   afterEach(() => {
@@ -122,5 +126,22 @@ describe('TermView startup ordering', () => {
       cols: 120,
       rows: 30,
     });
+  });
+
+  it('writes a visible diagnostic when attach reports the agent already exited', async () => {
+    window.cs.attachSession = vi.fn().mockResolvedValue({ id: 0, ok: true, alive: false, exitCode: 7 });
+
+    await act(async () => {
+      render(<TermView sessionName="ws_exited" />);
+    });
+
+    await vi.waitFor(() =>
+      expect(writelnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[agent process exited (code 7)'),
+      ),
+    );
+    expect(writelnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('see host.log via Settings → Diagnostics'),
+    );
   });
 });

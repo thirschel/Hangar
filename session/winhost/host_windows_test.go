@@ -5,6 +5,7 @@ package winhost
 import (
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -38,9 +39,10 @@ type fakeSession struct {
 	sendHook      func(*fakeSession, []byte) error
 	failStart     bool
 	startErr      error
+	exitCode      int
 }
 
-func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
+func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
 	return &fakeSession{
 		name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true,
 		// Real agents (copilot, claude) enable bracketed paste, so the fake does too
@@ -60,7 +62,7 @@ func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool)
 var conptyFunctional = sync.OnceValue(func() bool {
 	done := make(chan bool, 1)
 	go func() {
-		sess, ok := newConptySession("conpty-probe", `cmd.exe /c echo HANGAR_CONPTY_PROBE`, "", "cmd", 80, 24, false).(*conptySession)
+		sess, ok := newConptySession("conpty-probe", `cmd.exe /c echo HANGAR_CONPTY_PROBE`, "", "cmd", 80, 24, false, nil).(*conptySession)
 		if !ok {
 			done <- false
 			return
@@ -168,7 +170,7 @@ func (f *fakeSession) clearTrustApproval() {
 func (f *fakeSession) info() proto.SessionInfo {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return proto.SessionInfo{Name: f.name, Alive: f.aliveFlag, Program: f.program}
+	return proto.SessionInfo{Name: f.name, Alive: f.aliveFlag, ExitCode: f.exitCode, Program: f.program}
 }
 func (f *fakeSession) alive() bool  { f.mu.Lock(); defer f.mu.Unlock(); return f.aliveFlag }
 func (f *fakeSession) close() error { f.mu.Lock(); f.aliveFlag = false; f.mu.Unlock(); return nil }
@@ -408,7 +410,7 @@ func TestConcurrentClients(t *testing.T) {
 // output and the exit is recorded.
 func TestConptySessionRealEcho(t *testing.T) {
 	requireConPTY(t)
-	s := newConptySession("t", `cmd.exe /c echo P2_CONPTY_OK`, "", "cmd", 80, 24, false).(*conptySession)
+	s := newConptySession("t", `cmd.exe /c echo P2_CONPTY_OK`, "", "cmd", 80, 24, false, nil).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -441,7 +443,7 @@ func TestConptySessionRealEcho(t *testing.T) {
 // styling while plain capture does not leak escape sequences.
 func TestConptySessionResizeAndAnsi(t *testing.T) {
 	requireConPTY(t)
-	s := newConptySession("t2", `cmd.exe /c echo done`, "", "cmd", 40, 10, false).(*conptySession)
+	s := newConptySession("t2", `cmd.exe /c echo done`, "", "cmd", 40, 10, false, nil).(*conptySession)
 	if err := s.start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -464,6 +466,7 @@ func TestHostAttachPlumbing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	defer c.Close()
 	authClient(t, c)
 	if err := c.CreateSession("att", "copilot", "", 80, 24, false); err != nil {
@@ -515,6 +518,76 @@ func TestHostAttachPlumbing(t *testing.T) {
 	}
 	if !strings.Contains(capd, "PUMP_OK_42") {
 		t.Fatalf("keystrokes did not reach session: %q", capd)
+	}
+}
+
+func TestAttachSessionResponseCarriesAliveAndExitCode(t *testing.T) {
+	_, h, cleanup := startTestHostWithHandle(t)
+	defer cleanup()
+
+	f := newFake("att-info", "copilot", "", "cmd", 80, 24, false, nil).(*fakeSession)
+	f.mu.Lock()
+	f.aliveFlag = false
+	f.exitCode = 37
+	f.mu.Unlock()
+	h.mu.Lock()
+	h.sessions["att-info"] = f
+	h.mu.Unlock()
+
+	resp := h.attachSession(&proto.Request{ID: 101, Session: "att-info", Cols: 80, Rows: 24})
+	if !resp.OK {
+		t.Fatalf("attachSession failed: %+v", resp)
+	}
+	if resp.Alive {
+		t.Fatal("attachSession response Alive = true, want false")
+	}
+	if resp.ExitCode != 37 {
+		t.Fatalf("attachSession response ExitCode = %d, want 37", resp.ExitCode)
+	}
+}
+
+func TestHasSessionResponseCarriesExitCode(t *testing.T) {
+	_, h, cleanup := startTestHostWithHandle(t)
+	defer cleanup()
+
+	f := newFake("has-info", "copilot", "", "cmd", 80, 24, false, nil).(*fakeSession)
+	f.mu.Lock()
+	f.exitCode = 42
+	f.mu.Unlock()
+	h.mu.Lock()
+	h.sessions["has-info"] = f
+	h.mu.Unlock()
+
+	resp := h.dispatch(&proto.Request{ID: 102, Method: proto.MethodHasSession, Session: "has-info"})
+	if !resp.OK || !resp.Exists {
+		t.Fatalf("HasSession failed: %+v", resp)
+	}
+	if resp.ExitCode != 42 {
+		t.Fatalf("HasSession ExitCode = %d, want 42", resp.ExitCode)
+	}
+}
+
+func TestParseDebugLoggingValue(t *testing.T) {
+	cases := []struct {
+		value string
+		want  bool
+	}{
+		{"", false},
+		{"0", false},
+		{"false", false},
+		{"FALSE", false},
+		{" False ", false},
+		{"1", true},
+		{"true", true},
+		{"yes", true},
+		{"debug", true},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%q", tc.value), func(t *testing.T) {
+			if got := parseDebugLoggingValue(tc.value); got != tc.want {
+				t.Fatalf("parseDebugLoggingValue(%q) = %v, want %v", tc.value, got, tc.want)
+			}
+		})
 	}
 }
 

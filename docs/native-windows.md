@@ -284,6 +284,34 @@ go1.25.11`). Key pinned deps: `charmbracelet/x/xpty`, `.../x/conpty`, `.../x/vt`
   left a mock PTY handle open so `t.TempDir` cleanup couldn't delete it on Windows. Watch for the same
   two patterns in new tests (set both env vars; close handles via `t.Cleanup`).
 
+### Diagnostics & logging
+
+The host is otherwise a black box when a child won't launch (common on locked-down corporate machines
+where EDR/AppLocker blocks pseudo-console or process creation). `conptySession` therefore logs its
+full lifecycle to `~/.hangar/host.log` via the host logger:
+
+- `conpty started session=… pid=… execPath=… programName=… argCount=… conptyCreate=… start=…` — the
+  child launched (per-phase timings; **program name + arg count only**, never the full argv, so resume
+  ids/tokens don't leak).
+- `conpty first byte … latency=…` / `conpty drain ended … err=… totalBytes=…` — output flow + the
+  terminating read error.
+- `conpty exited session=… exitCode=… lifetime=…[ (no output produced)]` — the key signal for the
+  blank-pane bug; "no output produced" means the child died before drawing anything.
+- `attach pipe created …` / `attach client connected …` / `attach token mismatch …` /
+  `attach teardown …` — the per-session attach pipe lifecycle (previously silent returns).
+
+`HANGAR_DEBUG` (any value except ``/`0`/`false`) adds verbose detail — full argv in `start`, and
+rate-limited `conpty drain progress` byte counts. The desktop app spawns the session host with
+`HANGAR_DEBUG=1` when **Settings → Diagnostics → Verbose logging** is on (effective on the next host
+launch). `RunHost` no longer swallows a failed `host.log` open — it logs the path + error to
+`hangar.log`/stderr.
+
+The **Attach** and **HasSession** responses carry `Alive`+`ExitCode` (populated from `sess.info()`)
+so the desktop can render `[agent process exited (code N) — see host.log …]` in an otherwise-blank
+pane and append `(exit N)` to the close label. These are **additive** response fields — no
+`proto.Version` bump (same convention as `LastOutputUnix`). The desktop also writes its own
+`~/.hangar/desktop.log` (attach / shell / host-spawn diagnostics).
+
 ---
 
 ## 10. Agent prompt strings (for AutoYes / trust handling)
@@ -338,7 +366,7 @@ cs session-host         # (hidden) the detached host process; you won't run this
 ```
 
 State in `~/.hangar/`: `state.json` (instances), `config.json`, `daemon.pid`, and on Windows
-`host.json` + `host.lock` (the session host).
+`host.json` + `host.lock` + `host.log` (the session host) and `desktop.log` (the desktop app).
 
 Key types: `winhost.Session` (implements `session.TerminalSession`) · `conptySession` (one ConPTY +
 emulator) · `host` (registry + dispatch) · `Client` (control RPC) · `proto.Request`/`Response`.

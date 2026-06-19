@@ -8,12 +8,14 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	cslog "hangar/log"
+	"hangar/session/agentcmd"
 	"hangar/session/winhost/proto"
 
 	"github.com/Microsoft/go-winio"
@@ -59,7 +61,7 @@ type managedSession interface {
 type host struct {
 	mu          sync.RWMutex
 	sessions    map[string]managedSession
-	newSession  func(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession
+	newSession  func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
 	activeConns int
 	lastActive  time.Time
 	idleTimeout time.Duration
@@ -78,8 +80,8 @@ type host struct {
 func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
-		newSession: func(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
-			return newConptySession(name, program, workDir, shell, cols, rows, autoYes)
+		newSession: func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
+			return newConptySession(name, program, workDir, shell, cols, rows, autoYes, logger)
 		},
 		lastActive:  time.Now(),
 		idleTimeout: idle,
@@ -232,6 +234,7 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		r := &proto.Response{ID: req.ID, OK: true, Exists: ok}
 		if ok {
 			r.Alive = s.alive()
+			r.ExitCode = s.info().ExitCode
 		}
 		return r
 	case proto.MethodListSessions:
@@ -356,14 +359,28 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 	if _, exists := h.sessions[name]; exists {
 		return fmt.Errorf("session already exists: %s", name)
 	}
-	s := h.newSession(name, program, workDir, shell, cols, rows, autoYes)
+	s := h.newSession(name, program, workDir, shell, cols, rows, autoYes, h.logger)
 	if err := s.start(); err != nil {
 		return fmt.Errorf("start session: %w", err)
 	}
 	h.sessions[name] = s
 	h.lastActive = time.Now()
-	h.logger.Printf("created session %q (program=%q shell=%q cols=%d rows=%d)", name, program, shell, cols, rows)
+	programName, argCount := safeProgramSummary(program, shell)
+	h.logger.Printf("created session %q (programName=%q argCount=%d shell=%q cols=%d rows=%d)", name, programName, argCount, shell, cols, rows)
 	return nil
+}
+
+func safeProgramSummary(program, shell string) (programName string, argCount int) {
+	switch agentcmd.ParseShellKind(shell) {
+	case agentcmd.ShellPowerShell, agentcmd.ShellPwsh:
+		return "<shell-script>", 0
+	default:
+		argv, err := agentcmd.ParseProgram(program)
+		if err != nil || len(argv) == 0 {
+			return "<invalid>", 0
+		}
+		return filepath.Base(argv[0]), len(argv) - 1
+	}
 }
 
 func (h *host) getSession(name string) (managedSession, bool) {
@@ -407,41 +424,57 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 		// re-check, before giving up.
 		revived, rerr := h.workspaces.reviveBySession(req.Session, req.Cols, req.Rows)
 		if rerr != nil {
+			h.logger.Printf("attach revive failed session=%q err=%v", req.Session, rerr)
 			return proto.Errorf(req.ID, "revive workspace session: %v", rerr)
 		}
 		if revived {
+			h.logger.Printf("attach revived workspace session=%q", req.Session)
 			sess, ok = h.getSession(req.Session)
 		}
 		if !ok {
+			h.logger.Printf("attach failed session=%q err=no-such-session", req.Session)
 			return proto.Errorf(req.ID, "no such session: %s", req.Session)
 		}
 	}
 	sid, err := currentUserSID()
 	if err != nil {
+		h.logger.Printf("attach current user sid failed session=%q err=%v", req.Session, err)
 		return proto.Errorf(req.ID, "%v", err)
 	}
 	sddl, err := currentUserSDDL()
 	if err != nil {
+		h.logger.Printf("attach current user sddl failed session=%q err=%v", req.Session, err)
 		return proto.Errorf(req.ID, "%v", err)
 	}
 	seq := h.attachSeq.Add(1)
 	pipe := fmt.Sprintf(`\\.\pipe\hangar-att-%s-%s-%d`, sid, req.Session, seq)
 	ln, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
 	if err != nil {
+		h.logger.Printf("attach listen failed session=%q seq=%d err=%v", req.Session, seq, err)
 		return proto.Errorf(req.ID, "attach listen: %v", err)
 	}
 	token, err := randomNonceHex(16)
 	if err != nil {
 		_ = ln.Close()
+		h.logger.Printf("attach token failed session=%q seq=%d err=%v", req.Session, seq, err)
 		return proto.Errorf(req.ID, "attach token: %v", err)
 	}
+	alive := sess.alive()
+	info := sess.info()
+	h.logger.Printf("attach pipe created session=%q seq=%d pipe=%q alive=%v", req.Session, seq, pipe, alive)
 	go h.runAttach(sess, ln, token, req.Cols, req.Rows)
-	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token}
+	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token, Alive: alive, ExitCode: info.ExitCode}
 }
 
 func (h *host) runAttach(sess managedSession, ln net.Listener, token string, cols, rows int) {
 	defer ln.Close()
 	defer recoverGoroutine("host.runAttach")
+	info := sess.info()
+	sessionName := info.Name
+	reason := "completed"
+	defer func() {
+		h.logger.Printf("attach teardown session=%q reason=%s", sessionName, reason)
+	}()
 
 	// Watchdog: if no client connects shortly, tear down the pipe.
 	connected := make(chan struct{})
@@ -449,8 +482,10 @@ func (h *host) runAttach(sess managedSession, ln net.Listener, token string, col
 		select {
 		case <-connected:
 		case <-time.After(10 * time.Second):
+			h.logger.Printf("attach watchdog teardown session=%q reason=no-client-timeout", sessionName)
 			_ = ln.Close()
 		case <-h.shutdownCh:
+			h.logger.Printf("attach watchdog teardown session=%q reason=host-shutdown", sessionName)
 			_ = ln.Close()
 		}
 	}()
@@ -458,15 +493,25 @@ func (h *host) runAttach(sess managedSession, ln net.Listener, token string, col
 	conn, err := ln.Accept()
 	close(connected)
 	if err != nil {
+		reason = fmt.Sprintf("accept failed: %v", err)
+		h.logger.Printf("attach accept failed session=%q err=%v", sessionName, err)
 		return
 	}
+	h.logger.Printf("attach client connected session=%q remote=%q", sessionName, conn.RemoteAddr())
 	defer conn.Close()
 
 	// First frame must be the auth token.
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	tok, err := proto.ReadFrameBytes(conn)
 	_ = conn.SetReadDeadline(time.Time{})
-	if err != nil || string(tok) != token {
+	if err != nil {
+		reason = fmt.Sprintf("token read failed: %v", err)
+		h.logger.Printf("attach token read failed session=%q err=%v", sessionName, err)
+		return
+	}
+	if string(tok) != token {
+		reason = "token mismatch"
+		h.logger.Printf("attach token mismatch session=%q tokenBytes=%d", sessionName, len(tok))
 		return
 	}
 
@@ -474,17 +519,22 @@ func (h *host) runAttach(sess managedSession, ln net.Listener, token string, col
 	defer sess.unsubscribe(sub)
 
 	if _, err := conn.Write(snapshot); err != nil {
+		reason = fmt.Sprintf("snapshot write failed: %v", err)
+		h.logger.Printf("attach snapshot write failed session=%q bytes=%d err=%v", sessionName, len(snapshot), err)
 		return
 	}
+	h.logger.Printf("attach snapshot written session=%q bytes=%d", sessionName, len(snapshot))
 
 	// Output: stream live bytes to the client.
 	go func() {
 		defer recoverGoroutine("host.runAttach.output")
 		for b := range sub.ch {
 			if _, err := conn.Write(b); err != nil {
+				h.logger.Printf("attach output stream ended session=%q err=%v", sessionName, err)
 				return
 			}
 		}
+		h.logger.Printf("attach output stream ended session=%q reason=session-unsubscribed", sessionName)
 	}()
 
 	// Input: forward the client's keystrokes to the child until it detaches.
@@ -495,6 +545,8 @@ func (h *host) runAttach(sess managedSession, ln net.Listener, token string, col
 			_ = sess.sendKeys(append([]byte(nil), buf[:n]...))
 		}
 		if rerr != nil {
+			reason = fmt.Sprintf("client detached: %v", rerr)
+			h.logger.Printf("attach input ended session=%q err=%v", sessionName, rerr)
 			return
 		}
 	}
@@ -565,11 +617,25 @@ func RunHost() error {
 	defer cslog.Close()
 
 	var logw io.Writer = io.Discard
+	hostLog := ""
+	hostLogOpened := false
 	if lp, err := hostLogPath(); err == nil {
+		hostLog = lp
 		if f, err := os.OpenFile(lp, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 			logw = f
+			hostLogOpened = true
 			defer f.Close()
+		} else {
+			if cslog.ErrorLog != nil {
+				cslog.ErrorLog.Printf("winhost: open host.log %s: %v", lp, err)
+			}
+			fmt.Fprintf(os.Stderr, "winhost: open host.log %s: %v\n", lp, err)
 		}
+	} else {
+		if cslog.ErrorLog != nil {
+			cslog.ErrorLog.Printf("winhost: resolve host.log path: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "winhost: resolve host.log path: %v\n", err)
 	}
 
 	pipe, err := controlPipeName()
@@ -586,6 +652,9 @@ func RunHost() error {
 	}
 
 	h := newHost(logw, defaultIdleTimeout)
+	if hostLogOpened {
+		h.logger.Printf("host log path=%s", hostLog)
+	}
 	identity, err := newHostIdentity(pipe)
 	if err != nil {
 		_ = ln.Close()
