@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.5.1](https://github.com/thirschel/Hangar/compare/v1.5.0...v1.5.1) (2026-06-19)
+
+### Bug Fixes
+
+* bump tar from 7.5.11 to removed in the npm_and_yarn group across 1 directory ([#58](https://github.com/thirschel/Hangar/issues/58)) ([1509c86](https://github.com/thirschel/Hangar/commit/1509c86aa449f00d646403c86fc3e1dafdb4b123))
+
 ## [1.5.0](https://github.com/thirschel/Hangar/compare/v1.4.0...v1.5.0) (2026-06-19)
 
 ### Features
