@@ -29,6 +29,9 @@ export interface WorkspaceInfo {
   added: number;
   removed: number;
   createdUnix: number;
+  // Last time the agent produced output that changed its screen, Unix seconds;
+  // 0 = unknown (no live session or it never changed). Mirrors proto.
+  lastOutputUnix: number;
   runCommand: string;
   running: boolean;
   previewUrl: string;

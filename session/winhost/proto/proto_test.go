@@ -106,7 +106,7 @@ func TestRegenerateFieldsRoundTrip(t *testing.T) {
 	}
 
 	buf.Reset()
-	resp := &Response{ID: 2, OK: true, Workspace: &WorkspaceInfo{ID: "ws1", Regenerating: true, RegenPhase: "handoff"}}
+	resp := &Response{ID: 2, OK: true, Workspace: &WorkspaceInfo{ID: "ws1", Regenerating: true, RegenPhase: "handoff", LastOutputUnix: 1710000123}}
 	if err := WriteFrame(&buf, resp); err != nil {
 		t.Fatalf("WriteFrame: %v", err)
 	}
@@ -114,7 +114,8 @@ func TestRegenerateFieldsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadResponse: %v", err)
 	}
-	if gotResp.Workspace == nil || !gotResp.Workspace.Regenerating || gotResp.Workspace.RegenPhase != "handoff" {
+	if gotResp.Workspace == nil || !gotResp.Workspace.Regenerating || gotResp.Workspace.RegenPhase != "handoff" ||
+		gotResp.Workspace.LastOutputUnix != 1710000123 {
 		t.Fatalf("response round-trip mismatch: %+v", gotResp.Workspace)
 	}
 }

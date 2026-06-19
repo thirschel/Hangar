@@ -32,6 +32,7 @@ type fakeSession struct {
 	aliveFlag     bool
 	busy          bool
 	waiting       bool
+	lastOutputMs  int64
 	sendHook      func(*fakeSession, []byte) error
 	failStart     bool
 	startErr      error
@@ -136,6 +137,11 @@ func (f *fakeSession) agentStatus() (bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.busy, f.waiting
+}
+func (f *fakeSession) lastOutputUnixMs() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastOutputMs
 }
 func (f *fakeSession) setAutoYes(e bool) { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
 func (f *fakeSession) armTrustApproval(reason string, expiresAt time.Time) {

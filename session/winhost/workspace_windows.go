@@ -408,9 +408,11 @@ func (w *workspace) worktreeFor() *git.GitWorktree {
 func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 	alive := false
 	busy, waiting := false, false
+	var lastOutMs int64
 	if s, ok := m.host.getSession(w.SessionName); ok {
 		alive = s.alive()
 		busy, waiting = s.agentStatus()
+		lastOutMs = s.lastOutputUnixMs()
 	}
 	regenerating, phase := false, ""
 	if regen, ok := m.regens[w.ID]; ok {
@@ -424,7 +426,8 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		ID: w.ID, Title: w.Title, Program: w.Program, RepoPath: w.RepoPath,
 		WorktreePath: w.WorktreePath, Branch: w.Branch, SessionName: w.SessionName,
 		Alive: alive, AutoYes: w.AutoYes, Added: added, Removed: removed, CreatedUnix: w.CreatedUnix,
-		RunCommand: w.RunCommand, Running: running, PreviewURL: previewURL,
+		LastOutputUnix: lastOutMs / 1000, // UnixMilli -> Unix seconds; 0 when no live session/no output
+		RunCommand:     w.RunCommand, Running: running, PreviewURL: previewURL,
 		Busy: busy, Waiting: waiting,
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 	}

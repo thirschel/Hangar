@@ -1,6 +1,7 @@
 import { memo, useRef, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
+import { relativeTime } from '../lib/time';
 import { MODE_LABELS, type SidebarMode } from './sidebar-modes';
 import {
   STATUS_FILTERS,
@@ -30,6 +31,7 @@ type SidebarProps = {
 type WorkspaceRowProps = {
   w: WorkspaceInfo;
   selected: boolean;
+  relTime: string;
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
   onSettings: (id: string) => void;
@@ -38,6 +40,7 @@ type WorkspaceRowProps = {
 function WorkspaceRowImpl({
   w,
   selected,
+  relTime,
   onSelect,
   onArchive,
   onSettings,
@@ -74,6 +77,11 @@ function WorkspaceRowImpl({
           {(w.added > 0 || w.removed > 0) && (
             <span className="diffstat">
               <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
+            </span>
+          )}
+          {relTime && (
+            <span className="workspace-item__time" title="Last agent output">
+              {relTime}
             </span>
           )}
         </div>
@@ -116,6 +124,7 @@ function WorkspaceRowImpl({
 const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
   return (
     prev.selected === next.selected &&
+    prev.relTime === next.relTime &&
     prev.onSelect === next.onSelect &&
     prev.onArchive === next.onArchive &&
     prev.onSettings === next.onSettings &&
@@ -126,7 +135,8 @@ const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
     prev.w.removed === next.w.removed &&
     prev.w.alive === next.w.alive &&
     prev.w.waiting === next.w.waiting &&
-    prev.w.busy === next.w.busy
+    prev.w.busy === next.w.busy &&
+    prev.w.lastOutputUnix === next.w.lastOutputUnix
   );
 });
 
@@ -191,6 +201,18 @@ function SectionHeader({
   );
 }
 
+/**
+ * Compute the "last agent output" relative label for a row. This is done here,
+ * outside the memoized WorkspaceRow, and passed in as a prop so that an idle
+ * workspace whose other fields never change still re-renders when the bucket
+ * rolls over ("5m ago" -> "6m ago"): the parent re-polls every uiRefreshMs
+ * (~2s) producing a fresh string, which flows through the row's memo comparator.
+ * Returns '' when there is no known output time (so the row renders nothing).
+ */
+function rowRelTime(w: WorkspaceInfo): string {
+  return w.lastOutputUnix > 0 ? relativeTime(w.lastOutputUnix) : '';
+}
+
 function buildGroupedList(
   workspaces: WorkspaceInfo[],
   mode: SidebarMode,
@@ -224,6 +246,7 @@ function buildGroupedList(
             key={w.id}
             w={w}
             selected={w.id === selectedId}
+            relTime={rowRelTime(w)}
             onSelect={onSelect}
             onArchive={onArchive}
             onSettings={onSettings}
@@ -246,6 +269,7 @@ function buildGroupedList(
             key={w.id}
             w={w}
             selected={w.id === selectedId}
+            relTime={rowRelTime(w)}
             onSelect={onSelect}
             onArchive={onArchive}
             onSettings={onSettings}
@@ -261,6 +285,7 @@ function buildGroupedList(
             key={w.id}
             w={w}
             selected={w.id === selectedId}
+            relTime={rowRelTime(w)}
             onSelect={onSelect}
             onArchive={onArchive}
             onSettings={onSettings}
@@ -277,6 +302,7 @@ function buildGroupedList(
       key={w.id}
       w={w}
       selected={w.id === selectedId}
+      relTime={rowRelTime(w)}
       onSelect={onSelect}
       onArchive={onArchive}
       onSettings={onSettings}

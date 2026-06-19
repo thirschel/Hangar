@@ -545,6 +545,15 @@ func (s *conptySession) agentStatus() (busy, waiting bool) {
 	return busy, waiting
 }
 
+// lastOutputUnixMs reports when the agent's visible screen content last changed
+// due to its own output (UnixMilli), or 0 if it has never changed. The UI uses
+// this to show a "last active" relative time; it is recorded by updateStatusFrom.
+func (s *conptySession) lastOutputUnixMs() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastChangeMs
+}
+
 func (s *conptySession) setAutoYes(enabled bool) {
 	s.mu.Lock()
 	s.autoYes = enabled
