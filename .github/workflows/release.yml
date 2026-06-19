@@ -160,7 +160,15 @@ jobs:
 
       - name: Build NSIS installer
         working-directory: desktop
-        run: npm run dist
+        env:
+          # GitHub Actions provides GITHUB_TOKEN automatically; electron-builder
+          # reads it as GH_TOKEN. With contents: write on this job that is enough to
+          # publish to this repo's own release — no extra secret is required. We pass
+          # --publish always explicitly (electron-builder v27 removes the implicit
+          # CI-detected publish) so the installer AND the updater metadata
+          # (latest.yml + .blockmap) land on the release for electron-updater.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist -- --publish always
 
       - name: Attest desktop installer
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
@@ -184,3 +192,23 @@ jobs:
             Write-Error "No installer .exe found in desktop/release/"
             exit 1
           }
+
+  publish-release:
+    name: Publish Release
+    # Runs only after BOTH artifact jobs succeed, so the release is exposed only when
+    # complete. semantic-release creates the release as a draft (see .releaserc.json);
+    # if goreleaser or desktop fails, this job is skipped and the release stays a
+    # hidden draft (invisible on the releases page and to electron-updater) to delete
+    # or re-run — no half-published release with partial assets.
+    needs: [release, goreleaser, desktop]
+    if: needs.release.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Undraft the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false --latest
