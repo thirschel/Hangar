@@ -10,8 +10,8 @@ param(
 
 $RepoOwner = "thirschel"
 $RepoName = "Hangar"
-$ProjectName = "Hangar"
-$ReleaseBinaryName = "claude-squad"
+$ProjectName = "hangar_daemon"
+$ReleaseBinaryName = "hangar-daemon"
 $ChecksumsName = "checksums.txt"
 $ChecksumsSignatureName = "$ChecksumsName.sig"
 $ChecksumsCertificateName = "$ChecksumsName.pem"
@@ -300,7 +300,7 @@ function Install-Binary {
     )
 
     $sourcePath = $null
-    foreach ($candidate in @("$ReleaseBinaryName.exe", "cs.exe", "hangar.exe")) {
+    foreach ($candidate in @("$ReleaseBinaryName.exe", "claude-squad.exe", "cs.exe", "hangar.exe")) {
         $candidatePath = Join-Path $ExtractDir $candidate
         if (Test-Path $candidatePath) {
             $sourcePath = $candidatePath
@@ -309,7 +309,7 @@ function Install-Binary {
     }
 
     if (-not $sourcePath) {
-        Write-Status "Archive did not contain $ReleaseBinaryName.exe, cs.exe, or hangar.exe" "Error"
+        Write-Status "Archive did not contain $ReleaseBinaryName.exe, claude-squad.exe, cs.exe, or hangar.exe" "Error"
         return $false
     }
 
