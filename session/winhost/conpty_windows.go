@@ -420,6 +420,17 @@ func (s *conptySession) sendKeys(b []byte) error {
 	return err
 }
 
+// bracketedPasteEnabled reports whether the agent has turned on DEC private mode
+// 2004 (bracketed paste). When set, programmatic prompt injection frames the text
+// in paste markers so the CLI treats it as one inserted block and the following CR
+// submits it — mirroring how the desktop xterm sends a paste (see TermView.tsx).
+// decModes is guarded by subMu (drain is its only writer via trackModesLocked).
+func (s *conptySession) bracketedPasteEnabled() bool {
+	s.subMu.Lock()
+	defer s.subMu.Unlock()
+	return s.decModes[2004]
+}
+
 func (s *conptySession) resize(cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return nil
