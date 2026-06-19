@@ -283,6 +283,11 @@ const api = {
     ipcRenderer.send('term:input', { session, data }),
   resize: (session: string, cols: number, rows: number): void =>
     ipcRenderer.send('term:resize', { session, cols, rows }),
+  // Renderer diagnostics: forward an event (and optional structured data) to the
+  // main process so it lands in desktop.log. One-way; never throws.
+  diag: (event: string, data?: unknown, level: 'info' | 'error' = 'info'): void =>
+    ipcRenderer.send('cs:diag-log', { event, data, level }),
+  openDevTools: (): Promise<void> => ipcRenderer.invoke('cs:open-devtools'),
 };
 
 contextBridge.exposeInMainWorld('cs', api);

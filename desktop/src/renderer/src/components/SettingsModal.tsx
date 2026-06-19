@@ -610,6 +610,9 @@ function DiagnosticsPanel({ settings, patch }: DiagnosticsPanelProps): JSX.Eleme
           <button type="button" onClick={() => void window.cs.openLogFile('hangar')}>
             Open hangar.log
           </button>
+          <button type="button" onClick={() => void window.cs.openDevTools()}>
+            Open DevTools
+          </button>
         </div>
         {logPaths && (
           <dl className="diagnostics-paths" aria-label="Log paths">
@@ -639,7 +642,7 @@ function DiagnosticsPanel({ settings, patch }: DiagnosticsPanelProps): JSX.Eleme
       </label>
       <div className="diagnostics-helper">
         Logs extra detail. Takes effect after the session-host daemon restarts (e.g. restart the
-        app).
+        app). When enabled, DevTools opens automatically on launch.
       </div>
 
       <LogViewer />

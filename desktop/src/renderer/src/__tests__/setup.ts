@@ -90,6 +90,8 @@ const mockCs = {
   completeSetup: asyncNoop,
   sendInput: noop,
   resize: noop,
+  diag: noop,
+  openDevTools: asyncNoop,
 };
 
 function installMockCs(): void {

@@ -39,6 +39,7 @@ describe('SettingsModal', () => {
     }));
     window.cs.openLogFolder = vi.fn(async () => {});
     window.cs.openLogFile = vi.fn(async () => {});
+    window.cs.openDevTools = vi.fn(async () => {});
     window.cs.readLog = vi.fn(async (which: 'host' | 'desktop' | 'hangar') => ({
       path: `C:\\Users\\test\\.hangar\\${which}.log`,
       content: `${which} log line`,
@@ -103,11 +104,13 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open host.log' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open desktop.log' }));
     fireEvent.click(screen.getByRole('button', { name: 'Open hangar.log' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open DevTools' }));
 
     expect(window.cs.openLogFolder).toHaveBeenCalledTimes(1);
     expect(window.cs.openLogFile).toHaveBeenCalledWith('host');
     expect(window.cs.openLogFile).toHaveBeenCalledWith('desktop');
     expect(window.cs.openLogFile).toHaveBeenCalledWith('hangar');
+    expect(window.cs.openDevTools).toHaveBeenCalledTimes(1);
     expect(window.cs.readLog).toHaveBeenCalledWith('host', 65536);
 
     fireEvent.change(screen.getByLabelText('Log file'), { target: { value: 'desktop' } });
