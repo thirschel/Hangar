@@ -27,6 +27,7 @@ export type AppSettings = {
   terminalProfiles: ShellProfile[];
   defaultTerminalProfileId: string;
   verboseLogging: boolean;
+  disableHardwareAcceleration: boolean;
 };
 
 export type ShellProfile = { id: string; label: string; command: string; args?: string[] };
@@ -46,6 +47,7 @@ export type Settings = {
   terminalProfiles: ShellProfile[];
   defaultTerminalProfileId: string;
   verboseLogging?: boolean;
+  disableHardwareAcceleration?: boolean;
 };
 
 const APP_DEFAULTS: AppSettings = {
@@ -58,6 +60,7 @@ const APP_DEFAULTS: AppSettings = {
   terminalProfiles: [],
   defaultTerminalProfileId: '',
   verboseLogging: false,
+  disableHardwareAcceleration: false,
 };
 
 function csDir(): string {
@@ -200,6 +203,7 @@ export function getSettings(): Settings {
     terminalProfiles: app.terminalProfiles,
     defaultTerminalProfileId: app.defaultTerminalProfileId,
     verboseLogging: app.verboseLogging,
+    disableHardwareAcceleration: app.disableHardwareAcceleration,
   };
 }
 
@@ -228,6 +232,8 @@ export function applySettings(patch: Partial<Settings>): Settings {
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
   if (patch.autoUpdate !== undefined) app.autoUpdate = patch.autoUpdate;
   if (patch.verboseLogging !== undefined) app.verboseLogging = patch.verboseLogging;
+  if (patch.disableHardwareAcceleration !== undefined)
+    app.disableHardwareAcceleration = patch.disableHardwareAcceleration;
   if (patch.terminalProfiles !== undefined) app.terminalProfiles = patch.terminalProfiles;
   if (patch.defaultTerminalProfileId !== undefined) app.defaultTerminalProfileId = patch.defaultTerminalProfileId;
   if (patch.uiRefreshMs !== undefined) {

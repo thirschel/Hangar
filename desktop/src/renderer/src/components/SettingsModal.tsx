@@ -645,6 +645,19 @@ function DiagnosticsPanel({ settings, patch }: DiagnosticsPanelProps): JSX.Eleme
         app). When enabled, DevTools opens automatically on launch.
       </div>
 
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.disableHardwareAcceleration ?? false}
+          onChange={(e) => patch({ disableHardwareAcceleration: e.target.checked })}
+        />
+        <span>Disable hardware acceleration</span>
+      </label>
+      <div className="diagnostics-helper">
+        Fixes blank or garbled terminals on some machines (RDP/VDI, or where the GPU is
+        restricted). Requires restarting the app to take effect.
+      </div>
+
       <LogViewer />
     </div>
   );

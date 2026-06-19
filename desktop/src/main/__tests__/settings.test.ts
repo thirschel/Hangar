@@ -156,6 +156,15 @@ describe('settings', () => {
     expect(typeof writtenAppSettings.defaultTerminalProfileId).toBe('string');
   });
 
+  it('persists and reads back disableHardwareAcceleration', () => {
+    expect(getSettings().disableHardwareAcceleration).toBe(false);
+
+    const result = applySettings({ disableHardwareAcceleration: true });
+    expect(result.disableHardwareAcceleration).toBe(true);
+    expect(readWrittenJson(appSettingsPath).disableHardwareAcceleration).toBe(true);
+    expect(getSettings().disableHardwareAcceleration).toBe(true);
+  });
+
   it('applySettings preserves unknown daemon keys', () => {
     fsMock.files.set(
       configPath,

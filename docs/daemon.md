@@ -183,6 +183,15 @@ verbose per-read detail) and the desktop app writes `~/.hangar/desktop.log` (att
 diagnostics). The desktop's **Settings → Diagnostics** tab opens or tails any of the three and toggles
 `HANGAR_DEBUG` for the next session-host launch.
 
+**Blank or garbled terminals in the desktop app (the pane renders nothing despite the agent
+running).** If `desktop.log` shows the bytes arriving (`[renderer] TermView first data` / `first write
+done`) but the pane stays empty, the terminal layer is failing to paint — almost always a GPU /
+hardware-acceleration problem on locked-down corporate hardware (RDP/VDI, GPU disabled by policy, or
+buggy drivers). Only xterm's layered screen is affected, which is why the rest of the app still paints.
+Fix: **Settings → Diagnostics → Disable hardware acceleration**, then restart the app. (To confirm the
+cause first, launch the app once with `--disable-gpu`; the startup `gpu status` line in `desktop.log`
+records the resolved GPU feature state.)
+
 **Where is state stored, and how do I reset it?** All state lives in `~/.hangar/`: `state.json`
 holds your sessions/instances, `config.json` the configuration, and `daemon.pid` the autoyes daemon.
 On **native Windows** the session host also writes `host.json` (its pipe/PID/version) and `host.lock`
