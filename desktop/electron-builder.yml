@@ -22,7 +22,8 @@ files:
   - package.json
 
 # Ship the Go core-daemon and the runtime icons next to the app. CS_EXE resolves
-# resources/dist/cs.exe when packaged; the tray icon resolves resources/build/*.png.
+# resources/dist/cs.exe when packaged; the window/taskbar icon resolves
+# resources/build/icon.ico and the tray icon resolves resources/build/*.png.
 extraResources:
   - from: ../dist/cs.exe
     to: dist/cs.exe
@@ -30,6 +31,7 @@ extraResources:
     to: build
     filter:
       - '*.png'
+      - '*.ico'
 
 win:
   target:
