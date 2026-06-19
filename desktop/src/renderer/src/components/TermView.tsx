@@ -5,6 +5,7 @@ import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { isAtBottom, normalizeHistory } from './termHistory';
 import { appHandlesWheel, encodeWheelSgr } from './termWheel';
+import { diag } from '../diag';
 
 type TermViewProps = {
   // The daemon session to stream (agent ws_… or shell sh_…). Null renders nothing.
@@ -58,6 +59,23 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
+    {
+      const r = containerRef.current.getBoundingClientRect();
+      diag('TermView mount', {
+        session,
+        containerW: Math.round(r.width),
+        containerH: Math.round(r.height),
+        termCols: term.cols,
+        termRows: term.rows,
+      });
+    }
+
+    // Byte accounting for the live stream, reported via diag so a blank pane on a
+    // machine without DevTools can be diagnosed from desktop.log: did term:data
+    // events arrive at all, did they carry bytes, and did term.write run.
+    let dataEvents = 0;
+    let dataBytes = 0;
+    let firstDataLogged = false;
 
     const termIsAtBottom = (): boolean =>
       isAtBottom(term.buffer.active.viewportY, term.buffer.active.baseY);
@@ -161,22 +179,42 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const inputDisposable = term.onData((data) => window.cs.sendInput(session, data));
     const unsubData = window.cs.onData((d) => {
       if (d.session === session) {
+        const bytes = toBytes(d.chunk);
+        dataEvents += 1;
+        dataBytes += bytes.byteLength;
+        if (!firstDataLogged) {
+          firstDataLogged = true;
+          diag('TermView first data', { session, bytes: bytes.byteLength });
+        }
         // "Follow mode": only auto-scroll to bottom when user is already at bottom.
         // This preserves the user's scroll position when reviewing history.
         // viewportY is the buffer line at the top of the viewport; it equals baseY
         // only when scrolled fully to the bottom (and is smaller when scrolled up).
         const wasAtBottom = termIsAtBottom();
-        term.write(toBytes(d.chunk));
+        term.write(bytes, () => {
+          if (dataEvents === 1) diag('TermView first write done', { session });
+        });
         if (wasAtBottom) {
           term.scrollToBottom();
         }
+      } else {
+        // A term:data event for another session reached this view — would mean
+        // the renderer-side session filter is the reason a pane stays blank.
+        diag('TermView data session mismatch', { expected: session, got: d.session }, 'error');
       }
     });
     const unsubClosed = window.cs.onClosed((c) => {
       if (c.session === session) {
+        diag('TermView closed', { session, exitCode: c.exitCode, totalBytes: dataBytes });
         const label =
           typeof c.exitCode === 'number' ? `${endedLabel} (exit ${c.exitCode})` : endedLabel;
         term.writeln(`\r\n\x1b[90m${label}\x1b[0m`);
+      }
+    });
+    const unsubError = window.cs.onError((e) => {
+      if (e.session === session) {
+        diag('TermView stream error', { session, message: e.message }, 'error');
+        term.writeln(`\r\n\x1b[31m[stream error: ${e.message}]\x1b[0m`);
       }
     });
 
@@ -214,6 +252,17 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         .attachSession(session, { cols: term.cols, rows: term.rows })
         .then((attached) => {
           if (disposed) return;
+          const r = containerRef.current?.getBoundingClientRect();
+          diag('TermView attached', {
+            session,
+            alive: attached?.alive,
+            exitCode: attached?.exitCode,
+            ok: attached?.ok,
+            containerW: r ? Math.round(r.width) : undefined,
+            containerH: r ? Math.round(r.height) : undefined,
+            termCols: term.cols,
+            termRows: term.rows,
+          });
           if (attached?.alive === false) {
             term.writeln(
               `\r\n\x1b[33m[agent process exited (code ${attached.exitCode ?? '?'}) — see host.log via Settings → Diagnostics]\x1b[0m`,
@@ -224,9 +273,9 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         })
         .catch((error: unknown) => {
           if (disposed) return;
-          term.writeln(
-            `\r\n\x1b[31m[attach error: ${error instanceof Error ? error.message : String(error)}]\x1b[0m`,
-          );
+          const message = error instanceof Error ? error.message : String(error);
+          diag('TermView attach error', { session, message }, 'error');
+          term.writeln(`\r\n\x1b[31m[attach error: ${message}]\x1b[0m`);
         });
     };
     let settleRaf1 = 0;
@@ -264,6 +313,8 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       inputDisposable.dispose();
       unsubData();
       unsubClosed();
+      unsubError();
+      diag('TermView unmount', { session, dataEvents, dataBytes });
       window.cs.detachSession(session);
       term.dispose();
       refitRef.current = () => {};

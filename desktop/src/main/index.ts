@@ -191,16 +191,29 @@ async function attachSession(
     throw error;
   }
   attachments.set(sessionName, socket);
+  const dataStats = { total: 0, firstLogged: false };
   socket.on('data', (chunk) => {
     const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
-    sendToRenderer('term:data', {
-      session: sessionName,
-      chunk: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-    });
+    // Copy into a fresh, tightly-bound Uint8Array. `bytes` is a Node Buffer
+    // backed by a SHARED internal pool; forwarding a view over `bytes.buffer`
+    // across Electron's structured-clone + contextBridge can deliver the wrong
+    // slice (or empty data) to the renderer — the blank-pane bug. `new
+    // Uint8Array(bytes)` copies element-wise into its own backing store.
+    const out = new Uint8Array(bytes);
+    dataStats.total += out.byteLength;
+    if (!dataStats.firstLogged) {
+      dataStats.firstLogged = true;
+      log.info('attachSession first data', {
+        session: sessionName,
+        bytes: out.byteLength,
+        sinceAttachMs: Date.now() - start,
+      });
+    }
+    sendToRenderer('term:data', { session: sessionName, chunk: out });
   });
   socket.on('close', async () => {
     attachments.delete(sessionName);
-    log.info('attachSession socket close', { session: sessionName });
+    log.info('attachSession socket close', { session: sessionName, totalBytes: dataStats.total });
     try {
       const has = await client.call({ method: 'HasSession', session: sessionName });
       const payload = has.exitCode === undefined ? { session: sessionName } : { session: sessionName, exitCode: has.exitCode };
@@ -292,6 +305,15 @@ function createWindow(): void {
   mainWindow.webContents.once('did-finish-load', () => {
     if (isFirstRun()) {
       sendToRenderer('cs:first-run');
+    }
+    // Auto-open DevTools when verbose logging is enabled, so users on machines
+    // where the menu/accelerator are unavailable still get a renderer console.
+    try {
+      if (getSettings().verboseLogging && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.openDevTools({ mode: 'detach' });
+      }
+    } catch {
+      // Best-effort; never block load on DevTools.
     }
     getControlClient().catch((error) => {
       log.error('setup error:', error);
@@ -649,6 +671,31 @@ ipcMain.on('term:input', (_event, args: { session: string; data: string }) => {
 ipcMain.on('term:resize', (_event, args: { session: string; cols: number; rows: number }) => {
   if (control && args.session && Number.isFinite(args.cols) && Number.isFinite(args.rows)) {
     control.call({ method: 'Resize', session: args.session, cols: args.cols, rows: args.rows }).catch(() => {});
+  }
+});
+
+// One-way diagnostics bridge: the renderer (which cannot open DevTools on
+// locked-down machines, and whose console is otherwise invisible) forwards
+// lifecycle events and uncaught exceptions here so they land in desktop.log,
+// openable via Settings → Diagnostics.
+ipcMain.on('cs:diag-log', (_event, args: { level?: 'info' | 'error'; event?: string; data?: unknown }) => {
+  const event = typeof args?.event === 'string' ? args.event : '(no event)';
+  const data = args?.data;
+  if (args?.level === 'error') {
+    if (data === undefined) log.error('[renderer]', event);
+    else log.error('[renderer]', event, data);
+  } else {
+    if (data === undefined) log.info('[renderer]', event);
+    else log.info('[renderer]', event, data);
+  }
+});
+
+// Open DevTools on demand. The app hides its menu and the Ctrl+Shift+I
+// accelerator can be suppressed by policy, so this gives users a reliable way
+// to inspect the renderer console (surfaced in Settings → Diagnostics).
+ipcMain.handle('cs:open-devtools', async (): Promise<void> => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
   }
 });
 

@@ -6,12 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // factory (which vitest hoists above imports) can close over it. fit() writes the
 // FITTED size onto the terminal it was loaded into, mimicking the real FitAddon
 // adopting the measured pane.
-const { fitSpy, writelnSpy } = vi.hoisted(() => ({
+const { fitSpy, writelnSpy, writeSpy } = vi.hoisted(() => ({
   fitSpy: vi.fn(function (this: { term: { cols: number; rows: number } }) {
     this.term.cols = 100;
     this.term.rows = 40;
   }),
   writelnSpy: vi.fn(),
+  writeSpy: vi.fn(),
 }));
 
 // xterm pulls in a CSS side-effect import that jsdom cannot parse.
@@ -40,7 +41,8 @@ vi.mock('@xterm/xterm', () => {
     writeln(data?: string): void {
       writelnSpy(data);
     }
-    write(_data: unknown, cb?: () => void): void {
+    write(data: unknown, cb?: () => void): void {
+      writeSpy(data);
       cb?.();
     }
     getSelection(): string {
@@ -95,6 +97,7 @@ describe('TermView startup ordering', () => {
     window.cs.attachSession = vi.fn().mockResolvedValue({ id: 0, ok: true });
     window.cs.resize = vi.fn();
     writelnSpy.mockClear();
+    writeSpy.mockClear();
   });
 
   afterEach(() => {
@@ -142,6 +145,63 @@ describe('TermView startup ordering', () => {
     );
     expect(writelnSpy).toHaveBeenCalledWith(
       expect.stringContaining('see host.log via Settings → Diagnostics'),
+    );
+  });
+
+  it('writes incoming term:data bytes to the terminal and records diagnostics', async () => {
+    // Capture the onData subscriber so the test can push a live chunk through it.
+    let dataCb: ((d: { session: string; chunk: Uint8Array }) => void) | undefined;
+    window.cs.onData = vi.fn((cb: (d: { session: string; chunk: Uint8Array }) => void) => {
+      dataCb = cb;
+      return () => {};
+    });
+    const diagSpy = vi.fn();
+    window.cs.diag = diagSpy;
+
+    await act(async () => {
+      render(<TermView sessionName="ws_data" />);
+    });
+    await vi.waitFor(() => expect(dataCb).toBeDefined());
+
+    const chunk = new Uint8Array([104, 105]); // "hi"
+    await act(async () => {
+      dataCb?.({ session: 'ws_data', chunk });
+    });
+
+    // The bytes reached term.write (the render path that was blank).
+    expect(writeSpy).toHaveBeenCalledWith(chunk);
+    // And the first-data diagnostic was recorded for desktop.log.
+    expect(diagSpy).toHaveBeenCalledWith(
+      'TermView first data',
+      expect.objectContaining({ session: 'ws_data', bytes: 2 }),
+      'info',
+    );
+  });
+
+  it('ignores term:data for a different session and flags the mismatch', async () => {
+    let dataCb: ((d: { session: string; chunk: Uint8Array }) => void) | undefined;
+    window.cs.onData = vi.fn((cb: (d: { session: string; chunk: Uint8Array }) => void) => {
+      dataCb = cb;
+      return () => {};
+    });
+    const diagSpy = vi.fn();
+    window.cs.diag = diagSpy;
+
+    await act(async () => {
+      render(<TermView sessionName="ws_self" />);
+    });
+    await vi.waitFor(() => expect(dataCb).toBeDefined());
+    writeSpy.mockClear();
+
+    await act(async () => {
+      dataCb?.({ session: 'ws_other', chunk: new Uint8Array([1, 2, 3]) });
+    });
+
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(diagSpy).toHaveBeenCalledWith(
+      'TermView data session mismatch',
+      expect.objectContaining({ expected: 'ws_self', got: 'ws_other' }),
+      'error',
     );
   });
 });
