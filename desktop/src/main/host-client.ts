@@ -182,6 +182,7 @@ export interface Response {
 type PendingCall = {
   resolve: (response: Response) => void;
   reject: (error: Error) => void;
+  timer?: ReturnType<typeof setTimeout>;
 };
 
 export function frame(payload: Buffer): Buffer {
@@ -279,13 +280,27 @@ export class FrameDecoder {
   }
 }
 
+// DEFAULT_CALL_TIMEOUT_MS bounds how long a control RPC waits for the host to
+// respond. Without it, a host that wedges on a single request (e.g. a hung
+// PowerShell agent probe during CreateWorkspace) leaves the promise unsettled
+// forever — which is what left the desktop "Creating…" modal stuck. It is generous
+// because CreateWorkspace legitimately runs a (now-bounded) ~30s agent probe plus
+// worktree setup and ConPTY start.
+const DEFAULT_CALL_TIMEOUT_MS = 120_000;
+
 export class ControlClient {
-  private readonly queue: PendingCall[] = [];
+  // Pending calls keyed by request id. Responses are matched by `response.id`
+  // (not FIFO order), so a call that times out can be removed and rejected
+  // without desynchronizing the matching of every later response.
+  private readonly pending = new Map<number, PendingCall>();
   private readonly decoder: FrameDecoder;
   private nextId = 0;
   private closed = false;
 
-  public constructor(private readonly socket: net.Socket) {
+  public constructor(
+    private readonly socket: net.Socket,
+    private readonly callTimeoutMs: number = DEFAULT_CALL_TIMEOUT_MS,
+  ) {
     this.decoder = new FrameDecoder((payload) => {
       let response: Response;
       try {
@@ -293,10 +308,14 @@ export class ControlClient {
       } catch {
         return;
       }
-      const pending = this.queue.shift();
+      const pending = this.pending.get(response.id);
       if (pending) {
+        this.pending.delete(response.id);
+        if (pending.timer) clearTimeout(pending.timer);
         pending.resolve(response);
       }
+      // A response whose id is unknown (e.g. a late reply for a call that already
+      // timed out) is ignored rather than mis-resolving another call.
     });
 
     socket.on('data', (chunk: Buffer) => {
@@ -321,14 +340,22 @@ export class ControlClient {
     return new Promise<Response>((resolve, reject) => {
       const id = ++this.nextId;
       const payload: Request = { ...request, id };
-      const pending = { resolve, reject };
-      this.queue.push(pending);
-      this.socket.write(frame(Buffer.from(JSON.stringify(payload), 'utf8')), (error) => {
-        if (error) {
-          const index = this.queue.indexOf(pending);
-          if (index >= 0) {
-            this.queue.splice(index, 1);
+      const pending: PendingCall = { resolve, reject };
+      if (this.callTimeoutMs > 0) {
+        pending.timer = setTimeout(() => {
+          if (this.pending.delete(id)) {
+            reject(
+              new Error(`control request '${request.method}' timed out after ${this.callTimeoutMs}ms`),
+            );
           }
+        }, this.callTimeoutMs);
+        // Don't keep the process alive solely for this timer.
+        pending.timer.unref?.();
+      }
+      this.pending.set(id, pending);
+      this.socket.write(frame(Buffer.from(JSON.stringify(payload), 'utf8')), (error) => {
+        if (error && this.pending.delete(id)) {
+          if (pending.timer) clearTimeout(pending.timer);
           reject(error);
         }
       });
@@ -346,8 +373,11 @@ export class ControlClient {
   }
 
   private rejectAll(error: Error): void {
-    while (this.queue.length > 0) {
-      this.queue.shift()?.reject(error);
+    const calls = [...this.pending.values()];
+    this.pending.clear();
+    for (const pending of calls) {
+      if (pending.timer) clearTimeout(pending.timer);
+      pending.reject(error);
     }
   }
 }

@@ -164,6 +164,15 @@ causes:
 
 Run `cs debug` to print the resolved config and log-file paths.
 
+**The "New workspace" dialog gets stuck on "Creating…" and never closes (native Windows desktop
+app).** Creating a workspace whose agent is a **PowerShell profile function** (e.g. a `cpa` wrapper for
+copilot) runs a one-off PowerShell probe that loads your profile to confirm the command exists. On
+locked-down machines that profile can hang or be very slow (endpoint security, slow/network module
+imports), which previously blocked the create request indefinitely. The probe is now bounded (~30s)
+and the desktop control client times out long-running requests, so the dialog surfaces an error
+instead of hanging. If you hit the probe timeout (`agent probe timed out` in `host.log`), check your
+PowerShell profile (`$PROFILE`) for slow or hanging startup, or set the agent to a program on `PATH`.
+
 **Blank Agent and/or Terminal pane on native Windows (desktop app).** A new workspace opens but the
 Agent pane — and a freshly opened Terminal — stay completely empty. This means the ConPTY child
 (the agent, or the shell) exited or produced no output. When the host can tell the child has exited
