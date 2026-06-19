@@ -178,11 +178,16 @@ type WorkspaceInfo struct {
 	Added        int    `json:"added"`
 	Removed      int    `json:"removed"`
 	CreatedUnix  int64  `json:"createdUnix"`
-	RunCommand   string `json:"runCommand"`
-	Running      bool   `json:"running"`
-	PreviewURL   string `json:"previewUrl"`
-	Busy         bool   `json:"busy"`    // agent is actively producing output
-	Waiting      bool   `json:"waiting"` // agent is at a prompt awaiting input
+	// LastOutputUnix is the last time the agent produced output that changed its
+	// visible screen, in Unix seconds; 0 = unknown (no live session or it never
+	// changed). Additive, optional response field — does not affect the version
+	// handshake, so Version is intentionally not bumped for it.
+	LastOutputUnix int64  `json:"lastOutputUnix"`
+	RunCommand     string `json:"runCommand"`
+	Running        bool   `json:"running"`
+	PreviewURL     string `json:"previewUrl"`
+	Busy           bool   `json:"busy"`    // agent is actively producing output
+	Waiting        bool   `json:"waiting"` // agent is at a prompt awaiting input
 	// Regenerate (v5): a regenerate is in progress for this workspace and its
 	// current phase ("" | "handoff" | "restarting" | "seeding").
 	Regenerating bool   `json:"regenerating"`

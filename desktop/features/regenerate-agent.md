@@ -303,9 +303,36 @@ prompt only when `enabled && !attached` and `autoYesDecision` no-ops while attac
 - **Before** sending the handoff prompt: wait for the agent to be `!busy` (bounded ~10 s) so the prompt
   isn't interleaved into a mid-turn agent (Opus minor).
 - **Seeding:** after the new session starts, poll `agentStatus()` until the agent reaches its initial
-  idle/prompt (or a floor delay), bounded ~10 s, then `sendKeys(seedPrompt+"\r")` — CLIs flush stdin on
+  idle/prompt (or a floor delay), bounded ~10 s, then submit the seed (see §9.7.1) — CLIs flush stdin on
   boot, so seeding too early drops the message (Gemini M1, all R4). Timeouts injectable; correctness
   is **manual-QA-verified** (the fake can't reproduce boot timing).
+
+#### 9.7.1 Prompt submission (`submitPrompt`) — agent-agnostic
+> **Root cause (the hard one).** The original code typed the whole prompt then sent a bare `\r`, which
+> left the prompt **sitting in the live agent's input box unsent** — `host.log` showed `submitted=false`
+> for every handoff, while the *seed* (sent to the freshly-restarted agent) submitted fine. Capturing
+> the desktop xterm's raw input bytes proved the working **manual** Enter is a bare `\r`, byte-identical
+> to ours — so the Enter byte was never the problem. The difference is **terminal focus reporting**:
+> Copilot (and other focus-aware TUIs) request focus events; when the Regenerate modal / another pane
+> takes focus the desktop xterm sends the agent a **focus-out (`ESC[O`)**, after which the agent still
+> **accepts typed text but refuses to submit on Enter** until it sees a **focus-in (`ESC[I`)** — which a
+> manual click provides. The seed worked because a just-booted agent never received a focus-out.
+
+`submitPrompt` is **agent-agnostic** — it keys off the agent's runtime terminal mode, not the program
+name — and does the following, in order:
+- **Focus-in first.** Send `ESC[I` (and again before each submit Enter) so a focus-reporting agent
+  considers itself focused and will submit. This is the fix; disable with `HANGAR_SUBMIT_FOCUS=0`.
+- **Type the text.** Bracketed paste enabled (`bracketedPasteEnabled()` → `decModes[2004]`) → one write
+  `ESC[200~` + one-line prompt + `ESC[201~`; otherwise type it in rune-bounded **chunks**
+  (`promptChunkRunes`). Either way the text lands cleanly in the box.
+- **Submit with a separate `\r`** (bounded retries; `HANGAR_SUBMIT_ENTER=cr|lf|crlf` overrides the line
+  ending for an agent that needs it).
+- **Detect submission past the echo window.** Wait beyond `statusInputEchoMs` (600 ms) before sampling,
+  then treat `busy` **or** an advanced `lastOutputUnixMs` as accepted — a raw busy check right after the
+  keystroke is masked as our own input echoing (the old bug that made `submitted` unreliable).
+- Prompts stay **single-line** so the chunk fallback's CR submits instead of inserting a newline.
+- **Diagnostics:** `HANGAR_SUBMIT_MODE=paste|chunk|burst`, `HANGAR_SUBMIT_SETTLE_MS`, `HANGAR_SUBMIT_FOCUS=0`;
+  `logScreenTail` logs the bottom input rows + bracketed-paste state after each send.
 
 ### 9.8 Renderer (`desktop/src/`)
 - **`CenterPane.tsx`** — `↻ Regenerate` button beside AutoYes; opens the modal; `disabled={regenerating}`.

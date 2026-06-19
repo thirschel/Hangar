@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
+	"hangar/session/git"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -249,6 +251,74 @@ func TestInstanceDataBackCompatMissingAgentSessionAndBaseCommit(t *testing.T) {
 
 	assert.Empty(t, restored.AgentSessionID)
 	assert.Empty(t, restored.BaseCommit)
+}
+
+// TestInstanceDataDoesNotPersistDiffContent verifies the full diff text is no
+// longer written to state.json: only the added/removed counts survive a
+// ToInstanceData -> JSON -> FromInstanceData round-trip.
+func TestInstanceDataDoesNotPersistDiffContent(t *testing.T) {
+	withTerminalSessionFactory(t, func(name, program string) TerminalSession {
+		return &mockTerminalSession{}
+	})
+
+	instance := &Instance{
+		Title:   "diff-content",
+		Path:    t.TempDir(),
+		Status:  Paused,
+		Program: "copilot",
+	}
+	instance.SetDiffStats(&git.DiffStats{
+		Added:   12,
+		Removed: 3,
+		Content: "diff --git a/x b/x\n+added line\n-removed line\n",
+	})
+
+	jsonData, err := json.Marshal(instance.ToInstanceData())
+	require.NoError(t, err)
+
+	// The serialized form must not carry the full diff content.
+	assert.NotContains(t, string(jsonData), "diff --git")
+	assert.NotContains(t, string(jsonData), `"content"`)
+
+	var data InstanceData
+	require.NoError(t, json.Unmarshal(jsonData, &data))
+	assert.Equal(t, 12, data.DiffStats.Added)
+	assert.Equal(t, 3, data.DiffStats.Removed)
+
+	restored, err := FromInstanceData(data)
+	require.NoError(t, err)
+
+	stats := restored.GetDiffStats()
+	require.NotNil(t, stats)
+	assert.Equal(t, 12, stats.Added)
+	assert.Equal(t, 3, stats.Removed)
+	assert.Empty(t, stats.Content, "full diff content must not be persisted or restored")
+}
+
+// TestInstanceDataBackCompatIgnoresLegacyDiffContent verifies that an older
+// state.json which still carries a "content" key under diff_stats loads without
+// error (json.Unmarshal ignores the now-unknown field) and leaves Content empty.
+func TestInstanceDataBackCompatIgnoresLegacyDiffContent(t *testing.T) {
+	withTerminalSessionFactory(t, func(name, program string) TerminalSession {
+		return &mockTerminalSession{}
+	})
+
+	legacy := `{"title":"legacy-diff","status":3,"program":"copilot",` +
+		`"diff_stats":{"added":7,"removed":2,"content":"diff --git a/x b/x\n+foo\n"}}`
+
+	var data InstanceData
+	require.NoError(t, json.Unmarshal([]byte(legacy), &data))
+	assert.Equal(t, 7, data.DiffStats.Added)
+	assert.Equal(t, 2, data.DiffStats.Removed)
+
+	restored, err := FromInstanceData(data)
+	require.NoError(t, err)
+
+	stats := restored.GetDiffStats()
+	require.NotNil(t, stats)
+	assert.Equal(t, 7, stats.Added)
+	assert.Equal(t, 2, stats.Removed)
+	assert.Empty(t, stats.Content)
 }
 
 func TestSetTerminalSession(t *testing.T) {

@@ -550,3 +550,30 @@ func TestDiffCachePruneAndKeepOnError(t *testing.T) {
 		t.Fatal("stale cache entry should have been pruned")
 	}
 }
+
+// TestToInfoMapsLastOutput verifies toInfo converts a live session's
+// lastOutputUnixMs (UnixMilli) into WorkspaceInfo.LastOutputUnix (Unix seconds)
+// via integer ms->s division, and reports 0 when there is no live session.
+func TestToInfoMapsLastOutput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	h := newHost(io.Discard, time.Minute)
+	m := h.workspaces
+
+	const sessName = "ws_last_output"
+	const lastMs = int64(1_710_000_123_456)
+	h.mu.Lock()
+	h.sessions[sessName] = &fakeSession{name: sessName, aliveFlag: true, lastOutputMs: lastMs}
+	h.mu.Unlock()
+
+	if got, want := m.toInfo(&workspace{ID: "ws1", SessionName: sessName}).LastOutputUnix, lastMs/1000; got != want {
+		t.Fatalf("LastOutputUnix = %d, want %d", got, want)
+	}
+
+	// No live session for this workspace -> 0 (unknown).
+	if got := m.toInfo(&workspace{ID: "ws2", SessionName: "missing"}).LastOutputUnix; got != 0 {
+		t.Fatalf("LastOutputUnix (no session) = %d, want 0", got)
+	}
+}

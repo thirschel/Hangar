@@ -4,29 +4,52 @@ import 'react-diff-view/style/index.css';
 import type { FileDiffInfo, WorkspaceInfo } from '../../../main/host-client';
 import type { FileData } from 'react-diff-view';
 
+// Diffs larger than this are not parsed/rendered inline. react-diff-view would
+// build thousands of hunk rows synchronously on the main thread and freeze the
+// UI; ~1.5 MB is far larger than any practically reviewable single-file diff.
+export const MAX_DIFF_PREVIEW_BYTES = 1_500_000;
+
 type ReviewPanelProps = {
   workspace: WorkspaceInfo | null;
   embedded?: boolean;
   onFilesCount?: (n: number) => void;
+  // Whether the Changes tab is currently visible. When false the panel keeps its
+  // last-known data (and the change-count badge) but pauses the 2.5s poll.
+  active?: boolean;
 };
 
-export function ReviewPanel({ workspace, embedded, onFilesCount }: ReviewPanelProps): JSX.Element {
+export function ReviewPanel({
+  workspace,
+  embedded,
+  onFilesCount,
+  active = true,
+}: ReviewPanelProps): JSX.Element {
   const [files, setFiles] = useState<FileDiffInfo[]>([]);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState('');
   const id = workspace?.id ?? null;
 
+  // Reset the selection and changed-files list whenever the workspace changes so
+  // a freshly selected workspace never briefly shows the previous one's data.
   useEffect(() => {
     setSelectedFile(null);
     setDiff('');
     setFiles([]);
     onFilesCount?.(0);
+  }, [id, onFilesCount]);
+
+  // Load the changed-files list, which also drives the change-count badge. We
+  // always do one fetch (so the badge is correct even while the tab is hidden),
+  // but only keep the 2.5s polling interval alive while the Changes tab is the
+  // visible one (`active`). When the tab is hidden the interval is torn down;
+  // re-showing it re-runs this effect and resumes polling.
+  useEffect(() => {
     if (!id) return;
-    let active = true;
+    let cancelled = false;
     const load = async (): Promise<void> => {
       try {
         const f = await window.cs.workspaceFiles(id);
-        if (active) {
+        if (!cancelled) {
           setFiles(f);
           onFilesCount?.(f.length);
         }
@@ -35,27 +58,32 @@ export function ReviewPanel({ workspace, embedded, onFilesCount }: ReviewPanelPr
       }
     };
     void load();
+    if (!active) {
+      return () => {
+        cancelled = true;
+      };
+    }
     const timer = setInterval(() => void load(), 2500);
     return () => {
-      active = false;
+      cancelled = true;
       clearInterval(timer);
     };
-  }, [id, onFilesCount]);
+  }, [id, active, onFilesCount]);
 
   useEffect(() => {
     if (!id || !selectedFile) {
       setDiff('');
       return;
     }
-    let active = true;
+    let cancelled = false;
     window.cs
       .workspaceFileDiff(id, selectedFile)
       .then((d) => {
-        if (active) setDiff(d);
+        if (!cancelled) setDiff(d);
       })
       .catch(() => {});
     return () => {
-      active = false;
+      cancelled = true;
     };
   }, [id, selectedFile]);
 
@@ -105,10 +133,22 @@ export function ReviewPanel({ workspace, embedded, onFilesCount }: ReviewPanelPr
 }
 
 function DiffView({ text }: { text: string }): JSX.Element {
+  const tooLarge = text.length > MAX_DIFF_PREVIEW_BYTES;
   const files = useMemo<FileData[]>(() => {
-    if (!text.trim()) return [];
+    if (tooLarge || !text.trim()) return [];
     return parseDiff(text);
-  }, [text]);
+  }, [text, tooLarge]);
+
+  if (tooLarge) {
+    const kb = Math.round(text.length / 1024);
+    return (
+      <div className="diff-view diff-view--empty">
+        <div className="empty-state">
+          <p>Diff too large to preview ({kb} KB).</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!text.trim()) {
     return (

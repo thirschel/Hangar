@@ -2,6 +2,15 @@ appId: com.thirschel.hangar
 productName: Hangar
 copyright: Copyright © 2026 Hangar
 
+# Ship only the en-US Chromium locale. The other ~54 locale .pak files (~46 MB)
+# are unused and are dropped from the package.
+electronLanguages:
+  - en-US
+
+# Maximum LZMA compression for the NSIS installer to minimise download size.
+# Note: this shrinks the installer/download, not the on-disk unpacked footprint.
+compression: maximum
+
 directories:
   output: release
   buildResources: build
