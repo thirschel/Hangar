@@ -19,7 +19,11 @@ const shellInstall = "curl -fsSL https://raw.githubusercontent.com/smtg-ai/claud
 const features = [
   {
     title: "Runs natively on Windows",
-    body: "No WSL, no tmux. A background session host owns a real Windows console (ConPTY) per agent; the cs TUI talks to it over a named pipe and renders via a VT emulator. Sessions survive TUI restarts.",
+    body: "No WSL, no tmux. A background session host owns a real Windows console per agent; the cs TUI talks to it over a named pipe and renders via a VT emulator, so sessions survive TUI restarts.",
+  },
+  {
+    title: "Your tools, PATH & auth",
+    body: "Each agent runs in a real Windows console (ConPTY), so it inherits the terminal you already use — the tools and apps on your PATH, your internal tooling, and, most importantly, your existing auth. If your CLI works in your terminal, it works in Hangar.",
   },
   {
     title: "Supervise multiple agents at once",
@@ -36,10 +40,6 @@ const features = [
   {
     title: "Background + AutoYes",
     body: "Agents keep working and auto-accept prompts even while the TUI is closed; AutoYes pauses automatically while you're attached.",
-  },
-  {
-    title: "Attach / detach",
-    body: "Press Enter to attach to a session, Ctrl+q to detach back to the dashboard; Ctrl+c passes through to the agent.",
   },
 ];
 
@@ -82,7 +82,7 @@ export default function Home() {
           <p className={styles.eyebrow}>A hangar for all your copilots.</p>
           <h1 id="hero-title">Hangar</h1>
           <p className={styles.positioning}>
-            The Windows desktop app for running multiple AI coding agents in parallel.
+            A lightweight harness around your favorite CLI coding agent — run several in parallel on native Windows, each in its own isolated git worktree, and review their work before it ships.
           </p>
           <div className={styles.ctaGroup} aria-label="Primary actions">
             <a
