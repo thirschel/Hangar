@@ -175,7 +175,7 @@ function createWindow(): void {
     height: 820,
     minWidth: 1080,
     minHeight: 680,
-    icon: buildAsset('icon.png'),
+    icon: buildAsset('icon.ico'),
     backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: path.join(__dirname, '..\\preload\\index.js'),
@@ -506,8 +506,13 @@ ipcMain.on('term:resize', (_event, args: { session: string; cols: number; rows: 
 app.whenReady().then(() => {
   // Windows taskbar + toast identity. Without an explicit AppUserModelId the OS
   // attributes the app (and its taskbar icon/notifications) to the generic
-  // electron.exe rather than to Hangar.
-  if (process.platform === 'win32') app.setAppUserModelId('com.thirschel.hangar');
+  // electron.exe rather than to Hangar. Dev runs (which execute under the stock
+  // electron.exe, named "Electron" with the default icon) use a distinct
+  // ".dev" id so they can't register a stale "Electron" Start-menu shortcut
+  // under the packaged app's id and shadow its real taskbar icon/name.
+  if (process.platform === 'win32') {
+    app.setAppUserModelId(app.isPackaged ? 'com.thirschel.hangar' : 'com.thirschel.hangar.dev');
+  }
   // Hide the default application menu bar (File / Edit / View / Window / Help).
   Menu.setApplicationMenu(null);
   createWindow();
