@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 type BreadcrumbCopyProps = {

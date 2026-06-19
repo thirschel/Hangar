@@ -191,7 +191,13 @@ async function attachSession(
     throw error;
   }
   attachments.set(sessionName, socket);
-  socket.on('data', (chunk) => sendToRenderer('term:data', { session: sessionName, chunk: new Uint8Array(chunk) }));
+  socket.on('data', (chunk) => {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    sendToRenderer('term:data', {
+      session: sessionName,
+      chunk: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+    });
+  });
   socket.on('close', async () => {
     attachments.delete(sessionName);
     log.info('attachSession socket close', { session: sessionName });

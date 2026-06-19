@@ -1,0 +1,15 @@
+version: "2"
+
+run:
+  timeout: 3m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+  exclusions:
+    paths:
+      - ^web/
+      - ^desktop/

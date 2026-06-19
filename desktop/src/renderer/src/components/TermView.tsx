@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';

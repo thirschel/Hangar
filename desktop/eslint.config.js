@@ -1,7 +1,9 @@
 const js = require('@eslint/js');
 const reactHooks = require('eslint-plugin-react-hooks');
-const reactRefresh = require('eslint-plugin-react-refresh');
+const reactRefreshModule = require('eslint-plugin-react-refresh');
 const tseslint = require('typescript-eslint');
+
+const reactRefresh = reactRefreshModule.default ?? reactRefreshModule;
 
 module.exports = tseslint.config(
   {
@@ -17,6 +19,8 @@ module.exports = tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      'react-hooks/refs': 'off',
+      'react-hooks/set-state-in-effect': 'off',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
     },
   },

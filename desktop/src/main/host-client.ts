@@ -434,7 +434,7 @@ export function validateHostInfo(hi: HostInfo): void {
     got = processCreationUnix(hi.pid);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new Error(`untrusted host.json: process creation check failed: ${message}`);
+    throw new Error(`untrusted host.json: process creation check failed: ${message}`, { cause: err });
   }
   if (Math.abs(got - hi.createdUnix) > 1) {
     throw new Error('untrusted host.json: pid/creation mismatch');

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 import type { CreateWorkspaceArgs } from '../../../preload';

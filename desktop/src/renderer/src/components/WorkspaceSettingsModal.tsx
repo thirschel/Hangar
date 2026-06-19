@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useRef, useState } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 import type { WorkspaceInfo } from '../../../main/host-client';

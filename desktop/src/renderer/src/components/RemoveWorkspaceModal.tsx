@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useCallback, useState, useRef, type FormEvent } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 

@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { memo, useRef, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
@@ -25,7 +26,7 @@ type SidebarProps = {
   statusFilter: StatusFilter;
   counts: StatusCounts;
   onStatusFilterChange: (value: StatusFilter) => void;
-  searchInputRef?: RefObject<HTMLInputElement>;
+  searchInputRef?: RefObject<HTMLInputElement | null>;
 };
 
 type WorkspaceRowProps = {

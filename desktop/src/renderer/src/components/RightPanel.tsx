@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useEffect, useState } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { ReviewPanel } from './ReviewPanel';

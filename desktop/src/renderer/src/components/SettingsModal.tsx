@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, type ModalHandle } from './Modal';
 import type { Settings, ShellProfile } from '../../../main/settings';

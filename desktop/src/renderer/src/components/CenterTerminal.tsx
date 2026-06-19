@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import type { ShellProfile } from '../../../main/settings';
