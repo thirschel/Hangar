@@ -205,4 +205,55 @@ describe('ControlClient', () => {
     expect(client.isClosed()).toBe(true);
     expect(socket.ended).toBe(true);
   });
+
+  it('matches responses by id regardless of arrival order', async () => {
+    const socket = new MockSocket();
+    const client = new ControlClient(socket as unknown as net.Socket);
+
+    const a = client.call({ method: 'Hello' }); // id 1
+    const b = client.call({ method: 'ListWorkspaces' }); // id 2
+
+    // Respond to id 2 first, then id 1: FIFO matching would mis-deliver these.
+    socket.emit('data', frame(Buffer.from(JSON.stringify({ id: 2, ok: true, content: 'B' }), 'utf8')));
+    socket.emit('data', frame(Buffer.from(JSON.stringify({ id: 1, ok: true, content: 'A' }), 'utf8')));
+
+    await expect(a).resolves.toMatchObject({ id: 1, content: 'A' });
+    await expect(b).resolves.toMatchObject({ id: 2, content: 'B' });
+  });
+
+  it('rejects a call that times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new MockSocket();
+      const client = new ControlClient(socket as unknown as net.Socket, 50);
+      const pending = client.call({ method: 'Hello' });
+      const assertion = expect(pending).rejects.toThrow(/timed out after 50ms/);
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a late response for an already-timed-out call', async () => {
+    vi.useFakeTimers();
+    try {
+      const socket = new MockSocket();
+      const client = new ControlClient(socket as unknown as net.Socket, 50);
+
+      const a = client.call({ method: 'Hello' }); // id 1
+      const aAssert = expect(a).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(50);
+      await aAssert;
+
+      const b = client.call({ method: 'ListWorkspaces' }); // id 2
+      // A late reply for the timed-out id 1 must NOT resolve id 2.
+      socket.emit('data', frame(Buffer.from(JSON.stringify({ id: 1, ok: true, content: 'late-A' }), 'utf8')));
+      socket.emit('data', frame(Buffer.from(JSON.stringify({ id: 2, ok: true, content: 'B' }), 'utf8')));
+
+      await expect(b).resolves.toMatchObject({ id: 2, content: 'B' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

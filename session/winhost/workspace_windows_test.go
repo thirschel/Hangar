@@ -3,6 +3,8 @@
 package winhost
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -367,6 +369,51 @@ func TestCopilotProbeScriptDetection(t *testing.T) {
 				t.Fatalf("probe exit = %d, want %d", got, c.want)
 			}
 		})
+	}
+}
+
+// TestClassifyProbeExit verifies the probe exit-code -> (found, isCopilot) mapping
+// without spawning PowerShell: exit 0 = found+copilot, 1 = found, 2/other/launch
+// failure = not found.
+func TestClassifyProbeExit(t *testing.T) {
+	if f, c := classifyProbeExit(nil); !f || !c {
+		t.Fatalf("nil err: got (found=%v,isCopilot=%v), want (true,true)", f, c)
+	}
+	for _, tc := range []struct {
+		code             int
+		found, isCopilot bool
+	}{
+		{1, true, false},
+		{2, false, false},
+		{3, false, false}, // unknown exit code => not found
+	} {
+		err := exec.Command("cmd", "/c", fmt.Sprintf("exit %d", tc.code)).Run()
+		if f, c := classifyProbeExit(err); f != tc.found || c != tc.isCopilot {
+			t.Fatalf("exit %d: got (found=%v,isCopilot=%v), want (%v,%v)", tc.code, f, c, tc.found, tc.isCopilot)
+		}
+	}
+	if f, c := classifyProbeExit(errors.New("launch failure")); f || c {
+		t.Fatalf("non-exit err: got (found=%v,isCopilot=%v), want (false,false)", f, c)
+	}
+}
+
+// TestProbeAgentProgramTimeout verifies the probe is bounded: with a 1ms deadline
+// (far shorter than any PowerShell cold start) the probe is killed and reported as
+// timed out + not found, instead of hanging CreateWorkspace forever.
+func TestProbeAgentProgramTimeout(t *testing.T) {
+	if _, err := exec.LookPath("powershell.exe"); err != nil {
+		t.Skip("powershell.exe not available")
+	}
+	orig := agentProbeTimeout
+	agentProbeTimeout = time.Millisecond
+	t.Cleanup(func() { agentProbeTimeout = orig })
+
+	found, isCopilot, timedOut := probeAgentProgramTimed("powershell", "cpa")
+	if !timedOut {
+		t.Fatalf("expected probe to time out; got found=%v isCopilot=%v timedOut=%v", found, isCopilot, timedOut)
+	}
+	if found || isCopilot {
+		t.Fatalf("timed-out probe must report not found: found=%v isCopilot=%v", found, isCopilot)
 	}
 }
 

@@ -1224,19 +1224,42 @@ try {
 if ($isCopilot) { exit 0 } else { exit 1 }
 `
 
-// probeAgentProgram resolves an agent program that is not on PATH (e.g. a
-// PowerShell profile function like `cpa`) and reports whether it exists and
-// whether it is copilot-backed, reusing the hidden, env-bound probe pattern.
+// agentProbeTimeout bounds how long probeAgentProgram waits for the PowerShell
+// probe. The probe loads the user's PowerShell profile (so profile functions like
+// `cpa` are visible), and on locked-down machines that profile can hang or be very
+// slow (EDR, slow/network module loads). Without a bound, the probe — and thus the
+// whole CreateWorkspace RPC — blocks forever, leaving the desktop "Creating…" modal
+// stuck. It is a package var so tests can shrink it.
+var agentProbeTimeout = 30 * time.Second
+
+// probeAgentProgramTimed resolves an agent program that is not on PATH (e.g. a
+// PowerShell profile function like `cpa`) and reports whether it exists, whether
+// it is copilot-backed, and whether the probe exceeded agentProbeTimeout so the
+// caller can log a hung probe (vs. a genuine "not found"). The probe is run under
+// a context deadline so a hung PowerShell profile cannot wedge CreateWorkspace.
 // A launch failure of the probe itself is treated as "not found".
-func probeAgentProgram(shell, progName string) (found, isCopilot bool) {
+func probeAgentProgramTimed(shell, progName string) (found, isCopilot, timedOut bool) {
 	psExe := "powershell.exe"
 	if shell == "pwsh" {
 		psExe = "pwsh.exe"
 	}
-	probe := exec.Command(psExe, "-WindowStyle", "Hidden", "-Command", copilotProbeScript)
+	ctx, cancel := context.WithTimeout(context.Background(), agentProbeTimeout)
+	defer cancel()
+	probe := exec.CommandContext(ctx, psExe, "-WindowStyle", "Hidden", "-Command", copilotProbeScript)
 	probe.Env = append(os.Environ(), "HANGAR_PROBE_NAME="+progName)
 	hideConsole(probe)
 	err := probe.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return false, false, true
+	}
+	found, isCopilot = classifyProbeExit(err)
+	return found, isCopilot, false
+}
+
+// classifyProbeExit maps the probe process result to (found, isCopilot):
+// exit 0 = found and copilot-backed; exit 1 = found, not copilot; exit 2 (or any
+// launch failure) = not found.
+func classifyProbeExit(err error) (found, isCopilot bool) {
 	if err == nil {
 		return true, true // exit 0
 	}
@@ -1285,7 +1308,10 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	copilotResume := agentcmd.SupportsResume(program)
 	if _, err := exec.LookPath(progName); err != nil {
 		if shell == "powershell" || shell == "pwsh" {
-			found, isCopilot := probeAgentProgram(shell, progName)
+			found, isCopilot, timedOut := probeAgentProgramTimed(shell, progName)
+			if timedOut {
+				m.host.logger.Printf("agent probe timed out after %s for program %q (shell=%s); a slow/hung PowerShell profile can cause this — workspace create will report the agent as not found", agentProbeTimeout, progName, shell)
+			}
 			if !found {
 				return proto.Errorf(req.ID, "agent program %q not found on PATH or as a PowerShell command (set a valid agent such as 'copilot' or 'claude'): %v", progName, err)
 			}
