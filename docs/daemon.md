@@ -194,12 +194,18 @@ diagnostics). The desktop's **Settings → Diagnostics** tab opens or tails any 
 
 **Blank or garbled terminals in the desktop app (the pane renders nothing despite the agent
 running).** If `desktop.log` shows the bytes arriving (`[renderer] TermView first data` / `first write
-done`) but the pane stays empty, the terminal layer is failing to paint — almost always a GPU /
-hardware-acceleration problem on locked-down corporate hardware (RDP/VDI, GPU disabled by policy, or
-buggy drivers). Only xterm's layered screen is affected, which is why the rest of the app still paints.
-Fix: **Settings → Diagnostics → Disable hardware acceleration**, then restart the app. (To confirm the
-cause first, launch the app once with `--disable-gpu`; the startup `gpu status` line in `desktop.log`
-records the resolved GPU feature state.)
+done`) but the pane stays empty, the terminal layer is failing to paint. The usual cause is
+**software compositing** — most often an **RDP/VDI session** (no hardware GPU) or hardware acceleration
+disabled by policy/drivers — where xterm updates the DOM but Chromium's software compositor doesn't
+flush the paint until a reflow (the tell-tale sign is that **resizing the window/pane makes the text
+appear**). Only xterm's layered screen is affected, which is why the rest of the app still paints.
+
+The app now **detects software compositing** (logged as `softwareCompositing` in the startup
+`gpu status` line of `desktop.log`) and **forces repaints** automatically while a terminal is attached,
+so it should paint without a manual resize. Note that **"Disable hardware acceleration" does not help
+on RDP** — there is no GPU to disable, so it leaves you in the same software-compositing path; the
+forced-repaint behaviour is what fixes it. If a pane is still blank, resize the window once (it will
+repaint) and capture the `gpu status` line for a bug report.
 
 **Where is state stored, and how do I reset it?** All state lives in `~/.hangar/`: `state.json`
 holds your sessions/instances, `config.json` the configuration, and `daemon.pid` the autoyes daemon.

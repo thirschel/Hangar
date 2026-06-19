@@ -28,6 +28,7 @@ import {
 } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
+import { isSoftwareCompositing } from './render-detect';
 import { log } from './logger';
 import {
   checkForUpdate,
@@ -81,6 +82,38 @@ const hardwareAccelerationDisabled = ((): boolean => {
 
 function hostVerbose(): boolean {
   return getSettings().verboseLogging || !!process.env.HANGAR_DEBUG;
+}
+
+// isSoftwareCompositing is defined in ./render-detect (electron-free + tested).
+// softwareCompositing is resolved once the app is ready (getGPUFeatureStatus is
+// only meaningful then) and gates the forced-repaint workaround below.
+let softwareCompositing = false;
+
+// scheduleTerminalRepaint forces a full window repaint, coalesced, but only when
+// compositing in software — otherwise it is a no-op so normal (GPU) machines are
+// unaffected. This is the programmatic equivalent of the "resize the pane to make
+// it appear" workaround for the RDP software-compositor-not-flushing bug.
+let repaintTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleTerminalRepaint(): void {
+  if (!softwareCompositing || repaintTimer) return;
+  repaintTimer = setTimeout(() => {
+    repaintTimer = null;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.invalidate();
+  }, 80);
+  repaintTimer.unref?.();
+}
+
+// forceTerminalRepaintBurst fires a few spaced repaints (software compositing
+// only) to catch the initial attach snapshot, whose async xterm render may land
+// after the first coalesced repaint.
+function forceTerminalRepaintBurst(): void {
+  if (!softwareCompositing) return;
+  for (const delay of [120, 400, 1000]) {
+    const t = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.invalidate();
+    }, delay);
+    t.unref?.();
+  }
 }
 
 function diagnosticLogPaths(): LogPaths {
@@ -228,6 +261,9 @@ async function attachSession(
       });
     }
     sendToRenderer('term:data', { session: sessionName, chunk: out });
+    // RDP/software-compositing: nudge a repaint so streamed output actually
+    // paints (no-op on GPU machines). Coalesced so a burst causes one repaint.
+    scheduleTerminalRepaint();
   });
   socket.on('close', async () => {
     attachments.delete(sessionName);
@@ -251,6 +287,8 @@ async function attachSession(
 
   sendToRenderer('term:ready', { session: sessionName });
   log.info('attachSession ready', { session: sessionName, elapsedMs: Date.now() - start });
+  // Paint the initial snapshot under software compositing (no-op on GPU machines).
+  forceTerminalRepaintBurst();
   return attached;
 }
 
@@ -731,11 +769,16 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   // Record the GPU/acceleration state so a blank-terminal report can be diagnosed
   // from desktop.log: confirms whether hardware acceleration is off and how
-  // Chromium resolved each GPU feature (e.g. software-only compositing).
+  // Chromium resolved each GPU feature (e.g. software-only compositing). The
+  // resolved `softwareCompositing` flag also enables the forced-repaint workaround
+  // for RDP/VDI sessions where xterm updates the DOM but no paint is flushed.
   try {
+    const featureStatus = app.getGPUFeatureStatus() as unknown as Record<string, unknown>;
+    softwareCompositing = isSoftwareCompositing(featureStatus, hardwareAccelerationDisabled);
     log.info('gpu status', {
       hardwareAccelerationDisabled,
-      featureStatus: app.getGPUFeatureStatus(),
+      softwareCompositing,
+      featureStatus,
     });
   } catch (error) {
     log.error('gpu status failed', error);
