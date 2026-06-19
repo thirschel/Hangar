@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.6.1](https://github.com/thirschel/Hangar/compare/v1.6.0...v1.6.1) (2026-06-19)
+
+### Bug Fixes
+
+* **desktop:** repair blank panes and add renderer diagnostics ([#67](https://github.com/thirschel/Hangar/issues/67)) ([fb6696c](https://github.com/thirschel/Hangar/commit/fb6696c07db60e6bb8754f2389da0263e370a342))
+
 ## [1.6.0](https://github.com/thirschel/Hangar/compare/v1.5.2...v1.6.0) (2026-06-19)
 
 ### Features
