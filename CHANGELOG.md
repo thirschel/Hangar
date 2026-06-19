@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.6.0](https://github.com/thirschel/Hangar/compare/v1.5.2...v1.6.0) (2026-06-19)
+
+### Features
+
+* **windows:** session diagnostics for blank agent/terminal panes ([#64](https://github.com/thirschel/Hangar/issues/64)) ([6818947](https://github.com/thirschel/Hangar/commit/68189472d6801990277d457b32153550fd48c021))
+
 ## [1.5.2](https://github.com/thirschel/Hangar/compare/v1.5.1...v1.5.2) (2026-06-19)
 
 ### Bug Fixes
