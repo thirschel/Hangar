@@ -1278,6 +1278,17 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	if req.RepoPath == "" {
 		return proto.Errorf(req.ID, "repoPath required")
 	}
+	// Per-phase timing so a "stuck on Creating…" report shows exactly which step
+	// stalls (e.g. a slow `git worktree add` on a OneDrive/EDR-backed filesystem,
+	// or a slow agent launch). The host processes a connection's RPCs serially, so
+	// a slow create also delays the client's polling — these logs disambiguate.
+	t0 := time.Now()
+	lap := t0
+	phase := func(label string) {
+		now := time.Now()
+		m.host.logger.Printf("create phase=%s took=%s total=%s repoPath=%q", label, now.Sub(lap).Round(time.Millisecond), now.Sub(t0).Round(time.Millisecond), req.RepoPath)
+		lap = now
+	}
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		title = defaultTitle(req.RepoPath)
@@ -1322,6 +1333,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 			return proto.Errorf(req.ID, "agent program %q not found on PATH (set a valid agent such as 'copilot' or 'claude'): %v", progName, err)
 		}
 	}
+	phase("validate-program")
 
 	id := newWorkspaceID()
 	sessionName := "ws_" + id
@@ -1349,9 +1361,11 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	if err != nil {
 		return proto.Errorf(req.ID, "prepare worktree: %v", err)
 	}
+	phase("prepare-worktree")
 	if err := wt.Setup(); err != nil {
 		return proto.Errorf(req.ID, "create worktree: %v", err)
 	}
+	phase("setup-worktree")
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
 	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
@@ -1360,6 +1374,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		_ = wt.Prune()
 		return proto.Errorf(req.ID, "start agent: %v", err)
 	}
+	phase("start-agent")
 
 	w := &workspace{
 		ID: id, Title: title, Program: program, RepoPath: wt.GetRepoPath(),
@@ -1374,7 +1389,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	m.saveLocked()
 	m.mu.Unlock()
 
-	m.host.logger.Printf("created workspace %q (%s) branch=%s worktree=%s", title, id, branch, w.WorktreePath)
+	m.host.logger.Printf("created workspace %q (%s) branch=%s worktree=%s total=%s", title, id, branch, w.WorktreePath, time.Since(t0).Round(time.Millisecond))
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
 
