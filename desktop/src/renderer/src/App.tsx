@@ -21,6 +21,7 @@ import {
   type StatusFilter,
 } from './components/workspace-status';
 import { playNotificationSound } from './notificationSound';
+import { diag } from './diag';
 import type { CreateWorkspaceArgs } from '../../preload';
 import type { WorkspaceInfo } from '../../main/host-client';
 import { PROTO_VERSION } from '../../shared/proto-version';
@@ -468,8 +469,16 @@ export function App(): JSX.Element {
 
   const onCreate = useCallback(
     async (args: CreateWorkspaceArgs): Promise<void> => {
+      // Time each step so a "stuck on Creating…" report shows whether the wait is
+      // the CreateWorkspace RPC (host worktree/agent setup) or the post-create
+      // refresh (ListWorkspaces) — recorded to desktop.log via the diag bridge.
+      const t0 = Date.now();
+      diag('onCreate start', { repoPath: args.repoPath, shell: args.shell });
       const ws = await window.cs.createWorkspace(args);
+      diag('onCreate createWorkspace done', { id: ws.id, ms: Date.now() - t0 });
+      const tRefresh = Date.now();
       await refresh();
+      diag('onCreate refresh done', { ms: Date.now() - tRefresh, totalMs: Date.now() - t0 });
       setSelectedId(ws.id);
     },
     [refresh],

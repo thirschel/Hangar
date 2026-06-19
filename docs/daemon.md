@@ -173,6 +173,13 @@ and the desktop control client times out long-running requests, so the dialog su
 instead of hanging. If you hit the probe timeout (`agent probe timed out` in `host.log`), check your
 PowerShell profile (`$PROFILE`) for slow or hanging startup, or set the agent to a program on `PATH`.
 
+To pinpoint a slow create, `host.log` now records each phase — `create phase=validate-program`,
+`prepare-worktree`, `setup-worktree` (the `git worktree add`, the usual culprit on OneDrive/EDR-backed
+or large repos), and `start-agent` — with `took=`/`total=` durations, and `desktop.log` records the
+`cs:call CreateWorkspace done {elapsedMs}` and renderer `onCreate createWorkspace done` / `refresh done`
+timings, so you can see whether the wait is the worktree setup, the agent launch, or the post-create
+list refresh.
+
 **Blank Agent and/or Terminal pane on native Windows (desktop app).** A new workspace opens but the
 Agent pane — and a freshly opened Terminal — stay completely empty. This means the ConPTY child
 (the agent, or the shell) exited or produced no output. When the host can tell the child has exited

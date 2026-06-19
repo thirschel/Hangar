@@ -355,6 +355,7 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
     return client.call(request);
   };
 
+  const started = Date.now();
   let response: Response;
   try {
     response = await callHost();
@@ -365,6 +366,15 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
       authenticatedHello = null;
     }
     response = await callHost();
+  }
+  const elapsedMs = Date.now() - started;
+  // Always time CreateWorkspace (the "stuck on Creating…" path); otherwise log
+  // only slow control calls so a wedged/slow host RPC is visible in desktop.log
+  // without flooding it on every fast poll.
+  if (request.method === 'CreateWorkspace') {
+    log.info('cs:call CreateWorkspace done', { elapsedMs, ok: response.ok, error: response.error });
+  } else if (elapsedMs >= 3000) {
+    log.info('cs:call slow', { method: request.method, elapsedMs, ok: response.ok });
   }
   if ((request.method === 'CreateSession' || request.method === 'CreateWorkspace') && !response.ok) {
     log.error('cs:call response error', { method: request.method, error: response.error });
