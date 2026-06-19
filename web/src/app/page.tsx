@@ -2,6 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import logo from "../../public/logo.png";
+import appShot from "../../public/app.png";
+import statusesShot from "../../public/statuses.png";
+import browserShot from "../../public/browser.png";
+import regenerateShot from "../../public/regenerate.png";
 import styles from "./page.module.css";
 
 const ThemeToggle = dynamic(() => import("./components/ThemeToggle"), {});
@@ -100,14 +104,11 @@ export default function Home() {
         </section>
 
         <div className={styles.demoVideo}>
-          <video
-            controls
-            autoPlay
-            muted
-            loop
-            playsInline
-            className={styles.video}
-            src="https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a"
+          <Image
+            src={appShot}
+            alt="Hangar Desktop — workspaces, the active agent session, and a live diff of its changes"
+            className={styles.heroShot}
+            priority
           />
         </div>
 
@@ -124,6 +125,50 @@ export default function Home() {
                 <p>{feature.body}</p>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className={styles.showcase} id="screenshots" aria-labelledby="showcase-title">
+          <div className={styles.sectionIntro}>
+            <p className={styles.sectionKicker}>Screenshots</p>
+            <h2 id="showcase-title">A closer look</h2>
+          </div>
+          <div className={styles.showcaseGrid}>
+            <figure className={styles.shot}>
+              <div className={styles.shotFrame}>
+                <Image
+                  src={statusesShot}
+                  alt="Status filtering and grouping in the Hangar sidebar"
+                  className={styles.shotImage}
+                />
+              </div>
+              <figcaption className={styles.shotCaption}>
+                Status filtering &amp; grouping — filter workspaces by Waiting / Busy / Idle / Exited and group them
+                by repo, with live per-status counts.
+              </figcaption>
+            </figure>
+            <figure className={styles.shot}>
+              <div className={styles.shotFrame}>
+                <Image src={browserShot} alt="Copilot Session Browser" className={styles.shotImage} />
+              </div>
+              <figcaption className={styles.shotCaption}>
+                Copilot Session Browser — search and resume your local GitHub Copilot CLI sessions in a fresh
+                isolated worktree.
+              </figcaption>
+            </figure>
+            <figure className={styles.shot}>
+              <div className={styles.shotFrame}>
+                <Image
+                  src={regenerateShot}
+                  alt="Regenerate an agent with an optional handoff document"
+                  className={styles.shotImage}
+                />
+              </div>
+              <figcaption className={styles.shotCaption}>
+                Regenerate with handoff — restart an agent in place, optionally writing a HANDOFF.md so the fresh
+                agent keeps its context.
+              </figcaption>
+            </figure>
           </div>
         </section>
 

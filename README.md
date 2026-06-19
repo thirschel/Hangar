@@ -16,7 +16,7 @@
 
 [Hangar](https://thirschel.github.io/Hangar/) is a lightweight harness around your favorite CLI coding agent — run several in parallel, each in its own isolated git worktree, and review their work before it ships. Native Windows. No WSL, no tmux. The Windows desktop app is the primary way to install Hangar; under the hood, each agent runs in a real Windows console (ConPTY) that inherits your PATH, tools, internal/company tooling, and existing authentication. Hangar is powered by the `cs` core-daemon/session host, so agents keep working even when the desktop app or TUI is closed.
 
-![Hangar Screenshot](assets/screenshot.png)
+![Hangar Desktop — workspaces, the active agent session, and a live diff of its changes](web/public/app.png)
 
 ## Why Hangar
 
@@ -40,11 +40,19 @@ Inspect each session's diff, then commit & push or checkout & pause.
 
 Agents keep working and auto-accept prompts even while the desktop app or TUI is closed; pauses while you're attached.
 
-<br />
+## A closer look
 
-https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
+**Status filtering & grouping** — filter workspaces by Waiting / Busy / Idle / Exited and group them by repo, with live per-status counts.
 
-<br />
+![Status filtering and grouping in the Hangar sidebar](web/public/statuses.png)
+
+**Copilot Session Browser** — search and resume your local GitHub Copilot CLI sessions in a fresh isolated worktree.
+
+![Copilot Session Browser](web/public/browser.png)
+
+**Regenerate with handoff** — restart an agent in place, optionally writing a HANDOFF.md so the fresh agent keeps its context.
+
+![Regenerate an agent with an optional handoff document](web/public/regenerate.png)
 
 ## Installation
 
