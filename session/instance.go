@@ -122,10 +122,12 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 	// Only include diff stats if they exist
 	if i.diffStats != nil {
+		// Only the line counts are persisted. The full diff content is recomputed
+		// on demand for the selected instance, so writing it to state.json would
+		// only bloat the file and amplify writes when diffs are large.
 		data.DiffStats = DiffStatsData{
 			Added:   i.diffStats.Added,
 			Removed: i.diffStats.Removed,
-			Content: i.diffStats.Content,
 		}
 	}
 
@@ -171,7 +173,8 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		diffStats: &git.DiffStats{
 			Added:   data.DiffStats.Added,
 			Removed: data.DiffStats.Removed,
-			Content: data.DiffStats.Content,
+			// Content is intentionally left empty: it is no longer persisted. The
+			// TUI recomputes the full diff on demand for the selected instance.
 		},
 	}
 
@@ -730,6 +733,36 @@ func (i *Instance) UpdateDiffStats() error {
 	}
 
 	stats := i.gitWorktree.Diff()
+	if stats.Error != nil {
+		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
+			// Worktree is not fully set up yet, not an error
+			i.diffStats = nil
+			return nil
+		}
+		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
+	}
+
+	i.diffStats = stats
+	return nil
+}
+
+// UpdateDiffStatsNumstat updates only the added/removed line counts for this
+// instance using a lightweight, timeout-bounded `git diff --numstat`. It mirrors
+// UpdateDiffStats (same started/Paused guards and base-commit tolerance) but
+// does not capture the full diff content, so it is cheap enough for the daemon
+// loop where only the counts feed AutoYes/persistence.
+func (i *Instance) UpdateDiffStatsNumstat(timeout time.Duration) error {
+	if !i.started {
+		i.diffStats = nil
+		return nil
+	}
+
+	if i.Status == Paused {
+		// Keep the previous diff stats if the instance is paused
+		return nil
+	}
+
+	stats := i.gitWorktree.DiffNumstatTimeout(timeout)
 	if stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
 			// Worktree is not fully set up yet, not an error

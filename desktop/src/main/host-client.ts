@@ -29,6 +29,9 @@ export interface WorkspaceInfo {
   added: number;
   removed: number;
   createdUnix: number;
+  // Last time the agent produced output that changed its screen, Unix seconds;
+  // 0 = unknown (no live session or it never changed). Mirrors proto.
+  lastOutputUnix: number;
   runCommand: string;
   running: boolean;
   previewUrl: string;
@@ -187,24 +190,91 @@ export function frame(payload: Buffer): Buffer {
 }
 
 export class FrameDecoder {
-  private buffer = Buffer.alloc(0);
+  // Buffered bytes are held as a list of received chunks plus a running byte
+  // count rather than a single growing Buffer. This keeps push() O(chunk):
+  // we only Buffer.concat the exact bytes of a frame once it has fully
+  // arrived, instead of re-concatenating the entire backlog on every socket
+  // read — which is O(n^2) when one large frame (e.g. a big diff or a terminal
+  // history snapshot) is split across many pipe reads.
+  private chunks: Buffer[] = [];
+  private buffered = 0;
 
   public constructor(private readonly onFrame: (payload: Buffer) => void) {}
 
   public push(chunk: Buffer): void {
-    this.buffer = Buffer.concat([this.buffer, chunk]);
-    while (this.buffer.length >= 4) {
-      const length = this.buffer.readUInt32BE(0);
+    if (chunk.length === 0) {
+      return;
+    }
+    this.chunks.push(chunk);
+    this.buffered += chunk.length;
+
+    while (this.buffered >= 4) {
+      const length = this.peekUInt32BE();
       if (length > MAX_FRAME) {
         throw new Error(`frame too large: ${length}`);
       }
-      if (this.buffer.length < 4 + length) {
+      if (this.buffered < 4 + length) {
         break;
       }
-      const payload = this.buffer.subarray(4, 4 + length);
-      this.buffer = this.buffer.subarray(4 + length);
-      this.onFrame(payload);
+      // The full frame (4-byte length prefix + payload) is buffered: materialize
+      // it once and hand the caller a Buffer view of exactly the payload bytes.
+      const fullFrame = this.take(4 + length);
+      this.onFrame(fullFrame.subarray(4));
     }
+  }
+
+  // Read the leading 4 bytes as a big-endian uint32 without consuming them.
+  // Only called once at least 4 bytes are buffered, so the prefix is complete
+  // even when it is split across multiple chunks.
+  private peekUInt32BE(): number {
+    const first = this.chunks[0];
+    if (first.length >= 4) {
+      return first.readUInt32BE(0);
+    }
+    let value = 0;
+    let read = 0;
+    for (const chunk of this.chunks) {
+      for (let i = 0; i < chunk.length && read < 4; i += 1) {
+        value = value * 256 + chunk[i];
+        read += 1;
+      }
+      if (read === 4) {
+        break;
+      }
+    }
+    return value >>> 0;
+  }
+
+  // Remove and return exactly `n` bytes from the front of the buffered chunks
+  // as a single contiguous Buffer, retaining any trailing remainder for the
+  // next frame. Only called once `n` bytes are known to be available.
+  private take(n: number): Buffer {
+    this.buffered -= n;
+    const first = this.chunks[0];
+    if (first.length === n) {
+      this.chunks.shift();
+      return first;
+    }
+    if (first.length > n) {
+      this.chunks[0] = first.subarray(n);
+      return first.subarray(0, n);
+    }
+    const parts: Buffer[] = [];
+    let collected = 0;
+    while (collected < n) {
+      const chunk = this.chunks[0];
+      const need = n - collected;
+      if (chunk.length <= need) {
+        parts.push(chunk);
+        collected += chunk.length;
+        this.chunks.shift();
+      } else {
+        parts.push(chunk.subarray(0, need));
+        this.chunks[0] = chunk.subarray(need);
+        collected += need;
+      }
+    }
+    return Buffer.concat(parts, n);
   }
 }
 

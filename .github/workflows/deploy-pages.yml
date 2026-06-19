@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - 'web/**'
       - '.github/workflows/deploy-pages.yml'
   pull_request:
     branches:
       - main
+      - dev
     paths:
       - 'web/**'
       - '.github/workflows/deploy-pages.yml'
@@ -49,7 +51,7 @@ jobs:
           path: ./web/out
           
   deploy:
-    if: github.event_name == 'push'  # Only deploy on push to main, not on PR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'  # Only deploy on push to main, not on PR or dev
     permissions:
       pages: write
       id-token: write

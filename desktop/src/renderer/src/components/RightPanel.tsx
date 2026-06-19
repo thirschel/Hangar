@@ -53,7 +53,12 @@ export function RightPanel({ workspace }: RightPanelProps): JSX.Element {
         </div>
         <div className="tab-content">
           <div className="tab-pane" hidden={topTab !== 'changes'}>
-            <ReviewPanel workspace={workspace} embedded onFilesCount={setChangeCount} />
+            <ReviewPanel
+              workspace={workspace}
+              embedded
+              onFilesCount={setChangeCount}
+              active={topTab === 'changes'}
+            />
           </div>
           <div className="tab-pane" hidden={topTab !== 'files'}>
             {filesVisited && <FilesPanel workspace={workspace} embedded />}

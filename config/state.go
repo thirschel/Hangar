@@ -96,7 +96,11 @@ func LoadState() *State {
 	return &state
 }
 
-// SaveState saves the state to disk
+// SaveState saves the state to disk atomically. The serialized JSON is written
+// to a temp file in the same directory (same filesystem, so the rename is
+// atomic) and then renamed over state.json. This guarantees that a crash
+// mid-write or a concurrent reader (the daemon, the Windows session host, or the
+// TUI) never observes a truncated or partially written file.
 func SaveState(state *State) error {
 	configDir, err := GetConfigDir()
 	if err != nil {
@@ -113,7 +117,59 @@ func SaveState(state *State) error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	return os.WriteFile(statePath, data, 0600)
+	return atomicWriteFile(configDir, statePath, data)
+}
+
+// atomicWriteFile writes data to a temp file in dir and then atomically renames
+// it over path, leaving the final file with 0600 permissions. The temp file is
+// always cleaned up on any failure path so a partial write never lingers.
+func atomicWriteFile(dir, path string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, "state-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp state file: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	// Remove the temp file on any early return. Cleared only after a successful
+	// rename, at which point tmpPath no longer refers to an existing file.
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("failed to write temp state file: %w", err)
+	}
+
+	// Flush to stable storage before the rename so the renamed file has complete
+	// contents even if the machine crashes immediately afterwards.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("failed to sync temp state file: %w", err)
+	}
+
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp state file: %w", err)
+	}
+
+	// os.CreateTemp already creates the file with 0600, but set it explicitly so
+	// the final state.json keeps 0600 regardless of platform or umask.
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		return fmt.Errorf("failed to set temp state file permissions: %w", err)
+	}
+
+	// os.Rename atomically replaces an existing destination on both Unix and
+	// Windows (MoveFileEx with MOVEFILE_REPLACE_EXISTING), so readers always see
+	// either the old or the new complete file.
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("failed to replace state file: %w", err)
+	}
+
+	removeTmp = false
+	return nil
 }
 
 // InstanceStorage interface implementation

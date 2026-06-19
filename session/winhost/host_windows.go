@@ -44,6 +44,8 @@ type managedSession interface {
 	resize(cols, rows int) error
 	hasUpdated() (updated, hasPrompt bool)
 	agentStatus() (busy, waiting bool)
+	bracketedPasteEnabled() bool
+	lastOutputUnixMs() int64
 	setAutoYes(enabled bool)
 	armTrustApproval(reason string, expiresAt time.Time)
 	clearTrustApproval()

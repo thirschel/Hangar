@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import crypto from 'node:crypto';
 import type net from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { frame, FrameDecoder, ControlClient } from '../host-client';
@@ -88,6 +89,71 @@ describe('FrameDecoder', () => {
     header.writeUInt32BE((16 << 20) + 1, 0);
 
     expect(() => decoder.push(header)).toThrow('frame too large');
+  });
+
+  it('reassembles a single frame delivered across many 1-byte chunks', () => {
+    const received: Buffer[] = [];
+    const decoder = new FrameDecoder((payload) => received.push(Buffer.from(payload)));
+    const payload = Buffer.from('payload-delivered-one-byte-at-a-time', 'utf8');
+    const encoded = frame(payload);
+
+    for (const byte of encoded) {
+      decoder.push(Buffer.from([byte]));
+    }
+
+    expect(received).toHaveLength(1);
+    expect(received[0].equals(payload)).toBe(true);
+  });
+
+  it('reads a 4-byte length prefix that is split across chunks', () => {
+    const onFrame = vi.fn();
+    const decoder = new FrameDecoder(onFrame);
+    const payload = Buffer.from('split-length-prefix', 'utf8');
+    const encoded = frame(payload);
+
+    // Only part of the 4-byte length prefix has arrived — not enough to decode.
+    decoder.push(encoded.subarray(0, 1));
+    decoder.push(encoded.subarray(1, 3));
+    expect(onFrame).not.toHaveBeenCalled();
+
+    // The 4th length byte completes the prefix, but the payload is still missing.
+    decoder.push(encoded.subarray(3, 4));
+    expect(onFrame).not.toHaveBeenCalled();
+
+    // The remaining payload bytes complete the frame.
+    decoder.push(encoded.subarray(4));
+    expect(onFrame).toHaveBeenCalledOnce();
+    expect(onFrame).toHaveBeenCalledWith(payload);
+  });
+
+  it('delivers several frames (including an empty payload) from one chunk', () => {
+    const onFrame = vi.fn();
+    const decoder = new FrameDecoder(onFrame);
+    const first = Buffer.from('alpha', 'utf8');
+    const empty = Buffer.alloc(0);
+    const third = Buffer.from('gamma', 'utf8');
+
+    decoder.push(Buffer.concat([frame(first), frame(empty), frame(third)]));
+
+    expect(onFrame.mock.calls).toEqual([[first], [empty], [third]]);
+  });
+
+  it('reassembles a large (~1 MiB) frame split across many chunks without error', () => {
+    const received: Buffer[] = [];
+    const decoder = new FrameDecoder((payload) => received.push(Buffer.from(payload)));
+    const payload = crypto.randomBytes(1 << 20);
+    const encoded = frame(payload);
+    const chunkSize = 1024;
+
+    expect(() => {
+      for (let offset = 0; offset < encoded.length; offset += chunkSize) {
+        decoder.push(encoded.subarray(offset, Math.min(offset + chunkSize, encoded.length)));
+      }
+    }).not.toThrow();
+
+    expect(received).toHaveLength(1);
+    expect(received[0].length).toBe(payload.length);
+    expect(received[0].equals(payload)).toBe(true);
   });
 });
 

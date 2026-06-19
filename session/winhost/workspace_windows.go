@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,8 @@ type workspaceManager struct {
 	thresholds  regenThresholds
 	bootFloor   time.Duration // min wait for a (re)started agent to be input-ready
 	submitDelay time.Duration // settle between typing a prompt and the submit Enter
+	confirmWait time.Duration // wait after the submit Enter before sampling for submission (must clear the input-echo window)
+	chunkDelay  time.Duration // gap between keystroke chunks when typing into a non-bracketed-paste agent
 
 	// diffMu guards diffCache. Diff stats are computed off the request path (by a
 	// background refresher) so ListWorkspaces never runs git: git add -N . walks
@@ -94,6 +97,8 @@ func newWorkspaceManager(h *host) *workspaceManager {
 		},
 		bootFloor:   bootReadyFloor,
 		submitDelay: promptSubmitDelay,
+		confirmWait: promptConfirmWait,
+		chunkDelay:  promptChunkDelay,
 	}
 	m.load()
 	return m
@@ -195,13 +200,49 @@ const bootReadyFloor = 3 * time.Second
 // so the CR submits rather than being absorbed into the input.
 const promptSubmitDelay = 350 * time.Millisecond
 
+// promptConfirmWait is how long to wait after the submit Enter before sampling
+// whether the agent accepted it. It MUST exceed statusInputEchoMs (600ms) so the
+// agent's first post-submit output is recorded as activity rather than suppressed
+// as our own input echoing (which would make submission undetectable — see
+// conpty_windows.go updateStatusFrom / agentStatus).
+const promptConfirmWait = 750 * time.Millisecond
+
+// promptChunkDelay is the gap between keystroke chunks when typing a prompt into an
+// agent that has NOT enabled bracketed paste, so the CLI sees incremental typing
+// rather than one burst its input editor may mishandle (dropping the trailing CR).
+const promptChunkDelay = 15 * time.Millisecond
+
+// promptChunkRunes bounds each keystroke chunk (in runes) for the non-bracketed
+// "typed" fallback. Chunking never splits a rune.
+const promptChunkRunes = 48
+
+// Bracketed-paste markers (DEC 2004). When the agent has bracketed paste enabled,
+// the prompt text is framed so the CLI inserts it as one block and the following CR
+// submits it — the same contract the desktop xterm uses (TermView.tsx). The submit
+// CR is ALWAYS sent as a separate write, never inside the markers.
+const (
+	bracketedPasteStart = "\x1b[200~"
+	bracketedPasteEnd   = "\x1b[201~"
+)
+
+// focusInSeq is the terminal focus-in report (DEC mode 1004). The daemon sends it
+// before submitting a prompt so a focus-reporting CLI (copilot) treats its terminal
+// as focused and will submit on Enter; without it, a prior focus-out (emitted by the
+// desktop xterm when another pane/modal took focus) leaves the agent accepting typed
+// text but refusing to submit. Disable with HANGAR_SUBMIT_FOCUS=0.
+const focusInSeq = "\x1b[I"
+
+// submitEnterAttempts bounds how many times the submit Enter is (re)sent while
+// waiting for the agent to accept the prompt.
+const submitEnterAttempts = 3
+
 const trustApprovalTTL = 15 * time.Second
 
 const (
-	// handoffPrompt and seedPrompt are SINGLE-LINE on purpose: a multi-line prompt
-	// (embedded \n) is typed into the agent's editor as newlines and the trailing
-	// Enter then fails to submit the buffer, so the prompt is never sent. One line
-	// + one Enter is the submit contract the desktop composer also uses.
+	// handoffPrompt and seedPrompt are SINGLE-LINE on purpose: the non-bracketed
+	// "typed" fallback would send an embedded \n as a literal newline in the agent's
+	// editor and the trailing Enter would then add a line instead of submitting. One
+	// line + one separate Enter is the submit contract the desktop terminal uses.
 	handoffPrompt = "You are about to be replaced by a fresh agent in this same workspace. Before that, write a " +
 		"handoff document named HANDOFF.md in the current working directory. Capture, concisely: " +
 		"Task — what you were asked to do and the goal; " +
@@ -408,9 +449,11 @@ func (w *workspace) worktreeFor() *git.GitWorktree {
 func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 	alive := false
 	busy, waiting := false, false
+	var lastOutMs int64
 	if s, ok := m.host.getSession(w.SessionName); ok {
 		alive = s.alive()
 		busy, waiting = s.agentStatus()
+		lastOutMs = s.lastOutputUnixMs()
 	}
 	regenerating, phase := false, ""
 	if regen, ok := m.regens[w.ID]; ok {
@@ -424,7 +467,8 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		ID: w.ID, Title: w.Title, Program: w.Program, RepoPath: w.RepoPath,
 		WorktreePath: w.WorktreePath, Branch: w.Branch, SessionName: w.SessionName,
 		Alive: alive, AutoYes: w.AutoYes, Added: added, Removed: removed, CreatedUnix: w.CreatedUnix,
-		RunCommand: w.RunCommand, Running: running, PreviewURL: previewURL,
+		LastOutputUnix: lastOutMs / 1000, // UnixMilli -> Unix seconds; 0 when no live session/no output
+		RunCommand:     w.RunCommand, Running: running, PreviewURL: previewURL,
 		Busy: busy, Waiting: waiting,
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 	}
@@ -890,51 +934,200 @@ func (m *workspaceManager) clearWorkspaceTrustApproval(id string) {
 	}
 }
 
-// submitPrompt types text into the agent's input box and submits it. The text and
-// the submit Enter are sent as SEPARATE writes with a settle delay between them:
-// a trailing CR in the same write as a long paste is coalesced into the agent's
-// input as a newline instead of submitting, so the agent (copilot) only treats the
-// CR as "send" once it arrives as its own keystroke after the pasted text has
-// rendered. The Enter is retried until the agent starts working (goes busy), since
-// the first CR can still be swallowed while the paste is mid-render.
-func (m *workspaceManager) submitPrompt(id, text string) {
+// submitPrompt types text into the agent's input box and submits it, then reports
+// the injection method used and whether the agent accepted the prompt.
+//
+// The text and the submit Enter are ALWAYS sent as separate writes. How the text is
+// typed depends on the agent's terminal state, mirroring the desktop terminal's
+// proven contract (TermView.tsx):
+//   - bracketed paste (DEC 2004) enabled  -> frame the text in paste markers so the
+//     CLI inserts it as one block; the following separate CR submits it.
+//   - otherwise                           -> type it in small chunks so the CLI sees
+//     incremental keystrokes, not one burst whose trailing CR it would drop.
+//
+// A raw single-burst write + bare CR (the previous behavior, still available via
+// HANGAR_SUBMIT_MODE=burst for diagnostics) does NOT reliably submit into Ink/React
+// CLIs like copilot and claude — the prompt is left sitting in the input box.
+func (m *workspaceManager) submitPrompt(id, text string) (method string, submitted bool) {
 	s := m.workspaceSession(id)
 	if s == nil {
 		m.host.logger.Printf("regenerate: submitPrompt found no live session for ws=%s", id)
-		return
+		return "", false
 	}
 	oneLine := strings.Join(strings.Fields(text), " ")
-	_ = s.sendKeys([]byte(oneLine))
-	submitted := false
-	for attempt := 0; attempt < 4; attempt++ {
+	bracketed := s.bracketedPasteEnabled()
+	method = resolveSubmitMethod(bracketed, os.Getenv("HANGAR_SUBMIT_MODE"))
+	enter := chooseEnterBytes(os.Getenv("HANGAR_SUBMIT_ENTER"))
+	focus := os.Getenv("HANGAR_SUBMIT_FOCUS") != "0"
+
+	// Tell the agent its terminal is focused before submitting. The desktop xterm
+	// emits a focus-out (ESC[O) when the Regenerate modal/another pane takes focus,
+	// and focus-reporting CLIs (copilot) then ACCEPT typed text but REFUSE to submit
+	// on Enter until they see a focus-in (ESC[I) — which a manual click sends. A
+	// freshly-booted agent (the seed target) never got a focus-out, which is why the
+	// seed submitted while the live-agent handoff did not. The submit Enter itself is
+	// a bare CR — exactly what the desktop xterm sends — so the byte was never the
+	// problem; only the focus context differed.
+	if focus {
+		_ = s.sendKeys([]byte(focusInSeq))
+	}
+
+	for _, w := range submitWrites(oneLine, method, promptChunkRunes) {
+		_ = s.sendKeys(w)
+		if method == submitChunk && m.chunkDelay > 0 {
+			time.Sleep(m.chunkDelay)
+		}
+	}
+
+	confirm := m.effectiveConfirmWait()
+	baseline := s.lastOutputUnixMs()
+	for attempt := 0; attempt < submitEnterAttempts; attempt++ {
 		if m.submitDelay > 0 {
 			time.Sleep(m.submitDelay)
 		}
-		_ = s.sendKeys([]byte{'\r'})
-		if m.submitDelay > 0 {
-			time.Sleep(m.submitDelay)
+		if focus {
+			_ = s.sendKeys([]byte(focusInSeq))
 		}
+		_ = s.sendKeys(enter)
+		if confirm > 0 {
+			time.Sleep(confirm)
+		}
+		// The agent accepted the prompt if it started producing output AFTER the
+		// echo window. busy and an advanced lastOutput are both side-effect-free and
+		// (unlike a raw busy check right after the keystroke) not masked as our own
+		// input echoing, because we waited past statusInputEchoMs.
 		if busy, _ := s.agentStatus(); busy {
 			submitted = true
 			break
 		}
+		if s.lastOutputUnixMs() != baseline {
+			submitted = true
+			break
+		}
 	}
-	m.host.logger.Printf("regenerate: submitPrompt ws=%s len=%d submitted=%v", id, len(oneLine), submitted)
+	m.host.logger.Printf("regenerate: submitPrompt ws=%s len=%d method=%s bracketed=%v focus=%v submitted=%v",
+		id, len(oneLine), method, bracketed, focus, submitted)
+	return method, submitted
 }
 
-// logScreenTail logs the last chunk of the agent's visible screen (whitespace
-// collapsed) so a manual-QA run can show whether a prompt actually reached and was
-// submitted by the agent.
+// chooseEnterBytes selects the keystroke(s) used to submit a prompt. Default is a
+// bare CR (\r) — verified to be exactly what the desktop xterm sends for Enter, and
+// what submits when a user presses it manually. The HANGAR_SUBMIT_ENTER override
+// (cr|lf|crlf) forces another line ending for an agent that might need it.
+func chooseEnterBytes(override string) []byte {
+	switch strings.ToLower(strings.TrimSpace(override)) {
+	case "lf", "n", "\n":
+		return []byte{'\n'}
+	case "crlf":
+		return []byte{'\r', '\n'}
+	default:
+		return []byte{'\r'}
+	}
+}
+
+// effectiveConfirmWait is confirmWait with an optional HANGAR_SUBMIT_SETTLE_MS
+// diagnostic override (milliseconds).
+func (m *workspaceManager) effectiveConfirmWait() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("HANGAR_SUBMIT_SETTLE_MS")); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return m.confirmWait
+}
+
+const (
+	submitPasteMode = "paste"
+	submitChunk     = "chunk"
+	submitBurst     = "burst"
+)
+
+// resolveSubmitMethod picks how to inject a prompt. An explicit HANGAR_SUBMIT_MODE
+// override (paste|chunk|burst) wins for diagnostics; otherwise the method follows
+// the agent's runtime bracketed-paste state, which keeps it agent-agnostic (it keys
+// off the terminal mode the agent set, not the program name).
+func resolveSubmitMethod(bracketed bool, override string) string {
+	switch strings.ToLower(strings.TrimSpace(override)) {
+	case submitPasteMode:
+		return submitPasteMode
+	case submitChunk:
+		return submitChunk
+	case submitBurst:
+		return submitBurst
+	}
+	if bracketed {
+		return submitPasteMode
+	}
+	return submitChunk
+}
+
+// submitWrites returns the keystroke writes that type oneLine into the agent's
+// input box for the given method, WITHOUT the trailing submit CR (the caller sends
+// that separately so the CLI commits the paste/typing first).
+func submitWrites(oneLine, method string, chunkRunes int) [][]byte {
+	switch method {
+	case submitPasteMode:
+		return [][]byte{[]byte(bracketedPasteStart + oneLine + bracketedPasteEnd)}
+	case submitBurst:
+		return [][]byte{[]byte(oneLine)}
+	default: // chunk
+		out := [][]byte{}
+		for _, c := range chunkString(oneLine, chunkRunes) {
+			out = append(out, []byte(c))
+		}
+		return out
+	}
+}
+
+// chunkString splits s into substrings of at most n runes each (never splitting a
+// multi-byte rune). n <= 0 or a short string returns s unsplit.
+func chunkString(s string, n int) []string {
+	if n <= 0 {
+		return []string{s}
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return []string{s}
+	}
+	var out []string
+	for len(r) > 0 {
+		k := n
+		if k > len(r) {
+			k = len(r)
+		}
+		out = append(out, string(r[:k]))
+		r = r[k:]
+	}
+	return out
+}
+
+// logScreenTail logs the agent's bottom visible rows (where the input box is) plus
+// its bracketed-paste state, so a manual-QA run can see whether a prompt actually
+// landed in the box and whether it cleared after submit.
 func (m *workspaceManager) logScreenTail(id, label string) {
 	s := m.workspaceSession(id)
 	if s == nil {
 		return
 	}
-	scr := strings.Join(strings.Fields(s.capture(false, false)), " ")
-	if len(scr) > 180 {
-		scr = scr[len(scr)-180:]
+	m.host.logger.Printf("regenerate %s ws=%s bracketed=%v tail=%q",
+		label, id, s.bracketedPasteEnabled(), tailRows(s.capture(false, false), 6))
+}
+
+// tailRows returns the last n non-blank rows of a captured screen, joined by " | "
+// so a single log line shows the input region (the bottom-most rows) instead of the
+// status bar that a flat character tail would surface.
+func tailRows(screen string, n int) string {
+	lines := strings.Split(screen, "\n")
+	trimmed := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) != "" {
+			trimmed = append(trimmed, strings.TrimRight(ln, " "))
+		}
 	}
-	m.host.logger.Printf("regenerate %s ws=%s screen=%q", label, id, scr)
+	if n > 0 && len(trimmed) > n {
+		trimmed = trimmed[len(trimmed)-n:]
+	}
+	return strings.Join(trimmed, " | ")
 }
 
 func (m *workspaceManager) restartAgent(id string, cols, rows int) error {

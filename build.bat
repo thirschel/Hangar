@@ -16,7 +16,7 @@ if %errorlevel% equ 0 (
 )
 
 echo Building Hangar...
-"%GO%" build -o cs.exe .
+"%GO%" build -ldflags "-s -w" -o cs.exe .
 if %errorlevel% neq 0 (
     echo Build failed.
     exit /b 1

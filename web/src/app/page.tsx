@@ -2,6 +2,10 @@ import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import logo from "../../public/logo.png";
+import appShot from "../../public/app.png";
+import statusesShot from "../../public/statuses.png";
+import browserShot from "../../public/browser.png";
+import regenerateShot from "../../public/regenerate.png";
 import styles from "./page.module.css";
 
 const ThemeToggle = dynamic(() => import("./components/ThemeToggle"), {});
@@ -19,7 +23,11 @@ const shellInstall = "curl -fsSL https://raw.githubusercontent.com/smtg-ai/claud
 const features = [
   {
     title: "Runs natively on Windows",
-    body: "No WSL, no tmux. A background session host owns a real Windows console (ConPTY) per agent; the cs TUI talks to it over a named pipe and renders via a VT emulator. Sessions survive TUI restarts.",
+    body: "No WSL, no tmux. A background session host owns a real Windows console per agent; the cs TUI talks to it over a named pipe and renders via a VT emulator, so sessions survive TUI restarts.",
+  },
+  {
+    title: "Your tools, PATH & auth",
+    body: "Each agent runs in a real Windows console (ConPTY), so it inherits the terminal you already use — the tools and apps on your PATH, your internal tooling, and, most importantly, your existing auth. If your CLI works in your terminal, it works in Hangar.",
   },
   {
     title: "Supervise multiple agents at once",
@@ -36,10 +44,6 @@ const features = [
   {
     title: "Background + AutoYes",
     body: "Agents keep working and auto-accept prompts even while the TUI is closed; AutoYes pauses automatically while you're attached.",
-  },
-  {
-    title: "Attach / detach",
-    body: "Press Enter to attach to a session, Ctrl+q to detach back to the dashboard; Ctrl+c passes through to the agent.",
   },
 ];
 
@@ -82,7 +86,7 @@ export default function Home() {
           <p className={styles.eyebrow}>A hangar for all your copilots.</p>
           <h1 id="hero-title">Hangar</h1>
           <p className={styles.positioning}>
-            The Windows desktop app for running multiple AI coding agents in parallel.
+            A lightweight harness around your favorite CLI coding agent for managing agent sessions.
           </p>
           <div className={styles.ctaGroup} aria-label="Primary actions">
             <a
@@ -100,14 +104,11 @@ export default function Home() {
         </section>
 
         <div className={styles.demoVideo}>
-          <video
-            controls
-            autoPlay
-            muted
-            loop
-            playsInline
-            className={styles.video}
-            src="https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a"
+          <Image
+            src={appShot}
+            alt="Hangar Desktop — workspaces, the active agent session, and a live diff of its changes"
+            className={styles.heroShot}
+            priority
           />
         </div>
 
@@ -124,6 +125,50 @@ export default function Home() {
                 <p>{feature.body}</p>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className={styles.showcase} id="screenshots" aria-labelledby="showcase-title">
+          <div className={styles.sectionIntro}>
+            <p className={styles.sectionKicker}>Screenshots</p>
+            <h2 id="showcase-title">A closer look</h2>
+          </div>
+          <div className={styles.showcaseGrid}>
+            <figure className={styles.shot}>
+              <div className={styles.shotFrame}>
+                <Image
+                  src={statusesShot}
+                  alt="Status filtering and grouping in the Hangar sidebar"
+                  className={styles.shotImage}
+                />
+              </div>
+              <figcaption className={styles.shotCaption}>
+                Status filtering &amp; grouping — filter workspaces by Waiting / Busy / Idle / Exited and group them
+                by repo, with live per-status counts.
+              </figcaption>
+            </figure>
+            <figure className={styles.shot}>
+              <div className={styles.shotFrame}>
+                <Image src={browserShot} alt="Copilot Session Browser" className={styles.shotImage} />
+              </div>
+              <figcaption className={styles.shotCaption}>
+                Copilot Session Browser — search and resume your local GitHub Copilot CLI sessions in a fresh
+                isolated worktree.
+              </figcaption>
+            </figure>
+            <figure className={styles.shot}>
+              <div className={styles.shotFrame}>
+                <Image
+                  src={regenerateShot}
+                  alt="Regenerate an agent with an optional handoff document"
+                  className={styles.shotImage}
+                />
+              </div>
+              <figcaption className={styles.shotCaption}>
+                Regenerate with handoff — restart an agent in place, optionally writing a HANDOFF.md so the fresh
+                agent keeps its context.
+              </figcaption>
+            </figure>
           </div>
         </section>
 

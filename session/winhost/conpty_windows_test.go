@@ -211,6 +211,170 @@ func TestMaybeAutoYesForceApprovalIsScopedToTrustFolder(t *testing.T) {
 	}
 }
 
+// TestAutoYesTickNeededSkipsWhenWriteGenUnchanged exercises the idle-CPU gate:
+// the autoYesLoop renders/hashes/classifies only when the emulator write
+// generation advanced (drain wrote output) or a trust approval is pending; an
+// idle session whose generation is unchanged is skipped and costs nothing.
+func TestAutoYesTickNeededSkipsWhenWriteGenUnchanged(t *testing.T) {
+	s := newConptySession("gate", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+
+	// The first tick (not yet primed) always runs so the status baseline is
+	// established, even before any output (write generation still 0).
+	if !s.autoYesTickNeeded(s.writeGen.Load(), 0, false) {
+		t.Fatal("first tick (not primed) must always run")
+	}
+
+	// drain() bumps writeGen after each emulator write; a new generation means the
+	// screen may have changed, so a primed tick must run.
+	_, _ = s.emu.Write([]byte("thinking...\r\n"))
+	s.writeGen.Add(1)
+	gen := s.writeGen.Load()
+	if gen == 0 {
+		t.Fatal("writeGen.Add should advance the generation")
+	}
+	if !s.autoYesTickNeeded(gen, 0, true) {
+		t.Fatal("a changed write generation must run the tick")
+	}
+
+	// No new output: the generation matches the previous tick -> skip. This is the
+	// win that makes idle and detached sessions effectively free.
+	if s.autoYesTickNeeded(gen, gen, true) {
+		t.Fatal("an unchanged write generation must skip the tick")
+	}
+
+	// A pending trust approval expires on a timer, not on screen output, so the
+	// loop must keep running even while the generation is unchanged.
+	s.armTrustApproval("unit", time.Now().Add(time.Minute))
+	if !s.autoYesTickNeeded(gen, gen, true) {
+		t.Fatal("must not skip while a trust approval is pending (its expiry is time-based)")
+	}
+	s.clearTrustApproval()
+	if s.autoYesTickNeeded(gen, gen, true) {
+		t.Fatal("must skip again once the trust approval is cleared")
+	}
+}
+
+// TestSetAutoYesWakesGatedLoopOnStaticScreen guards the interaction between the
+// change-gate and the runtime SetAutoYes RPC: enabling AutoYes while the agent is
+// blocked on an already-displayed prompt produces no new emulator output, so the
+// generation does not advance on its own. setAutoYes(true) must bump writeGen so
+// the next gated tick still runs and policy-evaluates the on-screen prompt;
+// otherwise the prompt would never be auto-approved (the agent would hang).
+func TestSetAutoYesWakesGatedLoopOnStaticScreen(t *testing.T) {
+	s := newConptySession("wake", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+
+	// A prompt arrives and is rendered; the gated loop processes it and catches up
+	// to this generation. AutoYes is still off, so nothing was approved.
+	_, _ = s.emu.Write([]byte("Do you want to run this command?\r\n" +
+		"  1. Yes\r\n  3. No, and tell Copilot what to do differently (Esc to stop)"))
+	s.writeGen.Add(1)
+	gen := s.writeGen.Load()
+
+	// Screen is now static (agent blocked waiting for input): a primed tick whose
+	// generation matches the last one would skip.
+	if s.autoYesTickNeeded(gen, gen, true) {
+		t.Fatal("precondition: a static screen with AutoYes off should skip")
+	}
+
+	// Enabling AutoYes at runtime must wake the loop even though no new output
+	// occurred, so the already-displayed prompt gets evaluated.
+	s.setAutoYes(true)
+	if s.writeGen.Load() == gen {
+		t.Fatal("setAutoYes(true) must advance writeGen to wake the gated loop")
+	}
+	if !s.autoYesTickNeeded(s.writeGen.Load(), gen, true) {
+		t.Fatal("after setAutoYes(true) the next tick must run on a static prompt")
+	}
+}
+
+// TestUpdateStatusFromMatchesUpdateStatus proves the render-once refactor is
+// behavior-preserving: updateStatusFrom over a prerendered screen reaches the
+// same status state as updateStatus rendering the screen itself.
+func TestUpdateStatusFromMatchesUpdateStatus(t *testing.T) {
+	content := []byte("Do you want to run this command?\r\n" +
+		"  3. No, and tell Copilot what to do differently (Esc to stop)")
+
+	a := newConptySession("a", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	_, _ = a.emu.Write(content)
+	a.updateStatus()
+
+	b := newConptySession("b", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	_, _ = b.emu.Write(content)
+	b.updateStatusFrom(plainScreen(b.emu))
+
+	a.mu.Lock()
+	aHash, aPrompt := a.statusHash, a.statusPrompt
+	a.mu.Unlock()
+	b.mu.Lock()
+	bHash, bPrompt := b.statusHash, b.statusPrompt
+	b.mu.Unlock()
+	if aHash != bHash || aPrompt != bPrompt {
+		t.Fatalf("updateStatusFrom diverged: hash %q vs %q, prompt %v vs %v", bHash, aHash, bPrompt, aPrompt)
+	}
+	if ba, wa := a.agentStatus(); !wa || ba {
+		t.Fatalf("updateStatus: prompt should read waiting, got busy=%v waiting=%v", ba, wa)
+	}
+	if bb, wb := b.agentStatus(); !wb || bb {
+		t.Fatalf("updateStatusFrom: prompt should read waiting, got busy=%v waiting=%v", bb, wb)
+	}
+}
+
+// TestUpdateStatusFromUnchangedContentIsNoOp proves skipping a tick is safe:
+// re-processing the same plain screen does not advance lastChangeMs (which would
+// falsely re-mark the agent busy), so a skipped unchanged tick loses nothing.
+func TestUpdateStatusFromUnchangedContentIsNoOp(t *testing.T) {
+	s := newConptySession("noop", "copilot", "", "cmd", 80, 24, false).(*conptySession)
+	_, _ = s.emu.Write([]byte("thinking...\r\nwriting code\r\n"))
+	plain := plainScreen(s.emu)
+
+	s.updateStatusFrom(plain)
+	s.mu.Lock()
+	first := s.lastChangeMs
+	s.mu.Unlock()
+	if first == 0 {
+		t.Fatal("changing content should set lastChangeMs")
+	}
+
+	time.Sleep(10 * time.Millisecond)
+	s.updateStatusFrom(plain) // same content -> must be a no-op for lastChangeMs
+	s.mu.Lock()
+	second := s.lastChangeMs
+	s.mu.Unlock()
+	if second != first {
+		t.Fatalf("unchanged content advanced lastChangeMs (%d -> %d); skipping would not be equivalent", first, second)
+	}
+}
+
+// TestMaybeAutoYesFromMatchesMaybeAutoYes proves the AutoYes classifier reaches
+// the same decision whether it renders the screen itself (maybeAutoYes) or runs
+// over the prerendered screen the loop shares (maybeAutoYesFrom).
+func TestMaybeAutoYesFromMatchesMaybeAutoYes(t *testing.T) {
+	mk := func(name string) *conptySession {
+		s := newConptySession(name, "copilot", "", "cmd", 80, 24, true).(*conptySession)
+		_, _ = s.emu.Write([]byte("Press enter to continue"))
+		return s
+	}
+
+	a := mk("a")
+	a.maybeAutoYes()
+	a.mu.Lock()
+	fpA := a.lastPromptFP
+	a.mu.Unlock()
+
+	b := mk("b")
+	b.maybeAutoYesFrom(plainScreen(b.emu))
+	b.mu.Lock()
+	fpB := b.lastPromptFP
+	b.mu.Unlock()
+
+	if fpA == "" || fpB == "" {
+		t.Fatalf("expected both paths to approve the safe prompt, got fpA=%q fpB=%q", fpA, fpB)
+	}
+	if fpA != fpB {
+		t.Fatalf("maybeAutoYesFrom recorded a different fingerprint: %q vs %q", fpB, fpA)
+	}
+}
+
 func TestScrollbackANSI(t *testing.T) {
 	s := newConptySession("hist", "copilot", "", "cmd", 40, 3, false).(*conptySession)
 	_, _ = s.emu.Write([]byte("\x1b[31mRED-00\x1b[0m\r\n" +

@@ -200,6 +200,16 @@ user, not per worktree.
 - **Status heuristics.** `busy` = screen content changed within ~1.5s and not at a prompt; **input echo is
   ignored** (changes within 600ms of `sendKeys` don't count, else typing lit the spinner); **`waiting`
   takes priority over `busy`**. Freshness is bounded by the app's UI-refresh interval (Settings).
+- **Programmatic prompt submission needs a focus-in, not just text + Enter.** Injecting a prompt into a
+  live agent (Regenerate handoff/seed: `submitPrompt`, `workspace_windows.go`) and pressing Enter leaves
+  it **sitting in the input box unsent** for focus-reporting CLIs (copilot): when the Regenerate
+  modal/another pane takes focus, the desktop xterm sends the agent a **focus-out (`ESC[O`)**, after
+  which it accepts typed text but won't submit until it sees a **focus-in (`ESC[I`)**. The fix sends
+  `ESC[I` before submitting (the seed worked only because a just-booted agent never got a focus-out).
+  The submit key is a bare `\r` — byte-identical to what xterm sends for a manual Enter, so the byte was
+  never the issue. Text is typed via bracketed paste (`decModes[2004]`) when on, else in chunks; submit
+  acceptance is detected only **after** the 600 ms input-echo window (busy or advanced `lastOutputUnixMs`).
+  Knobs: `HANGAR_SUBMIT_FOCUS=0`, `HANGAR_SUBMIT_MODE`, `HANGAR_SUBMIT_ENTER`, `HANGAR_SUBMIT_SETTLE_MS`.
 - **Stop the stale daemon after a Go rebuild.** The app reconnects to the *existing* daemon over the
   SID-named pipe, so a rebuilt `dist\cs.exe` won't be used until the old process is stopped
   (`Stop-Process -Id <pid>`; find it via `Get-CimInstance Win32_Process -Filter "Name='cs.exe'"`). The app

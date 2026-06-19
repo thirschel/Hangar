@@ -6,6 +6,7 @@ import (
 	"hangar/log"
 	"hangar/session"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
@@ -374,15 +375,40 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	default:
 	}
 
+	// Muted relative time since the agent last produced output (e.g. "5m"),
+	// rendered as a small trailing suffix on the title line just before the status
+	// icon. humanizeSince returns "" for a zero activity time, in which case the
+	// suffix is omitted. It is also dropped when it would starve the title of width
+	// — the title is primary. activityWidth includes a leading space separator.
+	activityText := humanizeSince(i.EffectiveActivityTime(), time.Now())
+	activityWidth := 0
+	if activityText != "" {
+		w := runewidth.StringWidth(activityText) + 1
+		if r.width-3-runewidth.StringWidth(prefix)-1-w >= 4 {
+			activityWidth = w
+		} else {
+			activityText = ""
+		}
+	}
+
 	// Cut the title if it's too long
 	titleText := i.Title
-	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1
+	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1 - activityWidth
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
 		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
 	}
+
+	// Inherit the title line's background (selected highlight / pulse) so the muted
+	// suffix blends in, mirroring how the diff stats inherit descS's background.
+	activitySuffix := ""
+	if activityText != "" {
+		activitySuffix = browserMutedStyle.Background(titleS.GetBackground()).Render(" " + activityText)
+	}
+
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
+		lipgloss.Place(r.width-3-activityWidth, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
+		activitySuffix,
 		" ",
 		join,
 	))
