@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.7.0](https://github.com/thirschel/Hangar/compare/v1.6.2...v1.7.0) (2026-06-19)
+
+### Features
+
+* add per-phase timing for workspace create (stuck "Creating…") ([#71](https://github.com/thirschel/Hangar/issues/71)) ([0241b5f](https://github.com/thirschel/Hangar/commit/0241b5fb5d40d5310016711fa5fdfd19c0588d4e))
+
+### Bug Fixes
+
+* **desktop:** force terminal repaints under software compositing (RDP) ([#70](https://github.com/thirschel/Hangar/issues/70)) ([e2f14b1](https://github.com/thirschel/Hangar/commit/e2f14b1002267d18bf06440ad95a25a49cc5be4f))
+
 ## [1.6.2](https://github.com/thirschel/Hangar/compare/v1.6.1...v1.6.2) (2026-06-19)
 
 ### Bug Fixes
