@@ -56,19 +56,47 @@ func statAndCheckSize(path string, maxBytes int64) (int64, error) {
 
 const inUseFreshness = 5 * time.Minute
 
+// eventsCacheEntry caches the derived result of scanning a session's events.jsonl.
+// It is validated by the file's size and modification time (mirroring the on-disk
+// index in index.go), so an unchanged file is never re-scanned on a repeat browse.
+type eventsCacheEntry struct {
+	size    int64
+	modTime time.Time
+	result  eventsScanResult
+}
+
+// discoverer owns the in-memory events-scan cache so that re-browsing only
+// re-reads session files whose events.jsonl actually changed. The package-level
+// Discover/DiscoverWithStats entry points share a single long-lived discoverer
+// (defaultDiscoverer) so the cache persists across browse calls. The cache is
+// guarded by a mutex because discovery fans out across a worker pool.
+type discoverer struct {
+	mu    sync.Mutex
+	cache map[string]eventsCacheEntry
+}
+
+func newDiscoverer() *discoverer {
+	return &discoverer{cache: make(map[string]eventsCacheEntry)}
+}
+
+// defaultDiscoverer is the process-wide discoverer used by Discover and
+// DiscoverWithStats; its events cache lives for the lifetime of the process so
+// repeat browses skip re-scanning unchanged sessions.
+var defaultDiscoverer = newDiscoverer()
+
 // Discover lists and parses local GitHub Copilot CLI sessions.
 func Discover() ([]Session, error) {
-	sessions, _, err := discover()
+	sessions, _, err := defaultDiscoverer.discover()
 	return sessions, err
 }
 
 // DiscoverWithStats is like Discover but also returns the number of sessions that
 // were skipped due to per-session parse errors (surfaced as a footer count in the UI).
 func DiscoverWithStats() ([]Session, int, error) {
-	return discover()
+	return defaultDiscoverer.discover()
 }
 
-func discover() ([]Session, int, error) {
+func (d *discoverer) discover() ([]Session, int, error) {
 	root := Root()
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -106,7 +134,7 @@ func discover() ([]Session, int, error) {
 		go func() {
 			defer wg.Done()
 			for entry := range jobs {
-				session, parseErr := parseSession(root, entry.Name())
+				session, parseErr := d.parseSession(root, entry.Name())
 				if parseErr != nil {
 					perSessionErrors.Add(1)
 				}
@@ -135,7 +163,7 @@ func discover() ([]Session, int, error) {
 	return sessions, skipped, nil
 }
 
-func parseSession(root, dirName string) (Session, error) {
+func (d *discoverer) parseSession(root, dirName string) (Session, error) {
 	dir := filepath.Join(root, dirName)
 	session := Session{Dir: dir}
 
@@ -170,7 +198,7 @@ func parseSession(root, dirName string) (Session, error) {
 	session.CreatedAt = parseWorkspaceTime(workspace["created_at"])
 	session.UpdatedAt = parseWorkspaceTime(workspace["updated_at"])
 
-	if hasEvents, scanErr := populateFromEvents(&session); scanErr != nil {
+	if hasEvents, scanErr := d.populateFromEvents(&session); scanErr != nil {
 		session.HasEvents = hasEvents
 		logWarningf("failed to scan copilot events %s: %v", dir, scanErr)
 		err = scanErr
@@ -242,7 +270,7 @@ func parseWorkspaceTime(value string) time.Time {
 	return parsed
 }
 
-func populateFromEvents(session *Session) (bool, error) {
+func (d *discoverer) populateFromEvents(session *Session) (bool, error) {
 	eventsPath := filepath.Join(session.Dir, "events.jsonl")
 	info, err := os.Stat(eventsPath)
 	if err != nil {
@@ -255,11 +283,46 @@ func populateFromEvents(session *Session) (bool, error) {
 		return false, nil
 	}
 
-	result, err := scanEvents(eventsPath, true, true)
-	if err != nil {
-		return true, err
+	// Reuse the cached scan when the file is byte-for-byte unchanged (same size
+	// and modification time), mirroring index.go's buildEntry. This avoids
+	// re-reading every unchanged session's events.jsonl on a repeat browse.
+	result, ok := d.cachedScan(session.Dir, info.Size(), info.ModTime())
+	if !ok {
+		result, err = scanEvents(eventsPath, true, true)
+		if err != nil {
+			return true, err
+		}
+		d.storeScan(session.Dir, info.Size(), info.ModTime(), result)
 	}
 
+	applyEventsResult(session, result)
+	return true, nil
+}
+
+// cachedScan returns the cached events-scan result for dir when the cached entry
+// matches the supplied size and modification time, mirroring the index cache's
+// invalidation rule.
+func (d *discoverer) cachedScan(dir string, size int64, modTime time.Time) (eventsScanResult, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if entry, ok := d.cache[dir]; ok && entry.size == size && entry.modTime.Equal(modTime) {
+		return entry.result, true
+	}
+	return eventsScanResult{}, false
+}
+
+// storeScan records the events-scan result for dir keyed by size and modTime so a
+// subsequent browse of an unchanged session can skip the scan.
+func (d *discoverer) storeScan(dir string, size int64, modTime time.Time, result eventsScanResult) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.cache[dir] = eventsCacheEntry{size: size, modTime: modTime, result: result}
+}
+
+// applyEventsResult merges a scan result into session using the live session
+// fields (so workspace-derived values still take precedence). It is applied on
+// both a fresh scan and a cache hit so the two paths produce identical sessions.
+func applyEventsResult(session *Session, result eventsScanResult) {
 	if result.originRoot != "" {
 		if v := validateOriginRoot(result.originRoot); v != "" {
 			session.OriginRoot = v
@@ -275,8 +338,6 @@ func populateFromEvents(session *Session) (bool, error) {
 		session.Repository = result.repository
 	}
 	session.firstUserMsg = result.firstUserMsg
-
-	return true, nil
 }
 
 // IsInUse reports whether the session directory currently has a fresh inuse.*.lock.
@@ -290,14 +351,37 @@ func IsInUse(dir string) bool {
 	return inUse
 }
 
+// lockNamePrefix and lockNameSuffix bracket a Copilot in-use lock file name
+// (inuse.<pid>.lock). A directory entry is a lock candidate only when it is long
+// enough to carry a non-overlapping prefix and suffix, exactly matching the old
+// filepath.Glob("inuse.*.lock") pattern (which required at least one character —
+// possibly empty — between the two via "*").
+const (
+	lockNamePrefix = "inuse."
+	lockNameSuffix = ".lock"
+)
+
 func sessionInUse(dir string, now time.Time) (bool, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "inuse.*.lock"))
+	// A single ReadDir replaces a per-session filepath.Glob (which itself reads
+	// the directory and then re-stats every match); we filter and use the entry's
+	// own info in one pass instead.
+	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	for _, match := range matches {
-		info, err := os.Stat(match)
+	threshold := now.Add(-inUseFreshness)
+	for _, entry := range entries {
+		name := entry.Name()
+		if len(name) < len(lockNamePrefix)+len(lockNameSuffix) ||
+			!strings.HasPrefix(name, lockNamePrefix) ||
+			!strings.HasSuffix(name, lockNameSuffix) {
+			continue
+		}
+		info, err := entry.Info()
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -305,7 +389,7 @@ func sessionInUse(dir string, now time.Time) (bool, error) {
 			return false, err
 		}
 		// Cross-platform heuristic: PID liveness is platform-specific, so recency is used.
-		if !info.IsDir() && info.ModTime().After(now.Add(-inUseFreshness)) {
+		if !info.IsDir() && info.ModTime().After(threshold) {
 			return true, nil
 		}
 	}

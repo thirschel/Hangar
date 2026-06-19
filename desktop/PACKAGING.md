@@ -10,7 +10,8 @@ installer that bundles the Go core-daemon (`cs.exe`).
 
    ```pwsh
    # from the repo root (for example D:\dev\Hangar)
-   go build -o dist\cs.exe .
+   # -ldflags "-s -w" strips the symbol table + DWARF to shrink the shipped binary.
+   go build -ldflags "-s -w" -o dist\cs.exe .
    ```
 
 2. The app icons are committed in `build/`: **`icon.ico`** (installer/exe, multi-size

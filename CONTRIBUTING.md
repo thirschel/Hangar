@@ -1,13 +1,19 @@
 # Contributing
 
-Thank you for considering contributing to our project! This document outlines the process for contributing.
+Thanks for your interest in Hangar. You are welcome to fork and use the code under the
+[AGPL-3.0 license](LICENSE.md), and issues are welcome as requests for features, bug
+reports, or questions.
+
+This is primarily a personal project for me in order to learn technologies they I am
+unfamiliar with and exploring the limits of coding heavily with AI. Because of that,
+external pull requests may not be reviewed or merged, but forking and adapting Hangar
+for your own use is encouraged. The notes below remain as technical reference for the workflow.
 
 ## Development Setup
 
 1. Fork the repository
 2. Clone your fork: `git clone https://github.com/YOUR-USERNAME/Hangar.git`
-3. Add the upstream repository: `git remote add upstream https://github.com/smtg-ai/claude-squad.git`
-4. Install dependencies: `go mod download`
+3. Install dependencies: `go mod download`
 
 ## Code Standards
 
@@ -67,5 +73,4 @@ If no commit since the last release warrants a version change (only `docs`/`chor
 
 ## Questions?
 
-Feel free to open an issue for any questions about contributing.
-
+Feel free to open an issue for questions, bug reports, or feature requests.

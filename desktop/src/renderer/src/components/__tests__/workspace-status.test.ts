@@ -22,6 +22,7 @@ function workspace(overrides: Partial<WorkspaceInfo>): WorkspaceInfo {
     added: 0,
     removed: 0,
     createdUnix: 1,
+    lastOutputUnix: 0,
     runCommand: '',
     running: false,
     previewUrl: '',

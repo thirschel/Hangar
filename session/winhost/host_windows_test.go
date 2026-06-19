@@ -32,6 +32,9 @@ type fakeSession struct {
 	aliveFlag     bool
 	busy          bool
 	waiting       bool
+	bracketed     bool
+	lastOutputMs  int64
+	writes        [][]byte
 	sendHook      func(*fakeSession, []byte) error
 	failStart     bool
 	startErr      error
@@ -40,6 +43,9 @@ type fakeSession struct {
 func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool) managedSession {
 	return &fakeSession{
 		name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true,
+		// Real agents (copilot, claude) enable bracketed paste, so the fake does too
+		// by default; submitPrompt then frames prompts the same way it does live.
+		bracketed:    true,
 		buf:          []byte(fmt.Sprintf("[echo session %q running %q]\n", name, program)),
 		history:      []byte(fmt.Sprintf("[history session %q]\r\n", name)),
 		historyAlt:   true,
@@ -116,6 +122,7 @@ func (f *fakeSession) captureHistory(includeScreen bool, cols, rows int) (string
 func (f *fakeSession) sendKeys(b []byte) error {
 	f.mu.Lock()
 	f.buf = append(f.buf, b...)
+	f.writes = append(f.writes, append([]byte(nil), b...))
 	f.changed = true
 	hook := f.sendHook
 	f.mu.Unlock()
@@ -136,6 +143,16 @@ func (f *fakeSession) agentStatus() (bool, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.busy, f.waiting
+}
+func (f *fakeSession) bracketedPasteEnabled() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.bracketed
+}
+func (f *fakeSession) lastOutputUnixMs() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastOutputMs
 }
 func (f *fakeSession) setAutoYes(e bool) { f.mu.Lock(); f.autoYes = e; f.mu.Unlock() }
 func (f *fakeSession) armTrustApproval(reason string, expiresAt time.Time) {
@@ -195,6 +212,8 @@ func startTestHostWithHandle(t *testing.T) (string, *host, func()) {
 	h.newSession = newFake
 	h.workspaces.bootFloor = 0   // no boot floor in tests
 	h.workspaces.submitDelay = 0 // no submit settle delay in tests
+	h.workspaces.confirmWait = 0 // no post-Enter confirm wait in tests
+	h.workspaces.chunkDelay = 0  // no inter-chunk delay in tests
 	go h.serve(ln)
 	return pipe, h, func() { h.triggerShutdown() }
 }

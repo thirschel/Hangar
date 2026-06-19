@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// daemonDiffTimeout bounds the per-instance `git diff --numstat` that the daemon
+// runs so a pathological worktree (e.g. a symlink into a huge tree) cannot stall
+// the AutoYes loop. Mirrors the winhost diffComputeTimeout.
+const daemonDiffTimeout = 8 * time.Second
+
 // RunDaemon runs the daemon process which iterates over all sessions and runs AutoYes mode on them.
 // It's expected that the main process kills the daemon when the main process starts.
 func RunDaemon(cfg *config.Config) error {
@@ -49,7 +54,7 @@ func RunDaemon(cfg *config.Config) error {
 				if instance.Started() && !instance.Paused() {
 					if _, hasPrompt := instance.HasUpdated(); hasPrompt {
 						instance.TryAutoApprove()
-						if err := instance.UpdateDiffStats(); err != nil {
+						if err := instance.UpdateDiffStatsNumstat(daemonDiffTimeout); err != nil {
 							if everyN.ShouldLog() {
 								log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
 							}
