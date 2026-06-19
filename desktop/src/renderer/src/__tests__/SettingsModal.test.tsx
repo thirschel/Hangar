@@ -21,6 +21,7 @@ const baseSettings: Settings = {
   ],
   defaultTerminalProfileId: 'pwsh',
   verboseLogging: false,
+  disableHardwareAcceleration: false,
 };
 
 const detectedShells: ShellProfile[] = [
@@ -116,5 +117,24 @@ describe('SettingsModal', () => {
     fireEvent.change(screen.getByLabelText('Log file'), { target: { value: 'desktop' } });
     expect(await screen.findByText('desktop log line')).toBeInTheDocument();
     expect(window.cs.readLog).toHaveBeenCalledWith('desktop', 65536);
+  });
+
+  it('toggles disable hardware acceleration', async () => {
+    render(<SettingsModal onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'Diagnostics' }));
+
+    const checkbox = await screen.findByRole('checkbox', { name: /Disable hardware acceleration/i });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(window.cs.setSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ disableHardwareAcceleration: true }),
+      ),
+    );
   });
 });

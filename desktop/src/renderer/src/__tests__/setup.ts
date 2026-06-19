@@ -60,6 +60,7 @@ const mockCs = {
     terminalProfiles: [],
     defaultTerminalProfileId: 'pwsh',
     verboseLogging: false,
+    disableHardwareAcceleration: false,
   }),
   getLogPaths: async () => ({
     hostLog: 'C:\\Users\\test\\.hangar\\host.log',

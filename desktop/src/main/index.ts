@@ -61,6 +61,24 @@ type LogWhich = 'host' | 'desktop' | 'hangar';
 type LogPaths = { hostLog: string; desktopLog: string; hangarLog: string };
 type ReadLogResult = { path: string; content: string; truncated: boolean };
 
+// Optionally disable GPU/hardware acceleration BEFORE the app is ready (the API
+// has no effect once Electron has initialized the GPU). On some locked-down
+// corporate machines (RDP/VDI, GPU disabled by policy, or buggy drivers) the
+// React UI paints but xterm's terminal layer renders blank; disabling hardware
+// acceleration is the standard remedy. Persisted as a setting; takes effect on
+// the next launch. Read synchronously and guarded so startup never fails here.
+const hardwareAccelerationDisabled = ((): boolean => {
+  try {
+    if (getSettings().disableHardwareAcceleration) {
+      app.disableHardwareAcceleration();
+      return true;
+    }
+  } catch {
+    // Settings unreadable at startup; keep hardware acceleration on.
+  }
+  return false;
+})();
+
 function hostVerbose(): boolean {
   return getSettings().verboseLogging || !!process.env.HANGAR_DEBUG;
 }
@@ -711,6 +729,17 @@ app.whenReady().then(() => {
   }
   // Hide the default application menu bar (File / Edit / View / Window / Help).
   Menu.setApplicationMenu(null);
+  // Record the GPU/acceleration state so a blank-terminal report can be diagnosed
+  // from desktop.log: confirms whether hardware acceleration is off and how
+  // Chromium resolved each GPU feature (e.g. software-only compositing).
+  try {
+    log.info('gpu status', {
+      hardwareAccelerationDisabled,
+      featureStatus: app.getGPUFeatureStatus(),
+    });
+  } catch (error) {
+    log.error('gpu status failed', error);
+  }
   createWindow();
   createTray(() => mainWindow);
   initAutoUpdate(mainWindow);
