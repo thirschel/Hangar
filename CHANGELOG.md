@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.6.2](https://github.com/thirschel/Hangar/compare/v1.6.1...v1.6.2) (2026-06-19)
+
+### Bug Fixes
+
+* **desktop:** add option to disable hardware acceleration for blank terminals ([#68](https://github.com/thirschel/Hangar/issues/68)) ([4c67a50](https://github.com/thirschel/Hangar/commit/4c67a50d49fad25d7377352fb669faffa0a3284e)), closes [#67](https://github.com/thirschel/Hangar/issues/67)
+* stop workspace-create hanging on a slow PowerShell agent probe ([#69](https://github.com/thirschel/Hangar/issues/69)) ([89f8b46](https://github.com/thirschel/Hangar/commit/89f8b467d3991d3b3b378d0c9b902827f39787e9))
+
 ## [1.6.1](https://github.com/thirschel/Hangar/compare/v1.6.0...v1.6.1) (2026-06-19)
 
 ### Bug Fixes
