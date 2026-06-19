@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from 'react';
+import { memo, useRef, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { MODE_LABELS, type SidebarMode } from './sidebar-modes';
@@ -27,19 +27,21 @@ type SidebarProps = {
   searchInputRef?: RefObject<HTMLInputElement>;
 };
 
-function WorkspaceRow({
+type WorkspaceRowProps = {
+  w: WorkspaceInfo;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  onArchive: (id: string) => void;
+  onSettings: (id: string) => void;
+};
+
+function WorkspaceRowImpl({
   w,
   selected,
   onSelect,
   onArchive,
   onSettings,
-}: {
-  w: WorkspaceInfo;
-  selected: boolean;
-  onSelect: () => void;
-  onArchive: () => void;
-  onSettings: () => void;
-}): JSX.Element {
+}: WorkspaceRowProps): JSX.Element {
   const status = workspaceStatus(w);
   const statusTitle =
     status === 'exited'
@@ -52,7 +54,7 @@ function WorkspaceRow({
   return (
     <div
       className={`workspace-item${selected ? ' workspace-item--selected' : ''}`}
-      onClick={onSelect}
+      onClick={() => onSelect(w.id)}
       role="button"
       tabIndex={0}
     >
@@ -83,7 +85,7 @@ function WorkspaceRow({
           title="Archive workspace (D)"
           onClick={(e) => {
             e.stopPropagation();
-            void onArchive();
+            void onArchive(w.id);
           }}
         >
           ×
@@ -94,7 +96,7 @@ function WorkspaceRow({
           title="Workspace settings"
           onClick={(e) => {
             e.stopPropagation();
-            onSettings();
+            onSettings(w.id);
           }}
         >
           ⚙
@@ -103,6 +105,30 @@ function WorkspaceRow({
     </div>
   );
 }
+
+/**
+ * Rows are recreated on every poll because the workspace list is replaced
+ * wholesale, so a default (shallow-equal) memo would never hit — the `w` object
+ * identity changes each refresh. Compare the fields the row actually renders
+ * plus its (now stable) handlers, so an unchanged row skips re-rendering when an
+ * unrelated workspace updates.
+ */
+const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
+  return (
+    prev.selected === next.selected &&
+    prev.onSelect === next.onSelect &&
+    prev.onArchive === next.onArchive &&
+    prev.onSettings === next.onSettings &&
+    prev.w.id === next.w.id &&
+    prev.w.title === next.w.title &&
+    prev.w.branch === next.w.branch &&
+    prev.w.added === next.w.added &&
+    prev.w.removed === next.w.removed &&
+    prev.w.alive === next.w.alive &&
+    prev.w.waiting === next.w.waiting &&
+    prev.w.busy === next.w.busy
+  );
+});
 
 const STATUS_LABELS: Record<StatusFilter, string> = {
   all: 'All',
@@ -198,9 +224,9 @@ function buildGroupedList(
             key={w.id}
             w={w}
             selected={w.id === selectedId}
-            onSelect={() => onSelect(w.id)}
-            onArchive={() => onArchive(w.id)}
-            onSettings={() => onSettings(w.id)}
+            onSelect={onSelect}
+            onArchive={onArchive}
+            onSettings={onSettings}
           />,
         );
       }
@@ -220,9 +246,9 @@ function buildGroupedList(
             key={w.id}
             w={w}
             selected={w.id === selectedId}
-            onSelect={() => onSelect(w.id)}
-            onArchive={() => onArchive(w.id)}
-            onSettings={() => onSettings(w.id)}
+            onSelect={onSelect}
+            onArchive={onArchive}
+            onSettings={onSettings}
           />,
         );
       }
@@ -235,9 +261,9 @@ function buildGroupedList(
             key={w.id}
             w={w}
             selected={w.id === selectedId}
-            onSelect={() => onSelect(w.id)}
-            onArchive={() => onArchive(w.id)}
-            onSettings={() => onSettings(w.id)}
+            onSelect={onSelect}
+            onArchive={onArchive}
+            onSettings={onSettings}
           />,
         );
       }
@@ -251,9 +277,9 @@ function buildGroupedList(
       key={w.id}
       w={w}
       selected={w.id === selectedId}
-      onSelect={() => onSelect(w.id)}
-      onArchive={() => onArchive(w.id)}
-      onSettings={() => onSettings(w.id)}
+      onSelect={onSelect}
+      onArchive={onArchive}
+      onSettings={onSettings}
     />
   ));
 }

@@ -424,3 +424,208 @@ func TestScanEventsValidLineAfterOversized(t *testing.T) {
 	_, err := scanEvents(path, true, true)
 	require.NoError(t, err)
 }
+
+// ---------------------------------------------------------------------------
+// copilot-discovery-cache: events-scan mtime/size cache
+// ---------------------------------------------------------------------------
+
+// userMessageLine returns a user.message JSONL line carrying the given content,
+// so two lines whose content strings have equal length produce equal byte sizes
+// and differ only in the parsed content.
+func userMessageLine(content string) string {
+	return `{"type":"user.message","data":{"content":"` + content + `"}}`
+}
+
+// TestPopulateFromEventsReusesCacheForUnchangedFile verifies that a second
+// populate of a session whose events.jsonl has the same size and modtime reuses
+// the cached scan instead of re-reading the file. We prove "no re-scan" by
+// rewriting the file with same-length but different content and restoring the
+// original modtime: a cache hit must still report the original content.
+func TestPopulateFromEventsReusesCacheForUnchangedFile(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSession(t, root, "deadbeef-cache0", "id: deadbeef-cache0\n", []string{userMessageLine("AAAA")})
+	eventsPath := filepath.Join(dir, "events.jsonl")
+
+	info, err := os.Stat(eventsPath)
+	require.NoError(t, err)
+	original := info.ModTime()
+
+	d := newDiscoverer()
+
+	s1 := Session{ID: "deadbeef-cache0", Dir: dir}
+	hasEvents, err := d.populateFromEvents(&s1)
+	require.NoError(t, err)
+	require.True(t, hasEvents)
+	require.Equal(t, "AAAA", s1.firstUserMsg)
+
+	// Same byte length, different content; restore the original modtime so the
+	// (size, modTime) cache key is unchanged.
+	require.NoError(t, os.WriteFile(eventsPath, []byte(joinJSONLines([]string{userMessageLine("BBBB")})), 0o644))
+	require.NoError(t, os.Chtimes(eventsPath, original, original))
+
+	s2 := Session{ID: "deadbeef-cache0", Dir: dir}
+	hasEvents, err = d.populateFromEvents(&s2)
+	require.NoError(t, err)
+	require.True(t, hasEvents)
+	require.Equal(t, "AAAA", s2.firstUserMsg, "unchanged size+modtime must reuse the cached scan, not re-read the file")
+}
+
+// TestPopulateFromEventsInvalidatesCacheOnModTimeChange verifies that a changed
+// modtime invalidates the cache so the file is re-scanned.
+func TestPopulateFromEventsInvalidatesCacheOnModTimeChange(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSession(t, root, "deadbeef-cache1", "id: deadbeef-cache1\n", []string{userMessageLine("AAAA")})
+	eventsPath := filepath.Join(dir, "events.jsonl")
+
+	d := newDiscoverer()
+
+	s1 := Session{ID: "deadbeef-cache1", Dir: dir}
+	_, err := d.populateFromEvents(&s1)
+	require.NoError(t, err)
+	require.Equal(t, "AAAA", s1.firstUserMsg)
+
+	// Same length, different content, but advance the modtime: the cache must miss.
+	future := time.Now().Add(2 * time.Second)
+	require.NoError(t, os.WriteFile(eventsPath, []byte(joinJSONLines([]string{userMessageLine("BBBB")})), 0o644))
+	require.NoError(t, os.Chtimes(eventsPath, future, future))
+
+	s2 := Session{ID: "deadbeef-cache1", Dir: dir}
+	_, err = d.populateFromEvents(&s2)
+	require.NoError(t, err)
+	require.Equal(t, "BBBB", s2.firstUserMsg, "a changed modtime must invalidate the cache and re-scan")
+}
+
+// TestPopulateFromEventsInvalidatesCacheOnSizeChange verifies that a changed file
+// size invalidates the cache even if the modtime were to collide.
+func TestPopulateFromEventsInvalidatesCacheOnSizeChange(t *testing.T) {
+	root := t.TempDir()
+	dir := writeSession(t, root, "deadbeef-cache2", "id: deadbeef-cache2\n", []string{userMessageLine("AAAA")})
+	eventsPath := filepath.Join(dir, "events.jsonl")
+
+	info, err := os.Stat(eventsPath)
+	require.NoError(t, err)
+	original := info.ModTime()
+
+	d := newDiscoverer()
+
+	s1 := Session{ID: "deadbeef-cache2", Dir: dir}
+	_, err = d.populateFromEvents(&s1)
+	require.NoError(t, err)
+	require.Equal(t, "AAAA", s1.firstUserMsg)
+
+	// Different length content, restore the original modtime: size differs so the
+	// cache must still miss and re-scan.
+	require.NoError(t, os.WriteFile(eventsPath, []byte(joinJSONLines([]string{userMessageLine("LONGER-CONTENT")})), 0o644))
+	require.NoError(t, os.Chtimes(eventsPath, original, original))
+
+	s2 := Session{ID: "deadbeef-cache2", Dir: dir}
+	_, err = d.populateFromEvents(&s2)
+	require.NoError(t, err)
+	require.Equal(t, "LONGER-CONTENT", s2.firstUserMsg, "a changed size must invalidate the cache and re-scan")
+}
+
+// TestDiscoverSharesCacheAcrossBrowses verifies the package-level Discover path
+// caches across calls: re-browsing an unchanged session whose content changed but
+// whose (size, modtime) did not must return the originally scanned content.
+func TestDiscoverSharesCacheAcrossBrowses(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CS_COPILOT_SESSION_DIR", root)
+	dir := writeSession(t, root, "deadbeef-cac3", "id: deadbeef-cac3\n", []string{userMessageLine("AAAA")})
+	eventsPath := filepath.Join(dir, "events.jsonl")
+
+	info, err := os.Stat(eventsPath)
+	require.NoError(t, err)
+	original := info.ModTime()
+
+	d := newDiscoverer()
+
+	first, _, err := d.discover()
+	require.NoError(t, err)
+	require.Equal(t, "AAAA", sessionsByID(first)["deadbeef-cac3"].firstUserMsg)
+
+	require.NoError(t, os.WriteFile(eventsPath, []byte(joinJSONLines([]string{userMessageLine("BBBB")})), 0o644))
+	require.NoError(t, os.Chtimes(eventsPath, original, original))
+
+	second, _, err := d.discover()
+	require.NoError(t, err)
+	require.Equal(t, "AAAA", sessionsByID(second)["deadbeef-cac3"].firstUserMsg,
+		"the discoverer cache must persist across browse calls")
+}
+
+// ---------------------------------------------------------------------------
+// copilot-discovery-cache: ReadDir-based in-use lock check
+// ---------------------------------------------------------------------------
+
+// TestSessionInUseReadDirFilter exercises the os.ReadDir-based lock scan that
+// replaced filepath.Glob("inuse.*.lock"), including the glob-equivalent name
+// filter and the directory/freshness guards.
+func TestSessionInUseReadDirFilter(t *testing.T) {
+	now := time.Now()
+	staleTime := now.Add(-inUseFreshness - time.Minute)
+
+	t.Run("fresh lock is in use", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "inuse.123.lock"), nil, 0o644))
+		inUse, err := sessionInUse(dir, now)
+		require.NoError(t, err)
+		require.True(t, inUse)
+	})
+
+	t.Run("stale lock is not in use", func(t *testing.T) {
+		dir := t.TempDir()
+		lock := filepath.Join(dir, "inuse.456.lock")
+		require.NoError(t, os.WriteFile(lock, nil, 0o644))
+		require.NoError(t, os.Chtimes(lock, staleTime, staleTime))
+		inUse, err := sessionInUse(dir, now)
+		require.NoError(t, err)
+		require.False(t, inUse)
+	})
+
+	t.Run("non-matching names are ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		// None of these match the old filepath.Glob("inuse.*.lock") shape; all are
+		// freshly written, so a wrong filter would surface them as in-use.
+		for _, name := range []string{"inuse.lock", "inuse.123.txt", "session.lock", "events.jsonl", "workspace.yaml"} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), nil, 0o644))
+		}
+		inUse, err := sessionInUse(dir, now)
+		require.NoError(t, err)
+		require.False(t, inUse, "no entry matches inuse.*.lock")
+	})
+
+	t.Run("lock-shaped directory is ignored", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "inuse.dir.lock"), 0o755))
+		inUse, err := sessionInUse(dir, now)
+		require.NoError(t, err)
+		require.False(t, inUse, "a directory shaped like a lock must not count as in-use")
+	})
+
+	t.Run("missing directory is not in use", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "missing")
+		inUse, err := sessionInUse(dir, now)
+		require.NoError(t, err)
+		require.False(t, inUse)
+	})
+
+	t.Run("fresh lock wins among stale and non-matching", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "inuse.lock"), nil, 0o644)) // too short, ignored
+		stale := filepath.Join(dir, "inuse.111.lock")
+		require.NoError(t, os.WriteFile(stale, nil, 0o644))
+		require.NoError(t, os.Chtimes(stale, staleTime, staleTime))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "inuse.222.lock"), nil, 0o644)) // fresh
+		inUse, err := sessionInUse(dir, now)
+		require.NoError(t, err)
+		require.True(t, inUse)
+	})
+}
+
+// TestIsInUseUsesReadDir is a smoke test that the exported IsInUse helper still
+// reports a fresh lock through the ReadDir-based path.
+func TestIsInUseUsesReadDir(t *testing.T) {
+	dir := t.TempDir()
+	require.False(t, IsInUse(dir))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inuse.789.lock"), nil, 0o644))
+	require.True(t, IsInUse(dir))
+}

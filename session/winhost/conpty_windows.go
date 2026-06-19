@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"hangar/session/agentcmd"
@@ -70,6 +71,14 @@ type conptySession struct {
 	// split across reads. Both are guarded by subMu.
 	decModes map[int]bool
 	modeTail []byte
+
+	// writeGen counts emulator writes; drain() increments it after each emu.Write.
+	// autoYesLoop reads it lock-free to tell whether the screen could have changed
+	// since the previous tick. Because drain() is the only writer to the emulator,
+	// an unchanged generation means the screen is unchanged, so the loop can skip
+	// the render/hash/classify work entirely — making idle and detached sessions
+	// effectively free.
+	writeGen atomic.Uint64
 
 	mu           sync.Mutex
 	autoYes      bool
@@ -186,6 +195,7 @@ func (s *conptySession) drain() {
 			data := buf[:n]
 			s.subMu.Lock()
 			_, _ = s.emu.Write(data) // SafeEmulator is internally locked
+			s.writeGen.Add(1)        // signal autoYesLoop the screen may have changed
 			s.trackModesLocked(data)
 			s.mu.Lock()
 			s.rawRing = appendRing(s.rawRing, data, rawRingMax)
@@ -497,7 +507,13 @@ const (
 // prompt is currently shown. Side-effect-free for readers; called from the
 // autoYesLoop tick so it runs regardless of whether AutoYes is enabled.
 func (s *conptySession) updateStatus() {
-	plain := plainScreen(s.emu)
+	s.updateStatusFrom(plainScreen(s.emu))
+}
+
+// updateStatusFrom is updateStatus over an already-rendered plain screen so the
+// autoYesLoop can render plainScreen once per tick and share it with the AutoYes
+// classifier (maybeAutoYesFrom) instead of rendering the screen twice per tick.
+func (s *conptySession) updateStatusFrom(plain string) {
 	sum := sha256.Sum256([]byte(plain))
 	h := hex.EncodeToString(sum[:])
 	prompt := detectWaiting(s.program, plain)
@@ -537,6 +553,14 @@ func (s *conptySession) setAutoYes(enabled bool) {
 		s.lastPromptFP = ""
 	}
 	s.mu.Unlock()
+	if enabled {
+		// Force autoYesLoop to run a full pass next tick even if the screen is
+		// static: enabling AutoYes while the agent is blocked on an already-
+		// displayed prompt produces no new emulator output, so without this bump
+		// the change-gate (autoYesTickNeeded) would skip the tick and the prompt
+		// would never be auto-approved.
+		s.writeGen.Add(1)
+	}
 }
 
 func (s *conptySession) armTrustApproval(reason string, expiresAt time.Time) {
@@ -552,6 +576,15 @@ func (s *conptySession) clearTrustApproval() {
 	s.mu.Unlock()
 }
 
+// hasPendingTrust reports whether a one-shot trust approval is armed. autoYesLoop
+// must run the full AutoYes pass while one is pending so its time-based expiry is
+// handled even when the screen is not changing.
+func (s *conptySession) hasPendingTrust() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingTrust != nil
+}
+
 // autoYesLoop drives host-side AutoYes: it periodically classifies the visible
 // prompt and approves only policy-allowlisted categories. Running it in the host
 // (not the TUI) means unattended agents keep progressing even when the TUI is
@@ -560,18 +593,52 @@ func (s *conptySession) autoYesLoop() {
 	defer recoverGoroutine("conpty.autoYesLoop")
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
+	// lastGen/primed carry the emulator write generation across ticks so the loop
+	// can skip its expensive render/hash/classify pass when the screen is
+	// unchanged; see autoYesTickNeeded.
+	var lastGen uint64
+	primed := false
 	for {
 		select {
 		case <-s.autoYesStop:
 			return
 		case <-ticker.C:
-			s.updateStatus()
-			s.maybeAutoYes()
+			gen := s.writeGen.Load()
+			if !s.autoYesTickNeeded(gen, lastGen, primed) {
+				continue
+			}
+			primed = true
+			lastGen = gen
+			plain := plainScreen(s.emu)
+			s.updateStatusFrom(plain)
+			s.maybeAutoYesFrom(plain)
 		}
 	}
 }
 
+// autoYesTickNeeded reports whether autoYesLoop must run its full
+// render/hash/classify pass this tick. It returns false (skip) only when the
+// emulator write generation is unchanged since the previous tick — drain() is the
+// only writer, so the screen provably cannot have changed — and no trust approval
+// is pending, whose expiry is time-based and can fire without any screen output.
+// The first tick (!primed) always runs so the status baseline is established even
+// for a session that has not produced output yet.
+func (s *conptySession) autoYesTickNeeded(gen, lastGen uint64, primed bool) bool {
+	if !primed || gen != lastGen {
+		return true
+	}
+	return s.hasPendingTrust()
+}
+
 func (s *conptySession) maybeAutoYes() {
+	s.maybeAutoYesFrom(plainScreen(s.emu))
+}
+
+// maybeAutoYesFrom is maybeAutoYes over an already-rendered plain screen so the
+// autoYesLoop can render plainScreen once per tick and share it with the status
+// sampler (updateStatusFrom). The prompt-policy classification runs on the same
+// plain text the status sampler observed.
+func (s *conptySession) maybeAutoYesFrom(plain string) {
 	s.mu.Lock()
 	enabled := s.autoYes
 	attached := s.attachedCnt > 0
@@ -579,7 +646,7 @@ func (s *conptySession) maybeAutoYes() {
 	pending := s.pendingTrust
 	s.mu.Unlock()
 
-	match, ok := promptpolicy.Classify(s.program, plainScreen(s.emu))
+	match, ok := promptpolicy.Classify(s.program, plain)
 	now := time.Now()
 	if !ok {
 		s.mu.Lock()

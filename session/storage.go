@@ -41,11 +41,15 @@ type GitWorktreeData struct {
 	IsExistingBranch bool   `json:"is_existing_branch"`
 }
 
-// DiffStatsData represents the serializable data of a DiffStats
+// DiffStatsData represents the serializable data of a DiffStats. Only the line
+// counts are persisted; the full diff content is recomputed on demand for the
+// selected instance, so persisting it would only bloat state.json and amplify
+// writes. Older state.json files may still carry a "content" key under
+// diff_stats — json.Unmarshal ignores unknown fields, so loading stays
+// backward-compatible.
 type DiffStatsData struct {
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
-	Content string `json:"content"`
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
 }
 
 // Storage handles saving and loading instances using the state interface

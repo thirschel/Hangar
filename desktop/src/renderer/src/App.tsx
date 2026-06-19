@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
@@ -409,8 +409,8 @@ export function App(): JSX.Element {
   connectionRef.current = connection;
 
   // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
-  const statusCounts = countByStatus(workspaces);
-  const displayedWorkspaces = (() => {
+  const statusCounts = useMemo(() => countByStatus(workspaces), [workspaces]);
+  const displayedWorkspaces = useMemo(() => {
     let list = [...workspaces];
 
     // Apply mode-based sorting.
@@ -451,7 +451,7 @@ export function App(): JSX.Element {
     list = filterByStatus(list, statusFilter);
 
     return list;
-  })();
+  }, [workspaces, sidebarMode, workspaceOrder, sidebarFilter, statusFilter]);
 
   // Keep workspacesRef in sync with display order for hotkey navigation.
   workspacesRef.current = displayedWorkspaces;
@@ -476,13 +476,28 @@ export function App(): JSX.Element {
 
   const onArchive = useCallback(
     (id: string): void => {
-      // Show the confirmation modal instead of immediately archiving
-      const workspace = workspaces.find((w) => w.id === id);
+      // Show the confirmation modal instead of immediately archiving. Look the
+      // workspace up from the ref (latest list) rather than closing over
+      // `workspaces` so this handler keeps a stable identity, which lets
+      // WorkspaceRow skip re-rendering when an unrelated workspace updates.
+      // Mirrors the 'D' keyboard shortcut, which also reads workspacesRef.
+      const workspace = workspacesRef.current.find((w) => w.id === id);
       if (workspace) {
         setWorkspaceToRemove(workspace);
       }
     },
-    [workspaces],
+    [],
+  );
+
+  const onSettings = useCallback(
+    (id: string): void => {
+      // Stable identity (reads the latest list from the ref) so WorkspaceRow
+      // memoization stays effective; behaviour matches the previous inline
+      // closure for any visible row.
+      const ws = workspacesRef.current.find((w) => w.id === id);
+      if (ws) setWorkspaceToEdit(ws);
+    },
+    [],
   );
 
   const onCycleMode = useCallback((): void => {
@@ -607,10 +622,7 @@ export function App(): JSX.Element {
           selectedId={selectedId}
           onSelect={setSelectedId}
           onArchive={onArchive}
-          onSettings={(id) => {
-            const ws = workspaces.find((w) => w.id === id);
-            if (ws) setWorkspaceToEdit(ws);
-          }}
+          onSettings={onSettings}
           onNewWorkspace={() => {
             setCreateRepoPath(undefined);
             setShowCreate(true);
