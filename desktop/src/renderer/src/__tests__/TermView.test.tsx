@@ -178,7 +178,7 @@ describe('TermView startup ordering', () => {
     );
   });
 
-  it('ignores term:data for a different session and flags the mismatch', async () => {
+  it('ignores term:data for a different session (no write, no error spam)', async () => {
     let dataCb: ((d: { session: string; chunk: Uint8Array }) => void) | undefined;
     window.cs.onData = vi.fn((cb: (d: { session: string; chunk: Uint8Array }) => void) => {
       dataCb = cb;
@@ -197,10 +197,12 @@ describe('TermView startup ordering', () => {
       dataCb?.({ session: 'ws_other', chunk: new Uint8Array([1, 2, 3]) });
     });
 
+    // Another session's data is silently filtered out — written nowhere, and (the
+    // bug fix) NOT logged as an error per event (it is normal for the broadcast).
     expect(writeSpy).not.toHaveBeenCalled();
-    expect(diagSpy).toHaveBeenCalledWith(
+    expect(diagSpy).not.toHaveBeenCalledWith(
       'TermView data session mismatch',
-      expect.objectContaining({ expected: 'ws_self', got: 'ws_other' }),
+      expect.anything(),
       'error',
     );
   });

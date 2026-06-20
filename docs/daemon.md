@@ -208,11 +208,18 @@ flush the paint until a reflow (the tell-tale sign is that **resizing the window
 appear**). Only xterm's layered screen is affected, which is why the rest of the app still paints.
 
 The app now **detects software compositing** (logged as `softwareCompositing` in the startup
-`gpu status` line of `desktop.log`) and **forces repaints** automatically while a terminal is attached,
-so it should paint without a manual resize. Note that **"Disable hardware acceleration" does not help
-on RDP** — there is no GPU to disable, so it leaves you in the same software-compositing path; the
-forced-repaint behaviour is what fixes it. If a pane is still blank, resize the window once (it will
-repaint) and capture the `gpu status` line for a bug report.
+`gpu status` line of `desktop.log`) and **forces repaints** automatically while a terminal is attached
+— both a full-window `invalidate()` from the main process and a synchronous reflow of the terminal
+element in the renderer (the same thing a manual resize does) — so it should paint without resizing.
+Note that **"Disable hardware acceleration" does not help on RDP** — there is no GPU to disable, so it
+leaves you in the same software-compositing path; the forced-repaint behaviour is what fixes it. If a
+pane is still blank, resize the window once (it will repaint) and capture the `gpu status` line for a
+bug report.
+
+If the desktop UI freezes or panes attach with no output during rapid workspace/shell switching, the
+host's control pipe is likely backed up (its RPCs are processed serially). `host.log` now logs
+`slow dispatch method=… took=…` for any handler over ~750 ms, which names the operation holding up the
+pipe (e.g. a slow `git worktree add` or a shell kill/respawn storm).
 
 **Where is state stored, and how do I reset it?** All state lives in `~/.hangar/`: `state.json`
 holds your sessions/instances, `config.json` the configuration, and `daemon.pid` the autoyes daemon.
