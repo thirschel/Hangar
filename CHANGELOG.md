@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.7.1](https://github.com/thirschel/Hangar/compare/v1.7.0...v1.7.1) (2026-06-20)
+
+### Bug Fixes
+
+* **desktop:** stronger RDP repaint, stop session-mismatch log spam, host wedge timing ([#72](https://github.com/thirschel/Hangar/issues/72)) ([c7b71d9](https://github.com/thirschel/Hangar/commit/c7b71d91851b52695f2c674a642e716b83771dc4)), closes [#70](https://github.com/thirschel/Hangar/issues/70) [#67](https://github.com/thirschel/Hangar/issues/67)
+
 ## [1.7.0](https://github.com/thirschel/Hangar/compare/v1.6.2...v1.7.0) (2026-06-19)
 
 ### Features
