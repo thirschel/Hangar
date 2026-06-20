@@ -32,6 +32,22 @@ import (
 // repaint source; the authoritative attach repaint is the emulator snapshot.
 const rawRingMax = 256 * 1024
 
+// Agent-exit output capture. When a session's child exits non-zero or dies very
+// young, the tail of its output is the single most useful datum for diagnosing
+// "the agent never opened" (e.g. an auth/policy/TTY error from the agent CLI on a
+// locked-down machine). We log a sanitized tail of the raw output to host.log so
+// it is captured automatically — the host otherwise only records byte counts.
+const (
+	// exitCaptureEarlyWindow: an exit younger than this is "early" and worth
+	// capturing even on a zero code (a healthy agent runs far longer).
+	exitCaptureEarlyWindow = 12 * time.Second
+	// exitCaptureRawScan: how many trailing raw bytes to scan/strip.
+	exitCaptureRawScan = 16 * 1024
+	// exitCaptureMaxBytes / exitCaptureMaxLines bound the logged, sanitized tail.
+	exitCaptureMaxBytes = 2048
+	exitCaptureMaxLines = 40
+)
+
 // procExitWaitTimeout bounds how long close() waits for the child process to exit
 // (and release the worktree) after the ConPTY is closed. Children normally exit
 // within a few milliseconds; the cap only guards against a wedged process.
@@ -507,8 +523,44 @@ func (s *conptySession) wait() {
 		noOutput = " (no output produced)"
 	}
 	s.logf("conpty exited session=%q exitCode=%d lifetime=%s%s", s.name, exitCode, lifetime, noOutput)
+	s.logExitOutput(exitCode, lifetime)
 	close(s.procDone) // the child has exited and released its working directory
 	_ = s.close()
+}
+
+// logExitOutput records a sanitized tail of the child's output to host.log when
+// it exits in a way that suggests a startup failure (non-zero code, or an exit so
+// young the agent can't have done real work). This surfaces the agent CLI's own
+// error text — otherwise invisible — which is the key signal for "the agent never
+// opened" on locked-down/corporate machines. Bounded and ANSI-stripped so the log
+// stays readable and small.
+func (s *conptySession) logExitOutput(exitCode int, lifetime time.Duration) {
+	early := lifetime > 0 && lifetime < exitCaptureEarlyWindow
+	if exitCode == 0 && !early {
+		return
+	}
+	s.mu.Lock()
+	raw := s.rawRing
+	if len(raw) > exitCaptureRawScan {
+		raw = raw[len(raw)-exitCaptureRawScan:]
+	}
+	// Copy out so we don't retain/alias the live ring under sanitization.
+	scan := append([]byte(nil), raw...)
+	s.mu.Unlock()
+
+	text, lines := sanitizeExitOutput(scan, exitCaptureMaxBytes, exitCaptureMaxLines)
+	reason := "early-exit"
+	if exitCode != 0 {
+		reason = "nonzero-exit"
+	}
+	if text == "" {
+		s.logf("conpty exit output session=%q reason=%s (no readable output captured)", s.name, reason)
+		return
+	}
+	s.logf(
+		"conpty exit output session=%q reason=%s exitCode=%d lines=%d\n----- begin agent output (sanitized tail) -----\n%s\n----- end agent output -----",
+		s.name, reason, exitCode, lines, text,
+	)
 }
 
 func (s *conptySession) sendKeys(b []byte) error {
@@ -875,6 +927,110 @@ func appendRing(ring, data []byte, max int) []byte {
 		ring = ring[len(ring)-max:]
 	}
 	return ring
+}
+
+// sanitizeExitOutput converts a tail of raw terminal output into readable plain
+// text suitable for host.log: it strips ANSI/VT escape sequences and other
+// control bytes (keeping printable text, spaces, tabs and newlines), trims each
+// line, collapses blank runs, and returns the last maxLines lines bounded to
+// maxBytes. Returns the text and the number of lines in it.
+func sanitizeExitOutput(raw []byte, maxBytes, maxLines int) (string, int) {
+	plain := stripTerminalControl(raw)
+	rawLines := strings.Split(plain, "\n")
+	tidy := make([]string, 0, len(rawLines))
+	for _, ln := range rawLines {
+		ln = strings.TrimRight(ln, " \t")
+		// Collapse runs of blank lines so cleared/redrawn screens don't pad the log.
+		if ln == "" {
+			if len(tidy) == 0 || tidy[len(tidy)-1] == "" {
+				continue
+			}
+		}
+		tidy = append(tidy, ln)
+	}
+	// Drop trailing blank line left by a final newline.
+	for len(tidy) > 0 && tidy[len(tidy)-1] == "" {
+		tidy = tidy[:len(tidy)-1]
+	}
+	if len(tidy) > maxLines {
+		tidy = tidy[len(tidy)-maxLines:]
+	}
+	out := strings.Join(tidy, "\n")
+	if len(out) > maxBytes {
+		out = out[len(out)-maxBytes:]
+		// Avoid starting mid-line after the byte trim.
+		if i := strings.IndexByte(out, '\n'); i >= 0 && i+1 < len(out) {
+			out = out[i+1:]
+		}
+	}
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return "", 0
+	}
+	return out, strings.Count(out, "\n") + 1
+}
+
+// stripTerminalControl removes ANSI/VT escape sequences and non-printable control
+// bytes from terminal output, leaving readable text. It keeps printable runes,
+// spaces, tabs and newlines; carriage returns and other C0 controls are dropped.
+func stripTerminalControl(b []byte) string {
+	var sb strings.Builder
+	sb.Grow(len(b))
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		switch {
+		case c == 0x1b: // ESC — start of an escape sequence
+			i = skipEscapeSequence(b, i)
+		case c == '\n':
+			sb.WriteByte('\n')
+		case c == '\t':
+			sb.WriteByte('\t')
+		case c == '\r':
+			// drop; newlines drive line breaks
+		case c < 0x20 || c == 0x7f:
+			// drop other C0 controls / DEL (e.g. BEL, backspace)
+		default:
+			sb.WriteByte(c)
+		}
+	}
+	return sb.String()
+}
+
+// skipEscapeSequence returns the index of the last byte consumed for the escape
+// sequence beginning at b[i] (b[i] == ESC). The caller's loop then advances past
+// it. Handles CSI (ESC [ … final), OSC (ESC ] … BEL/ST), charset designators
+// (ESC ( / ) X) and the simple two-byte forms.
+func skipEscapeSequence(b []byte, i int) int {
+	if i+1 >= len(b) {
+		return i
+	}
+	switch b[i+1] {
+	case '[': // CSI: parameters/intermediates until a final byte 0x40–0x7e
+		j := i + 2
+		for j < len(b) && (b[j] < 0x40 || b[j] > 0x7e) {
+			j++
+		}
+		return j
+	case ']': // OSC: until BEL or ST (ESC \)
+		j := i + 2
+		for j < len(b) {
+			if b[j] == 0x07 {
+				return j
+			}
+			if b[j] == 0x1b && j+1 < len(b) && b[j+1] == '\\' {
+				return j + 1
+			}
+			j++
+		}
+		return j
+	case '(', ')', '*', '+': // charset designator: one more byte
+		if i+2 < len(b) {
+			return i + 2
+		}
+		return i + 1
+	default: // simple two-byte escape (e.g. ESC =, ESC >, ESC M)
+		return i + 1
+	}
 }
 
 // plainScreen renders the visible screen as plain text (trailing spaces trimmed

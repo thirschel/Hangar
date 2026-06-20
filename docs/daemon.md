@@ -185,11 +185,19 @@ Agent pane — and a freshly opened Terminal — stay completely empty. This mea
 (the agent, or the shell) exited or produced no output. When the host can tell the child has exited
 it now prints `[agent process exited (code N) — see host.log via Settings → Diagnostics]` into the
 pane instead of leaving it blank; the matching `conpty exited … (no output produced)` line in
-`host.log` has the exit code and lifetime. On a **locked-down / corporate** machine this is commonly
-endpoint-security (EDR), AppLocker, or antivirus blocking pseudo-console/process creation. To
-diagnose: open **Settings → Diagnostics** in the desktop app to read/open `host.log`, and turn on
-**Verbose logging (`HANGAR_DEBUG`)** there (restart the app so the session host re-spawns with it),
-then reproduce and check `host.log` for the `conpty started` / `conpty exited` / `attach …` lines.
+`host.log` has the exit code and lifetime. When a child exits **non-zero** or **dies young**
+(< ~12 s), the host also captures a sanitized tail of its output to `host.log` under a
+`conpty exit output session=… reason=…` block (between `----- begin/end agent output -----`
+markers) — this surfaces the agent CLI's *own* error text (e.g. an auth/login, network, or policy
+failure), which is usually the real reason "the agent never opened". On a **locked-down / corporate**
+machine the cause is commonly endpoint-security (EDR), AppLocker, or antivirus blocking
+pseudo-console/process creation, or the agent CLI itself refusing to start. To diagnose: open
+**Settings → Diagnostics** in the desktop app to read/open `host.log` and look for that
+`conpty exit output` block; optionally turn on **Verbose logging (`HANGAR_DEBUG`)** there (restart the
+app so the session host re-spawns with it), then reproduce and check `host.log` for the
+`conpty started` / `conpty exited` / `attach …` lines. If the agent pane is blank but `host.log`
+shows the child is still **alive** with little output, the agent CLI started but isn't drawing — run
+it directly in the workspace Terminal (e.g. `copilot`) to see its output.
 
 **Where are the logs?** The `cs` engine writes `hangar.log` to the OS temp dir (`/tmp/hangar.log` on
 Linux/WSL — that is the **Linux** `/tmp`, openable from inside WSL or via

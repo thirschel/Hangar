@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -484,4 +485,71 @@ func TestReplayModesEmptyWhenNoModes(t *testing.T) {
 	if got := s.replayModesLocked(); got != nil {
 		t.Fatalf("expected nil replay when no modes are active, got %q", string(got))
 	}
+}
+
+func TestStripTerminalControl(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain text", "hello world", "hello world"},
+		{"csi color", "\x1b[31mError\x1b[0m: boom", "Error: boom"},
+		{"cursor moves and clear", "\x1b[2J\x1b[H\x1b[1;1Hready", "ready"},
+		{"osc title bel", "\x1b]0;my title\x07text", "text"},
+		{"osc title st", "\x1b]0;my title\x1b\\text", "text"},
+		{"alt screen enter/leave", "\x1b[?1049hUI\x1b[?1049l", "UI"},
+		{"carriage returns dropped", "line1\r\nline2", "line1\nline2"},
+		{"bel and backspace dropped", "a\x07b\x08c", "abc"},
+		{"charset designator", "\x1b(Btext", "text"},
+		{"keeps tabs", "a\tb", "a\tb"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stripTerminalControl([]byte(tc.in)); got != tc.want {
+				t.Fatalf("stripTerminalControl(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeExitOutput(t *testing.T) {
+	t.Run("strips ansi and trims to last lines", func(t *testing.T) {
+		raw := []byte("\x1b[2J\x1b[H\x1b[32mStarting copilot...\x1b[0m\r\n\r\n\r\nError: authentication required\r\nexit status 1\r\n")
+		got, lines := sanitizeExitOutput(raw, 2048, 40)
+		if !strings.Contains(got, "Error: authentication required") {
+			t.Fatalf("expected error text retained, got %q", got)
+		}
+		if strings.Contains(got, "\x1b") {
+			t.Fatalf("escape bytes leaked into output: %q", got)
+		}
+		// Blank-line run collapsed: the three CRLFs must not appear as blank lines.
+		if strings.Contains(got, "\n\n\n") {
+			t.Fatalf("blank runs not collapsed: %q", got)
+		}
+		if lines != strings.Count(got, "\n")+1 {
+			t.Fatalf("line count %d inconsistent with %q", lines, got)
+		}
+	})
+
+	t.Run("caps to maxLines keeping the tail", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 100; i++ {
+			fmt.Fprintf(&b, "line %d\n", i)
+		}
+		got, lines := sanitizeExitOutput([]byte(b.String()), 4096, 5)
+		if lines != 5 {
+			t.Fatalf("want 5 lines, got %d (%q)", lines, got)
+		}
+		if !strings.Contains(got, "line 99") || strings.Contains(got, "line 0\n") {
+			t.Fatalf("expected the tail lines, got %q", got)
+		}
+	})
+
+	t.Run("empty when only control bytes", func(t *testing.T) {
+		got, lines := sanitizeExitOutput([]byte("\x1b[2J\x1b[H\x1b[0m\r\n"), 2048, 40)
+		if got != "" || lines != 0 {
+			t.Fatalf("expected empty capture, got %q (%d)", got, lines)
+		}
+	})
 }
