@@ -553,3 +553,27 @@ func TestSanitizeExitOutput(t *testing.T) {
 		}
 	})
 }
+
+func TestExitCaptureReason(t *testing.T) {
+	cases := []struct {
+		name     string
+		exitCode int
+		lifetime time.Duration
+		want     string
+	}{
+		{"nonzero exit always captured", 1, time.Hour, "nonzero-exit"},
+		{"nonzero exit young", 3221225786, 2 * time.Second, "nonzero-exit"},
+		{"zero exit but very young", 0, 3 * time.Second, "early-exit"},
+		{"zero exit at boundary just under", 0, exitCaptureEarlyWindow - time.Millisecond, "early-exit"},
+		{"zero exit long-lived not captured", 0, time.Hour, ""},
+		{"zero exit at/over window not captured", 0, exitCaptureEarlyWindow, ""},
+		{"zero exit unknown lifetime not captured", 0, 0, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := exitCaptureReason(tc.exitCode, tc.lifetime); got != tc.want {
+				t.Fatalf("exitCaptureReason(%d, %s) = %q, want %q", tc.exitCode, tc.lifetime, got, tc.want)
+			}
+		})
+	}
+}

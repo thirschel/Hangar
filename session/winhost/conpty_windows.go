@@ -46,6 +46,17 @@ const (
 	// exitCaptureMaxBytes / exitCaptureMaxLines bound the logged, sanitized tail.
 	exitCaptureMaxBytes = 2048
 	exitCaptureMaxLines = 40
+
+	// agentSilentWindow: how long after an agent session starts to wait before
+	// deciding it is "alive but not drawing". A healthy agent paints its UI within
+	// a second or two; a startup failure (auth/login/network/policy/TTY) commonly
+	// leaves the alt-screen blank with almost no output and never exits, so the
+	// exit-based capture above never fires. This watchdog covers that case.
+	agentSilentWindow = 15 * time.Second
+	// agentSilentMinOutput: a still-alive agent that has produced fewer than this
+	// many output bytes by agentSilentWindow is treated as not having drawn. The
+	// blank case observed in the field produced ~179 bytes (alt-screen setup only).
+	agentSilentMinOutput = 512
 )
 
 // procExitWaitTimeout bounds how long close() waits for the child process to exit
@@ -249,6 +260,12 @@ func (s *conptySession) start() error {
 	go s.drain()
 	go s.wait()
 	go s.autoYesLoop()
+	// Agent-only watchdog: catches "started but never drew its UI" (the child stays
+	// alive yet produces almost no output), which the exit-based capture can't see.
+	// Gated to copilot-style agents so a shell idling at a prompt is never flagged.
+	if agentcmd.SupportsResume(s.program) {
+		go s.watchAgentSilence()
+	}
 	pid := 0
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
@@ -535,24 +552,11 @@ func (s *conptySession) wait() {
 // opened" on locked-down/corporate machines. Bounded and ANSI-stripped so the log
 // stays readable and small.
 func (s *conptySession) logExitOutput(exitCode int, lifetime time.Duration) {
-	early := lifetime > 0 && lifetime < exitCaptureEarlyWindow
-	if exitCode == 0 && !early {
+	reason := exitCaptureReason(exitCode, lifetime)
+	if reason == "" {
 		return
 	}
-	s.mu.Lock()
-	raw := s.rawRing
-	if len(raw) > exitCaptureRawScan {
-		raw = raw[len(raw)-exitCaptureRawScan:]
-	}
-	// Copy out so we don't retain/alias the live ring under sanitization.
-	scan := append([]byte(nil), raw...)
-	s.mu.Unlock()
-
-	text, lines := sanitizeExitOutput(scan, exitCaptureMaxBytes, exitCaptureMaxLines)
-	reason := "early-exit"
-	if exitCode != 0 {
-		reason = "nonzero-exit"
-	}
+	text, lines := s.sanitizedOutputTail()
 	if text == "" {
 		s.logf("conpty exit output session=%q reason=%s (no readable output captured)", s.name, reason)
 		return
@@ -561,6 +565,60 @@ func (s *conptySession) logExitOutput(exitCode int, lifetime time.Duration) {
 		"conpty exit output session=%q reason=%s exitCode=%d lines=%d\n----- begin agent output (sanitized tail) -----\n%s\n----- end agent output -----",
 		s.name, reason, exitCode, lines, text,
 	)
+}
+
+// exitCaptureReason returns why an exit warrants output capture, or "" to skip.
+func exitCaptureReason(exitCode int, lifetime time.Duration) string {
+	if exitCode != 0 {
+		return "nonzero-exit"
+	}
+	if lifetime > 0 && lifetime < exitCaptureEarlyWindow {
+		return "early-exit"
+	}
+	return ""
+}
+
+// watchAgentSilence logs a diagnostic if, agentSilentWindow after start, the agent
+// child is still alive but has produced almost no output — i.e. it launched but
+// never drew its UI (the blank-agent-pane failure that never exits, so the
+// exit-based capture can't catch it). Returns early if the child exits first.
+func (s *conptySession) watchAgentSilence() {
+	defer recoverGoroutine("conpty.silenceWatch")
+	select {
+	case <-s.procDone:
+		return // the child exited; wait()/logExitOutput covers this path
+	case <-time.After(agentSilentWindow):
+	}
+	if !s.alive() {
+		return
+	}
+	n := s.drainedBytes.Load()
+	if n >= agentSilentMinOutput {
+		return // drew a real UI; healthy
+	}
+	text, lines := s.sanitizedOutputTail()
+	note := "agent is alive but produced little/no output — it likely failed to start its UI (possible auth/login, network, policy, or TTY issue). Run the agent directly in a Terminal in the worktree to see its output."
+	if text == "" {
+		s.logf("conpty agent silent session=%q outputBytes=%d afterMs=%d note=%s", s.name, n, agentSilentWindow.Milliseconds(), note)
+		return
+	}
+	s.logf(
+		"conpty agent silent session=%q outputBytes=%d afterMs=%d lines=%d note=%s\n----- begin agent output (sanitized tail) -----\n%s\n----- end agent output -----",
+		s.name, n, agentSilentWindow.Milliseconds(), lines, note, text,
+	)
+}
+
+// sanitizedOutputTail copies a bounded tail of the raw output ring and returns it
+// ANSI-stripped and trimmed for logging. Shared by the exit and silence captures.
+func (s *conptySession) sanitizedOutputTail() (string, int) {
+	s.mu.Lock()
+	raw := s.rawRing
+	if len(raw) > exitCaptureRawScan {
+		raw = raw[len(raw)-exitCaptureRawScan:]
+	}
+	scan := append([]byte(nil), raw...)
+	s.mu.Unlock()
+	return sanitizeExitOutput(scan, exitCaptureMaxBytes, exitCaptureMaxLines)
 }
 
 func (s *conptySession) sendKeys(b []byte) error {
