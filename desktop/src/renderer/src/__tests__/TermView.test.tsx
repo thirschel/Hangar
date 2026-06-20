@@ -198,10 +198,12 @@ describe('TermView startup ordering', () => {
     });
 
     expect(writeSpy).not.toHaveBeenCalled();
+    // Cross-session data is filtered out and reported (throttled, non-error) rather
+    // than written to this pane's terminal.
     expect(diagSpy).toHaveBeenCalledWith(
-      'TermView data session mismatch',
-      expect.objectContaining({ expected: 'ws_self', got: 'ws_other' }),
-      'error',
+      'TermView data session mismatch (filtered)',
+      expect.objectContaining({ expected: 'ws_self', count: expect.any(Number) }),
+      'info',
     );
   });
 });

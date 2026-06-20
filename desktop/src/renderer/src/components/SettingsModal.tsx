@@ -658,6 +658,131 @@ function DiagnosticsPanel({ settings, patch }: DiagnosticsPanelProps): JSX.Eleme
         restricted). Requires restarting the app to take effect.
       </div>
 
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.disableWindowOcclusion ?? true}
+          onChange={(e) => patch({ disableWindowOcclusion: e.target.checked })}
+        />
+        <span>Disable window occlusion detection</span>
+      </label>
+      <div className="diagnostics-helper">
+        Recommended for RDP/VDI. Stops Chromium pausing the compositor when it wrongly thinks the
+        window is hidden — a common cause of blank terminals. Requires restarting the app.
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.disableDirectComposition ?? true}
+          onChange={(e) => patch({ disableDirectComposition: e.target.checked })}
+        />
+        <span>Disable DirectComposition (remote sessions)</span>
+      </label>
+      <div className="diagnostics-helper">
+        For RDP/VDI where the terminal stays blank even with occlusion disabled. Routes screen
+        presents through a path the remote-desktop stack reliably draws. Only applied in detected
+        remote sessions; no effect on local machines. Requires restarting the app.
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.disableGpuCompositing ?? false}
+          onChange={(e) => patch({ disableGpuCompositing: e.target.checked })}
+        />
+        <span>Force-disable GPU compositing (last resort)</span>
+      </label>
+      <div className="diagnostics-helper">
+        Last resort, off by default. Appends <code>--disable-gpu-compositing --disable-gpu</code>.
+        Not generally recommended (it can make rendering worse); only try it if the options above
+        don’t fix a blank terminal. Requires restarting the app.
+      </div>
+
+      <label className="field">
+        <span>Terminal renderer</span>
+        <select
+          value={settings.terminalRenderer ?? 'auto'}
+          onChange={(e) => patch({ terminalRenderer: e.target.value as Settings['terminalRenderer'] })}
+        >
+          <option value="auto">Auto (default)</option>
+          <option value="dom">DOM</option>
+          <option value="canvas">Canvas (RDP/no-GPU)</option>
+        </select>
+      </label>
+      <div className="diagnostics-helper">
+        <strong>Auto</strong> uses the canvas renderer automatically when no GPU compositing is detected
+        (RDP/VDI), where the normal DOM renderer can show a blank terminal, and the DOM renderer
+        otherwise. Force <strong>Canvas</strong> if terminals render blank but auto didn’t catch it.
+        Reopen the workspace after changing.
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.resumeAgentSessions ?? true}
+          onChange={(e) => patch({ resumeAgentSessions: e.target.checked })}
+        />
+        <span>Resume agent sessions</span>
+      </label>
+      <div className="diagnostics-helper">
+        Launches the agent with a session id so the conversation survives a restart. <strong>Uncheck
+        this if the agent pane stays blank on startup</strong> — on some locked-down machines the
+        new-session handshake hangs and the agent never draws. New workspaces only.
+      </div>
+
+      <label className="field">
+        <span>Terminal repaint nudge</span>
+        <select
+          value={settings.terminalNudge ?? 'native'}
+          onChange={(e) => patch({ terminalNudge: e.target.value as Settings['terminalNudge'] })}
+        >
+          <option value="native">Native window (default)</option>
+          <option value="fontsize">Renderer font-size</option>
+          <option value="cols">Renderer columns</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <div className="diagnostics-helper">
+        How to coax a blank terminal into painting on software-compositing machines. Only active when
+        no GPU compositing is detected (no effect on normal machines). “Native window” replicates the
+        window resize that is known to fix it.
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.terminalDiagnostics ?? false}
+          onChange={(e) => patch({ terminalDiagnostics: e.target.checked })}
+        />
+        <span>Terminal render diagnostics</span>
+      </label>
+      <div className="diagnostics-helper">
+        Logs terminal paint decision-signals (pixel probe + measurements) to desktop.log to help
+        diagnose blank panes. Has a small performance cost; leave off unless investigating.
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.terminalRenderSelfTest ?? false}
+          onChange={(e) => patch({ terminalRenderSelfTest: e.target.checked })}
+        />
+        <span>Terminal render self-test (canvas overlay)</span>
+      </label>
+      <div className="diagnostics-helper">
+        Overlays a small animated box on the terminal. If the box <strong>animates</strong> while the
+        terminal stays blank, a canvas-based renderer can fix it; if the box is <strong>also</strong>
+        blank, the problem is below the renderer. Diagnostic only — turn off for normal use. Reopen the
+        workspace after toggling.
+      </div>
+
+      <div className="diagnostics-actions">
+        <button type="button" onClick={() => void window.cs.forceRepaint()}>
+          Force terminal repaint
+        </button>
+      </div>
+
       <LogViewer />
     </div>
   );

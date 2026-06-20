@@ -5,7 +5,18 @@ import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { isAtBottom, normalizeHistory } from './termHistory';
 import { appHandlesWheel, encodeWheelSgr } from './termWheel';
+import { CanvasTermRenderer } from './canvasRenderer';
 import { diag } from '../diag';
+
+const TERM_THEME = {
+  background: '#1e1e1e',
+  foreground: '#d4d4d4',
+  cursor: '#ffffff',
+  selectionBackground: '#264f78',
+};
+const TERM_FONT_FAMILY =
+  '"CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "MesloLGM Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "Cascadia Code NF", "Cascadia Mono NF", Consolas, "Cascadia Mono", "Cascadia Code", monospace';
+const TERM_FONT_SIZE = 13;
 
 type TermViewProps = {
   // The daemon session to stream (agent ws_… or shell sh_…). Null renders nothing.
@@ -44,16 +55,15 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       rows: 30,
       scrollback: 10000, // Allow scrolling back through conversation history
       cursorBlink: true,
-      fontFamily:
-        '"CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "MesloLGM Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "Cascadia Code NF", "Cascadia Mono NF", Consolas, "Cascadia Mono", "Cascadia Code", monospace',
-      fontSize: 13,
+      fontFamily: TERM_FONT_FAMILY,
+      fontSize: TERM_FONT_SIZE,
       allowProposedApi: true,
       windowsPty: { backend: 'conpty', buildNumber: 26100 },
       theme: {
-        background: '#1e1e1e',
-        foreground: '#d4d4d4',
-        cursor: '#ffffff',
-        selectionBackground: '#264f78',
+        background: TERM_THEME.background,
+        foreground: TERM_THEME.foreground,
+        cursor: TERM_THEME.cursor,
+        selectionBackground: TERM_THEME.selectionBackground,
       },
     } as ConstructorParameters<typeof Terminal>[0]);
     const fit = new FitAddon();
@@ -76,6 +86,109 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     let dataEvents = 0;
     let dataBytes = 0;
     let firstDataLogged = false;
+    // Diagnostics: a short escaped preview of the first agent output chunks (to see
+    // whether the agent emits text vs only control/query sequences), and a throttled
+    // counter for cross-session data (every pane's onData sees every session's data
+    // and filters it — by design, but it can flood the log).
+    let previewEventsLogged = 0;
+    let mismatchCount = 0;
+    let mismatchLastLog = 0;
+
+    // RDP/software-compositing repaint-nudge state. renderInfo gates the
+    // renderer-only nudge; isNudging blocks the ResizeObserver from recursing
+    // while we briefly change fontSize/cols; nudgeCount bounds automatic fires.
+    let renderInfo: Awaited<ReturnType<typeof window.cs.getRenderInfo>> | null = null;
+    let isNudging = false;
+    let nudgeCount = 0;
+    // Canvas-viability self-test: when enabled, an animated 2D <canvas> is overlaid
+    // on the pane to decide whether a SINGLE canvas surface presents on this machine
+    // (if it animates while xterm is blank, a single-surface renderer / host-side
+    // canvas is the fix; if it's also blank, the failure is below the renderer).
+    let selfTestRaf = 0;
+    let canvasRenderer: CanvasTermRenderer | null = null;
+    let selfTestEl: HTMLDivElement | null = null;
+    const startRenderSelfTest = (): void => {
+      const container = containerRef.current;
+      if (disposed || !container || selfTestEl) return;
+      const host = document.createElement('div');
+      host.style.cssText =
+        'position:absolute;top:8px;left:8px;z-index:9999;background:#000;border:1px solid #888;' +
+        'padding:6px;font:12px monospace;color:#d4d4d4;pointer-events:none;';
+      const label = document.createElement('div');
+      label.textContent = 'render self-test — starting…';
+      const canvas = document.createElement('canvas');
+      canvas.width = 320;
+      canvas.height = 80;
+      canvas.style.cssText = 'display:block;margin-top:6px;width:320px;height:80px;';
+      host.appendChild(label);
+      host.appendChild(canvas);
+      if (!container.style.position) container.style.position = 'relative';
+      container.appendChild(host);
+      selfTestEl = host;
+      const ctx = canvas.getContext('2d');
+      let frames = 0;
+      let framesAtLastLog = 0;
+      let lastLog = performance.now();
+      diag('RenderSelfTest start', { session });
+      const loop = (now: number): void => {
+        frames += 1;
+        if (ctx) {
+          ctx.fillStyle = `hsl(${(frames * 3) % 360},70%,40%)`;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '18px monospace';
+          ctx.fillText(`canvas frame ${frames}`, 10, 30);
+          const x = (frames * 4) % Math.max(1, canvas.width - 44);
+          ctx.fillRect(x, canvas.height - 18, 40, 12);
+        }
+        if (now - lastLog >= 1000) {
+          label.textContent = `render self-test • frame ${frames}`;
+          diag('RenderSelfTest raf', { session, framesPerSec: frames - framesAtLastLog });
+          framesAtLastLog = frames;
+          lastLog = now;
+        }
+        selfTestRaf = requestAnimationFrame(loop);
+      };
+      selfTestRaf = requestAnimationFrame(loop);
+    };
+    void window.cs
+      .getRenderInfo()
+      .then((info) => {
+        if (disposed) return;
+        renderInfo = info;
+        if (info.terminalRenderSelfTest) startRenderSelfTest();
+        // Canvas renderer: paint the terminal to one 2D <canvas> instead of xterm's
+        // DOM rows (the fix for RDP/no-GPU machines where the DOM layer never
+        // presents but a canvas does). xterm still parses/buffers/handles input.
+        // 'auto' (default) enables it only under detected software compositing.
+        const useCanvas =
+          info.terminalRenderer === 'canvas' ||
+          (info.terminalRenderer === 'auto' && info.softwareCompositing);
+        if (useCanvas && containerRef.current) {
+          try {
+            canvasRenderer = new CanvasTermRenderer(term, containerRef.current, {
+              theme: TERM_THEME,
+              fontFamily: TERM_FONT_FAMILY,
+              fontSize: TERM_FONT_SIZE,
+              // Per-paint diagnostics only when explicitly enabled — the canvas
+              // renderer is the default on RDP, so it must not spam desktop.log.
+              log: info.terminalDiagnostics ? (event, data) => diag(event, data) : undefined,
+            });
+            // Paint the buffer already populated before the renderer was built.
+            canvasRenderer.requestPaint();
+            diag('TermView canvas renderer active', { session });
+          } catch (error) {
+            diag(
+              'TermView canvas renderer failed',
+              { session, message: error instanceof Error ? error.message : String(error) },
+              'error',
+            );
+          }
+        }
+      })
+      .catch(() => {
+        // Render info is best-effort; the nudge just no-ops without it.
+      });
 
     const termIsAtBottom = (): boolean =>
       isAtBottom(term.buffer.active.viewportY, term.buffer.active.baseY);
@@ -166,15 +279,79 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     el.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
 
+    // Track the last cols/rows actually sent to the host so a re-fit that lands on
+    // the SAME size doesn't issue a redundant ConPTY resize. This is what keeps the
+    // native-window repaint nudge (a 1px, sub-cell window resize) from propagating a
+    // PTY resize / SIGWINCH to the agent — its ResizeObserver-driven re-fit nets the
+    // same cols/rows, so cs.resize is skipped — while genuine size changes still go
+    // through. (Also de-spams the host on same-size refits during tab switches.)
+    let lastSentCols = 0;
+    let lastSentRows = 0;
     const resize = (): void => {
       try {
         fit.fit();
-        window.cs.resize(session, term.cols, term.rows);
+        if (term.cols !== lastSentCols || term.rows !== lastSentRows) {
+          lastSentCols = term.cols;
+          lastSentRows = term.rows;
+          window.cs.resize(session, term.cols, term.rows);
+        }
+        // Report the pane rect so the main-process diagnostics probe can capture
+        // just the terminal region (isolating it from the React UI).
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          window.cs.setTerminalRect?.(session, {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          });
+        }
       } catch {
         // Fit can throw while the element is detached during startup/teardown.
       }
     };
     refitRef.current = resize;
+
+    // Renderer-only re-raster nudge (RDP/software-compositing): briefly toggle
+    // fontSize (or cols) by ±1 across two animation frames, then restore, forcing
+    // xterm to re-rasterize without an OS-window resize. Guarded by isNudging so
+    // the transient size change does not re-enter the ResizeObserver→fit path and
+    // recurse. NEVER calls window.cs.resize (no PTY resize / SIGWINCH). Bounded to
+    // 2 automatic fires; `force` (the manual "Force terminal repaint" command)
+    // bypasses the gate and the bound. See docs/rdp-blank-terminal.md.
+    const nudgeRenderer = (force: boolean): void => {
+      if (disposed || isNudging) return;
+      const mode = renderInfo?.terminalNudge;
+      const eligible =
+        !!renderInfo?.softwareCompositing && (mode === 'fontsize' || mode === 'cols');
+      if (!force) {
+        if (!eligible || nudgeCount >= 2) return;
+        nudgeCount += 1;
+      }
+      const useCols = mode === 'cols';
+      isNudging = true;
+      const restoreFont = term.options?.fontSize ?? 13;
+      const baseCols = term.cols;
+      const baseRows = term.rows;
+      try {
+        if (useCols) term.resize(Math.max(1, baseCols + 1), baseRows);
+        else term.options.fontSize = restoreFont + 1;
+      } catch {
+        // Restore below still runs.
+      }
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          try {
+            if (useCols) term.resize(baseCols, baseRows);
+            else term.options.fontSize = restoreFont;
+          } catch {
+            // Element/term may be tearing down; ignore.
+          }
+          isNudging = false;
+          diag('TermView nudge fired', { session, mode: useCols ? 'cols' : 'fontsize', force });
+        });
+      });
+    };
 
     const inputDisposable = term.onData((data) => window.cs.sendInput(session, data));
     const unsubData = window.cs.onData((d) => {
@@ -185,6 +362,18 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         if (!firstDataLogged) {
           firstDataLogged = true;
           diag('TermView first data', { session, bytes: bytes.byteLength });
+          nudgeRenderer(false);
+        }
+        // Log an escaped preview of the first few chunks (diagnostics only) so a
+        // blank pane can be diagnosed: if the agent only emits control/query
+        // sequences (and waits), the buffer stays empty and nothing renders.
+        if (renderInfo?.terminalDiagnostics && previewEventsLogged < 3) {
+          previewEventsLogged += 1;
+          diag('TermView data preview', {
+            session,
+            bytes: bytes.byteLength,
+            preview: escapeBytesPreview(bytes, 200),
+          });
         }
         // "Follow mode": only auto-scroll to bottom when user is already at bottom.
         // This preserves the user's scroll position when reviewing history.
@@ -193,14 +382,26 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         const wasAtBottom = termIsAtBottom();
         term.write(bytes, () => {
           if (dataEvents === 1) diag('TermView first write done', { session });
+          // Repaint the canvas after xterm has parsed the bytes into its buffer
+          // (guarantees the canvas reflects new output even if onRender is missed).
+          canvasRenderer?.requestPaint();
         });
         if (wasAtBottom) {
           term.scrollToBottom();
         }
       } else {
-        // A term:data event for another session reached this view — would mean
-        // the renderer-side session filter is the reason a pane stays blank.
-        diag('TermView data session mismatch', { expected: session, got: d.session }, 'error');
+        // A term:data event for another session reached this view. This is expected
+        // (each pane's onData sees all sessions and filters), so it is NOT an error;
+        // throttle a count so it can't flood the log.
+        mismatchCount += 1;
+        const now = Date.now();
+        if (now - mismatchLastLog >= 2000) {
+          diag('TermView data session mismatch (filtered)', {
+            expected: session,
+            count: mismatchCount,
+          });
+          mismatchLastLog = now;
+        }
       }
     });
     const unsubClosed = window.cs.onClosed((c) => {
@@ -217,9 +418,15 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         term.writeln(`\r\n\x1b[31m[stream error: ${e.message}]\x1b[0m`);
       }
     });
+    // Manual "Force terminal repaint" command (Settings → Diagnostics): run the
+    // renderer-only nudge regardless of mode/compositing (the user asked for it).
+    const unsubNudge = window.cs.onTerminalNudge(() => nudgeRenderer(true));
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleResize = (): void => {
+      // Ignore the transient size change our own nudge causes (prevents the
+      // ResizeObserver→fit→nudge re-entrancy loop).
+      if (isNudging) return;
       if (resizeTimer) {
         clearTimeout(resizeTimer);
       }
@@ -270,6 +477,9 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           }
           resize();
           term.focus();
+          // Initial-snapshot repaint nudge (no-op unless software compositing +
+          // a renderer-only nudge mode). The native-window nudge fires in main.
+          nudgeRenderer(false);
         })
         .catch((error: unknown) => {
           if (disposed) return;
@@ -280,29 +490,50 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     let settleRaf1 = 0;
     let settleRaf2 = 0;
-    // Wait for flex/grid layout, fonts, and xterm cell measurement to settle
-    // (two frames) so fit() reflects the real pane BEFORE we prime history and
-    // bind the live attach. Otherwise a workspace switch attaches at the default
-    // 120x30 and only self-corrects on an OS resize (the bug being fixed).
-    settleRaf1 = requestAnimationFrame(() => {
-      settleRaf1 = 0;
-      settleRaf2 = requestAnimationFrame(() => {
-        settleRaf2 = 0;
-        if (disposed) return;
-        try {
-          fit.fit();
-        } catch {
-          // Element can be detached mid-startup/teardown; connect() still
-          // attaches at the current size and the ResizeObserver refit corrects it.
-        }
-        void connect();
+    const twoFrames = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        settleRaf1 = requestAnimationFrame(() => {
+          settleRaf1 = 0;
+          settleRaf2 = requestAnimationFrame(() => {
+            settleRaf2 = 0;
+            resolve();
+          });
+        });
       });
-    });
+    // Wait for fonts to load AND for flex/grid layout + xterm cell measurement to
+    // settle (two frames) so fit() reflects the real pane BEFORE we prime history
+    // and bind the live attach. Without awaiting document.fonts.ready, the Nerd
+    // Font may not be loaded at first paint and cells can measure 0×0 until a later
+    // refit (one cause of the blank-pane bug). Otherwise a workspace switch
+    // attaches at the default 120x30 and only self-corrects on an OS resize.
+    const settle = async (): Promise<void> => {
+      try {
+        if (document.fonts?.ready) await document.fonts.ready;
+      } catch {
+        // Fonts API unavailable or rejected; proceed with measurement anyway.
+      }
+      if (disposed) return;
+      await twoFrames();
+      if (disposed) return;
+      try {
+        fit.fit();
+      } catch {
+        // Element can be detached mid-startup/teardown; connect() still attaches
+        // at the current size and the ResizeObserver refit corrects it.
+      }
+      void connect();
+    };
+    void settle();
 
     return () => {
       disposed = true;
       if (settleRaf1) cancelAnimationFrame(settleRaf1);
       if (settleRaf2) cancelAnimationFrame(settleRaf2);
+      if (selfTestRaf) cancelAnimationFrame(selfTestRaf);
+      if (selfTestEl) {
+        selfTestEl.remove();
+        selfTestEl = null;
+      }
       if (resizeTimer) {
         clearTimeout(resizeTimer);
       }
@@ -314,8 +545,13 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       unsubData();
       unsubClosed();
       unsubError();
+      unsubNudge();
       diag('TermView unmount', { session, dataEvents, dataBytes });
       window.cs.detachSession(session);
+      if (canvasRenderer) {
+        canvasRenderer.dispose();
+        canvasRenderer = null;
+      }
       term.dispose();
       refitRef.current = () => {};
     };
@@ -340,3 +576,23 @@ function toBytes(chunk: Uint8Array): Uint8Array {
   }
   return new Uint8Array(chunk);
 }
+
+// escapeBytesPreview renders up to `max` bytes as a human-readable string for
+// desktop.log: printable ASCII as-is, ESC as \e, other control/high bytes as \xHH.
+// Lets us see whether the agent emitted text or only control/query sequences.
+function escapeBytesPreview(bytes: Uint8Array, max: number): string {
+  const n = Math.min(bytes.byteLength, max);
+  let out = '';
+  for (let i = 0; i < n; i++) {
+    const b = bytes[i];
+    if (b === 0x1b) out += '\\e';
+    else if (b >= 0x20 && b <= 0x7e) out += String.fromCharCode(b);
+    else if (b === 0x0a) out += '\\n';
+    else if (b === 0x0d) out += '\\r';
+    else if (b === 0x09) out += '\\t';
+    else out += '\\x' + b.toString(16).padStart(2, '0');
+  }
+  if (bytes.byteLength > max) out += '…';
+  return out;
+}
+
