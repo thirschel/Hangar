@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { open as openFile, stat as statFile } from 'node:fs/promises';
 import type net from 'node:net';
 import {
@@ -28,7 +28,12 @@ import {
 } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
-import { isSoftwareCompositing } from './render-detect';
+import {
+  getRenderInfo,
+  serializeRenderState,
+  type RenderInfo,
+} from './render-detect';
+import { analyzeBitmap } from './paint-metrics';
 import { log } from './logger';
 import {
   checkForUpdate,
@@ -52,6 +57,14 @@ export type AppInfo = {
   // renderer uses this to force terminal repaints that the software compositor
   // otherwise drops. See render-detect.ts / isSoftwareCompositing.
   softwareCompositing: boolean;
+  // True when running inside a Windows Remote Desktop session (no hardware GPU);
+  // the environment where the blank-terminal bug reproduces.
+  remoteSession: boolean;
+  // Gate flags the renderer reads once: enable verbose paint diagnostics, and
+  // whether the legacy (ineffective) software-compositing repaint workarounds are
+  // re-enabled for A/B testing.
+  paintDiag: boolean;
+  legacyRepaint: boolean;
 };
 
 const CS_EXE =
@@ -84,22 +97,119 @@ const hardwareAccelerationDisabled = ((): boolean => {
   return false;
 })();
 
+// envFlag reads a tri-state boolean env override: returns true/false when the var
+// is set to an on/off token, or undefined when unset (so a setting can decide).
+function envFlag(name: string): boolean | undefined {
+  const v = process.env[name];
+  if (v === undefined) return undefined;
+  const s = v.trim().toLowerCase();
+  if (s === '' ) return undefined;
+  if (['1', 'true', 'on', 'yes'].includes(s)) return true;
+  if (['0', 'false', 'off', 'no'].includes(s)) return false;
+  return undefined;
+}
+
+// appendDisableFeature merges a Chromium feature into the existing
+// --disable-features switch instead of overwriting it (Electron's appendSwitch
+// replaces the value). Safe even if nothing else set it.
+function appendDisableFeature(feature: string): void {
+  const existing = app.commandLine.getSwitchValue('disable-features');
+  const set = new Set(
+    existing
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  if (set.has(feature)) return;
+  set.add(feature);
+  app.commandLine.appendSwitch('disable-features', Array.from(set).join(','));
+}
+
+// Disable native-window occlusion calculation BEFORE app.whenReady() (command-
+// line switches have no effect afterwards). When Chromium thinks Hangar's window
+// is occluded it throttles/pauses the window's presents; on RDP/VDI this leaves
+// the terminal blank until an OS-window resize forces a present — the leading
+// suspected root cause. VS Code ships this same switch globally. The mitigation
+// is on by default. HANGAR_WINDOW_OCCLUSION overrides the setting and names
+// Chromium's occlusion calculation: =on keeps occlusion (DISABLES the mitigation,
+// to reproduce the bug for A/B testing); =off forces the mitigation on.
+const windowOcclusionDisabled = ((): boolean => {
+  try {
+    const override = envFlag('HANGAR_WINDOW_OCCLUSION');
+    // override=on => occlusion calc stays ON => do NOT apply the mitigation.
+    const disable = override !== undefined ? !override : getSettings().disableWindowOcclusion !== false;
+    if (disable) {
+      appendDisableFeature('CalculateNativeWinOcclusion');
+      // Don't background/throttle the renderer when the OS reports the window as
+      // occluded/hidden, so presents and timers keep running under RDP.
+      app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+      app.commandLine.appendSwitch('disable-renderer-backgrounding');
+      return true;
+    }
+  } catch {
+    // Settings unreadable at startup; fall through to the default (disabled).
+    appendDisableFeature('CalculateNativeWinOcclusion');
+    return true;
+  }
+  return false;
+})();
+
+// Optional isolated experiment: disable DirectComposition (a suspected swap-chain
+// present bug on RDP). Off unless HANGAR_DISABLE_DIRECT_COMPOSITION is set, so it
+// never affects normal users; for on-box A/B testing only.
+const directCompositionDisabled = ((): boolean => {
+  if (envFlag('HANGAR_DISABLE_DIRECT_COMPOSITION') === true) {
+    app.commandLine.appendSwitch('disable-direct-composition');
+    return true;
+  }
+  return false;
+})();
+
+// Paint diagnostics + legacy-repaint gates, resolved once (env overrides setting).
+function paintDiagnosticsEnabled(): boolean {
+  const env = envFlag('HANGAR_PAINT_DIAG');
+  if (env !== undefined) return env;
+  try {
+    return getSettings().paintDiagnostics === true;
+  } catch {
+    return false;
+  }
+}
+
+function legacyRepaintEnabled(): boolean {
+  const env = envFlag('HANGAR_LEGACY_REPAINT');
+  if (env !== undefined) return env;
+  try {
+    return getSettings().legacyRepaint === true;
+  } catch {
+    return false;
+  }
+}
+
 function hostVerbose(): boolean {
   return getSettings().verboseLogging || !!process.env.HANGAR_DEBUG;
 }
 
-// isSoftwareCompositing is defined in ./render-detect (electron-free + tested).
-// softwareCompositing is resolved once the app is ready (getGPUFeatureStatus is
-// only meaningful then) and gates the forced-repaint workaround below.
+// isSoftwareCompositing/getRenderInfo are defined in ./render-detect (electron-
+// free + tested). softwareCompositing is resolved once the app is ready
+// (getGPUFeatureStatus is only meaningful then); renderInfo holds the full
+// resolved view (compositing + remote-session) for diagnostics/IPC.
 let softwareCompositing = false;
+let renderInfo: RenderInfo = {
+  softwareCompositing: false,
+  remoteSession: false,
+  sessionName: String(process.env.SESSIONNAME ?? '').trim(),
+  hardwareAccelerationDisabled,
+  windowOcclusionDisabled,
+};
 
 // scheduleTerminalRepaint forces a full window repaint, coalesced, but only when
-// compositing in software — otherwise it is a no-op so normal (GPU) machines are
-// unaffected. This is the programmatic equivalent of the "resize the pane to make
-// it appear" workaround for the RDP software-compositor-not-flushing bug.
+// compositing in software AND the legacy repaint workaround is explicitly enabled.
+// This #70 invalidate() approach proved ineffective on RDP (only an OS-window
+// resize repaints), so it is OFF by default — kept gated for A/B field testing.
 let repaintTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleTerminalRepaint(): void {
-  if (!softwareCompositing || repaintTimer) return;
+  if (!softwareCompositing || !legacyRepaintEnabled() || repaintTimer) return;
   repaintTimer = setTimeout(() => {
     repaintTimer = null;
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.invalidate();
@@ -108,16 +218,21 @@ function scheduleTerminalRepaint(): void {
 }
 
 // forceTerminalRepaintBurst fires a few spaced repaints (software compositing
-// only) to catch the initial attach snapshot, whose async xterm render may land
-// after the first coalesced repaint.
+// only) to catch the initial attach snapshot. Same legacy gate as above.
 function forceTerminalRepaintBurst(): void {
-  if (!softwareCompositing) return;
+  if (!softwareCompositing || !legacyRepaintEnabled()) return;
   for (const delay of [120, 400, 1000]) {
     const t = setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.invalidate();
     }, delay);
     t.unref?.();
   }
+}
+
+// renderStatePath is where the resolved render state is cached between launches
+// (see serializeRenderState) so a future start can gate pre-ready switches.
+function renderStatePath(): string {
+  return path.join(os.homedir(), '.hangar', 'render-state.json');
 }
 
 function diagnosticLogPaths(): LogPaths {
@@ -681,6 +796,9 @@ ipcMain.handle(
     githubUrl: 'https://github.com/thirschel/Hangar',
     author: 'Hangar contributors',
     softwareCompositing,
+    remoteSession: renderInfo.remoteSession,
+    paintDiag: paintDiagnosticsEnabled(),
+    legacyRepaint: legacyRepaintEnabled(),
   }),
 );
 
@@ -770,6 +888,94 @@ ipcMain.handle('cs:open-devtools', async (): Promise<void> => {
   }
 });
 
+// Resolved render state (compositing/remote/occlusion + diagnostic gates). Read
+// by the renderer's paint diagnostics and available for a future Diagnostics UI.
+ipcMain.handle('cs:get-render-info', async () => ({
+  ...renderInfo,
+  directCompositionDisabled,
+  paintDiag: paintDiagnosticsEnabled(),
+  legacyRepaint: legacyRepaintEnabled(),
+}));
+
+// Paint-capture probe (P0c, blank-terminal diagnostics). The renderer reports the
+// terminal's on-screen rect; we capture exactly that region from the COMPOSITED
+// page and sample it. If it shows non-background pixels while the user sees a
+// blank pane, the page rastered but was never presented to the OS window (H1,
+// native-present/occlusion). If it is uniform background, raster never happened
+// (H2). Counts/hashes only — never raw pixels. No-op unless diagnostics are on.
+ipcMain.handle(
+  'cs:paint-capture',
+  async (
+    _event,
+    args: { label?: string; rect?: { x: number; y: number; width: number; height: number } },
+  ): Promise<{ ok: boolean } & Partial<ReturnType<typeof analyzeBitmap>>> => {
+    if (!paintDiagnosticsEnabled() || !mainWindow || mainWindow.isDestroyed()) {
+      return { ok: false };
+    }
+    const label = typeof args?.label === 'string' ? args.label : 'capture';
+    try {
+      const r = args?.rect;
+      const rect =
+        r && Number.isFinite(r.width) && Number.isFinite(r.height) && r.width > 0 && r.height > 0
+          ? {
+              x: Math.max(0, Math.round(r.x)),
+              y: Math.max(0, Math.round(r.y)),
+              width: Math.round(r.width),
+              height: Math.round(r.height),
+            }
+          : undefined;
+      const image = rect
+        ? await mainWindow.webContents.capturePage(rect)
+        : await mainWindow.webContents.capturePage();
+      const size = image.getSize();
+      // Sample with a stride so large regions stay cheap (~a few thousand px).
+      const px = Math.max(1, size.width * size.height);
+      const stride = Math.max(1, Math.floor(Math.sqrt(px / 4000)));
+      const stats = analyzeBitmap(image.toBitmap(), undefined, undefined, stride);
+      log.info('paint-capture', { label, w: size.width, h: size.height, stride, ...stats });
+      return { ok: true, ...stats };
+    } catch (error) {
+      log.error('paint-capture failed', {
+        label,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { ok: false };
+    }
+  },
+);
+
+// Native-window nudge probe (P0c matrix row + the mechanism behind the Phase-1
+// fix). Replicates the only known-good action — an OS-window resize — by growing
+// the content bounds 1px for ~2 frames then restoring it. If this repaints a
+// blank terminal, the lever is the NATIVE PRESENT (H1), confirming the occlusion/
+// present hypothesis over any in-renderer nudge. No-op unless diagnostics are on
+// or explicitly invoked; skipped when maximized/fullscreen (bounds are pinned).
+ipcMain.handle('cs:paint-nudge-native', async (_event, args: { label?: string }): Promise<{ ok: boolean }> => {
+  if (!paintDiagnosticsEnabled() || !mainWindow || mainWindow.isDestroyed()) return { ok: false };
+  const label = typeof args?.label === 'string' ? args.label : 'native-nudge';
+  if (mainWindow.isMinimized() || mainWindow.isMaximized() || mainWindow.isFullScreen()) {
+    log.info('paint-nudge-native skipped', { label, reason: 'maximized/fullscreen/minimized' });
+    return { ok: false };
+  }
+  try {
+    const b = mainWindow.getContentBounds();
+    mainWindow.setContentBounds({ ...b, width: b.width + 1 });
+    log.info('paint-nudge-native grow', { label, width: b.width + 1 });
+    await new Promise((resolve) => setTimeout(resolve, 48));
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.setContentBounds(b);
+      log.info('paint-nudge-native restore', { label, width: b.width });
+    }
+    return { ok: true };
+  } catch (error) {
+    log.error('paint-nudge-native failed', {
+      label,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { ok: false };
+  }
+});
+
 app.whenReady().then(() => {
   // Windows taskbar + toast identity. Without an explicit AppUserModelId the OS
   // attributes the app (and its taskbar icon/notifications) to the generic
@@ -782,19 +988,37 @@ app.whenReady().then(() => {
   }
   // Hide the default application menu bar (File / Edit / View / Window / Help).
   Menu.setApplicationMenu(null);
-  // Record the GPU/acceleration state so a blank-terminal report can be diagnosed
-  // from desktop.log: confirms whether hardware acceleration is off and how
-  // Chromium resolved each GPU feature (e.g. software-only compositing). The
-  // resolved `softwareCompositing` flag also enables the forced-repaint workaround
-  // for RDP/VDI sessions where xterm updates the DOM but no paint is flushed.
+  // Record the GPU/acceleration/remote state so a blank-terminal report can be
+  // diagnosed from desktop.log: confirms whether hardware acceleration is off, how
+  // Chromium resolved each GPU feature (e.g. software-only compositing), whether
+  // we're on RDP, and whether the occlusion/direct-composition switches were
+  // applied. The resolved render state is also cached to ~/.hangar so the next
+  // launch can gate pre-ready switches before getGPUFeatureStatus is available.
   try {
     const featureStatus = app.getGPUFeatureStatus() as unknown as Record<string, unknown>;
-    softwareCompositing = isSoftwareCompositing(featureStatus, hardwareAccelerationDisabled);
+    renderInfo = getRenderInfo({
+      featureStatus,
+      hardwareAccelerationDisabled,
+      windowOcclusionDisabled,
+      env: process.env,
+    });
+    softwareCompositing = renderInfo.softwareCompositing;
     log.info('gpu status', {
       hardwareAccelerationDisabled,
+      windowOcclusionDisabled,
+      directCompositionDisabled,
       softwareCompositing,
+      remoteSession: renderInfo.remoteSession,
+      sessionName: renderInfo.sessionName,
+      paintDiag: paintDiagnosticsEnabled(),
+      legacyRepaint: legacyRepaintEnabled(),
       featureStatus,
     });
+    try {
+      writeFileSync(renderStatePath(), serializeRenderState(renderInfo), { mode: 0o600 });
+    } catch {
+      // Cache is best-effort; a failure here never blocks startup.
+    }
   } catch (error) {
     log.error('gpu status failed', error);
   }

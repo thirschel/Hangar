@@ -28,6 +28,19 @@ export type AppSettings = {
   defaultTerminalProfileId: string;
   verboseLogging: boolean;
   disableHardwareAcceleration: boolean;
+  // When true (default), pass --disable-features=CalculateNativeWinOcclusion at
+  // startup so Chromium never pauses the window's presents because it thinks the
+  // window is occluded. This is the leading suspected fix for blank terminals on
+  // RDP/VDI, where only an OS-window resize repaints them. Read pre-ready.
+  disableWindowOcclusion: boolean;
+  // When true, emit verbose paint diagnostics (capturePage pixel sampling, an
+  // always-animating liveness element, a DOM/measurement burst, and a paint
+  // matrix) to desktop.log. Off by default; for field diagnosis only.
+  paintDiagnostics: boolean;
+  // When true, re-enable the legacy software-compositing repaint workarounds
+  // (#70 invalidate burst + #72 renderer reflow). Off by default — those proved
+  // ineffective; kept gated for A/B field testing, not removed.
+  legacyRepaint: boolean;
 };
 
 export type ShellProfile = { id: string; label: string; command: string; args?: string[] };
@@ -48,6 +61,9 @@ export type Settings = {
   defaultTerminalProfileId: string;
   verboseLogging?: boolean;
   disableHardwareAcceleration?: boolean;
+  disableWindowOcclusion?: boolean;
+  paintDiagnostics?: boolean;
+  legacyRepaint?: boolean;
 };
 
 const APP_DEFAULTS: AppSettings = {
@@ -61,6 +77,9 @@ const APP_DEFAULTS: AppSettings = {
   defaultTerminalProfileId: '',
   verboseLogging: false,
   disableHardwareAcceleration: false,
+  disableWindowOcclusion: true,
+  paintDiagnostics: false,
+  legacyRepaint: false,
 };
 
 function csDir(): string {
@@ -204,6 +223,9 @@ export function getSettings(): Settings {
     defaultTerminalProfileId: app.defaultTerminalProfileId,
     verboseLogging: app.verboseLogging,
     disableHardwareAcceleration: app.disableHardwareAcceleration,
+    disableWindowOcclusion: app.disableWindowOcclusion,
+    paintDiagnostics: app.paintDiagnostics,
+    legacyRepaint: app.legacyRepaint,
   };
 }
 
@@ -234,6 +256,10 @@ export function applySettings(patch: Partial<Settings>): Settings {
   if (patch.verboseLogging !== undefined) app.verboseLogging = patch.verboseLogging;
   if (patch.disableHardwareAcceleration !== undefined)
     app.disableHardwareAcceleration = patch.disableHardwareAcceleration;
+  if (patch.disableWindowOcclusion !== undefined)
+    app.disableWindowOcclusion = patch.disableWindowOcclusion;
+  if (patch.paintDiagnostics !== undefined) app.paintDiagnostics = patch.paintDiagnostics;
+  if (patch.legacyRepaint !== undefined) app.legacyRepaint = patch.legacyRepaint;
   if (patch.terminalProfiles !== undefined) app.terminalProfiles = patch.terminalProfiles;
   if (patch.defaultTerminalProfileId !== undefined) app.defaultTerminalProfileId = patch.defaultTerminalProfileId;
   if (patch.uiRefreshMs !== undefined) {

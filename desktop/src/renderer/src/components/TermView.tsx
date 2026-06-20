@@ -5,25 +5,30 @@ import { useEffect, useImperativeHandle, useRef, forwardRef } from 'react';
 import '@xterm/xterm/css/xterm.css';
 import { isAtBottom, normalizeHistory } from './termHistory';
 import { appHandlesWheel, encodeWheelSgr } from './termWheel';
+import { installPaintDiagnostics, type PaintDiagHandle } from './paintDiag';
 import { diag } from '../diag';
 
-// Software compositing (RDP/VDI with no GPU) is fetched once and cached. In that
-// mode Chromium's software compositor frequently fails to flush xterm's paint, so
-// the terminal stays blank until a reflow; the TermView forces reflows below only
-// when this is true (no effect on normal GPU machines).
+// Render flags resolved once from the main process. softwareCompositing (RDP/VDI
+// with no GPU) gated the legacy reflow workaround; legacyRepaint re-enables that
+// (now-default-off, ineffective) workaround for A/B testing; paintDiag turns on
+// the blank-terminal paint diagnostics.
 let swCompositing = false;
-let swCompositingRequested = false;
-function ensureSoftwareCompositingFlag(): void {
-  if (swCompositingRequested) return;
-  swCompositingRequested = true;
-  void window.cs
+let legacyRepaint = false;
+let paintDiag = false;
+let renderFlagsPromise: Promise<void> | null = null;
+function ensureRenderFlags(): Promise<void> {
+  if (renderFlagsPromise) return renderFlagsPromise;
+  renderFlagsPromise = window.cs
     .getAppInfo()
     .then((info) => {
       swCompositing = Boolean(info.softwareCompositing);
+      legacyRepaint = Boolean(info.legacyRepaint);
+      paintDiag = Boolean(info.paintDiag);
     })
     .catch(() => {
-      /* default false; no forced repaints */
+      /* defaults: no workarounds, no diagnostics */
     });
+  return renderFlagsPromise;
 }
 
 type TermViewProps = {
@@ -195,16 +200,23 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     };
     refitRef.current = resize;
 
-    ensureSoftwareCompositingFlag();
-    // forceReflow forces a synchronous relayout + repaint of the terminal. Under
-    // software compositing (RDP) xterm updates the DOM but the compositor may not
-    // flush the paint until a reflow (the "resize the pane to make it appear"
-    // bug); toggling display off/on within one tick forces that paint without any
-    // visible flicker (the browser never paints the intermediate state). No-op on
-    // GPU machines. Coalesced via scheduleReflow so streamed output is cheap.
+    let paintDiagHandle: PaintDiagHandle | null = null;
+    void ensureRenderFlags().then(() => {
+      if (disposed || !paintDiag || !containerRef.current) return;
+      paintDiagHandle = installPaintDiagnostics({
+        term,
+        container: containerRef.current,
+        session,
+        runFit: resize,
+      });
+    });
+    // forceReflow forces a synchronous relayout + repaint of the terminal. This
+    // #72 workaround proved ineffective on RDP (only an OS-window resize repaints,
+    // not an in-renderer reflow), so it is OFF by default and runs only when the
+    // legacy repaint flag is explicitly enabled for A/B testing. No-op otherwise.
     let reflowTimer: ReturnType<typeof setTimeout> | null = null;
     const forceReflow = (): void => {
-      if (!swCompositing) return;
+      if (!swCompositing || !legacyRepaint) return;
       try {
         term.refresh(0, Math.max(0, term.rows - 1));
       } catch {
@@ -219,7 +231,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       }
     };
     const scheduleReflow = (): void => {
-      if (!swCompositing || reflowTimer) return;
+      if (!swCompositing || !legacyRepaint || reflowTimer) return;
       reflowTimer = setTimeout(() => {
         reflowTimer = null;
         forceReflow();
@@ -242,7 +254,10 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         // only when scrolled fully to the bottom (and is smaller when scrolled up).
         const wasAtBottom = termIsAtBottom();
         term.write(bytes, () => {
-          if (dataEvents === 1) diag('TermView first write done', { session });
+          if (dataEvents === 1) {
+            diag('TermView first write done', { session });
+            paintDiagHandle?.onFirstWrite();
+          }
         });
         if (wasAtBottom) {
           term.scrollToBottom();
@@ -320,8 +335,8 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           resize();
           term.focus();
           // Software compositing: paint the initial snapshot without a manual
-          // resize. Spaced because xterm's render lands a frame or two after write.
-          if (swCompositing) {
+          // resize. Legacy (#72) workaround — off by default; A/B only.
+          if (swCompositing && legacyRepaint) {
             for (const delay of [0, 120, 400, 1000]) {
               const t = setTimeout(() => {
                 if (!disposed) forceReflow();
@@ -376,6 +391,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       unsubData();
       unsubClosed();
       unsubError();
+      paintDiagHandle?.dispose();
       diag('TermView unmount', { session, dataEvents, dataBytes });
       window.cs.detachSession(session);
       term.dispose();

@@ -20,7 +20,31 @@ export type AppInfo = {
   githubUrl: string;
   author: string;
   softwareCompositing: boolean;
+  remoteSession: boolean;
+  paintDiag: boolean;
+  legacyRepaint: boolean;
 };
+
+export type RenderInfo = {
+  softwareCompositing: boolean;
+  remoteSession: boolean;
+  sessionName: string;
+  hardwareAccelerationDisabled: boolean;
+  windowOcclusionDisabled: boolean;
+  directCompositionDisabled: boolean;
+  paintDiag: boolean;
+  legacyRepaint: boolean;
+};
+
+export type PaintCaptureResult = {
+  ok: boolean;
+  sampled?: number;
+  nonBackground?: number;
+  nonBackgroundRatio?: number;
+  hash?: string;
+};
+
+export type PaintRect = { x: number; y: number; width: number; height: number };
 
 export type UpdateStatus = {
   status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
@@ -253,6 +277,14 @@ const api = {
   setSettings: (patch: Partial<Settings>): Promise<Settings> =>
     ipcRenderer.invoke('cs:set-settings', patch),
   getAppInfo: (): Promise<AppInfo> => ipcRenderer.invoke('cs:get-app-info'),
+  getRenderInfo: (): Promise<RenderInfo> => ipcRenderer.invoke('cs:get-render-info'),
+  // Paint diagnostics (no-ops in the main process unless diagnostics are enabled).
+  // paintCapture samples the composited terminal rect; paintNudgeNative replicates
+  // an OS-window resize to test whether the native present is the repaint lever.
+  paintCapture: (label: string, rect?: PaintRect): Promise<PaintCaptureResult> =>
+    ipcRenderer.invoke('cs:paint-capture', { label, rect }),
+  paintNudgeNative: (label: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('cs:paint-nudge-native', { label }),
   checkForUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('cs:check-for-update'),
   downloadUpdate: (): Promise<void> => ipcRenderer.invoke('cs:download-update'),
   installUpdate: (): Promise<void> => ipcRenderer.invoke('cs:install-update'),

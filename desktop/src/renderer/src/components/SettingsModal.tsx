@@ -658,6 +658,34 @@ function DiagnosticsPanel({ settings, patch }: DiagnosticsPanelProps): JSX.Eleme
         restricted). Requires restarting the app to take effect.
       </div>
 
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.disableWindowOcclusion ?? true}
+          onChange={(e) => patch({ disableWindowOcclusion: e.target.checked })}
+        />
+        <span>Disable window occlusion (recommended on RDP)</span>
+      </label>
+      <div className="diagnostics-helper">
+        Stops Chromium pausing the window&apos;s paints when it thinks the window is hidden — the
+        leading fix for blank terminals on RDP/VDI, where only resizing the app window repaints
+        them. On by default. Requires restarting the app to take effect.
+      </div>
+
+      <label className="field field--row diagnostics-verbose">
+        <input
+          type="checkbox"
+          checked={settings.paintDiagnostics ?? false}
+          onChange={(e) => patch({ paintDiagnostics: e.target.checked })}
+        />
+        <span>Paint diagnostics (blank-terminal investigation)</span>
+      </label>
+      <div className="diagnostics-helper">
+        Records detailed terminal paint/liveness measurements to desktop.log to pinpoint blank-pane
+        causes. Adds a small animated marker in the top-right corner while active. For diagnosis
+        only; leave off normally. Requires restarting the app to take effect.
+      </div>
+
       <LogViewer />
     </div>
   );

@@ -201,20 +201,23 @@ diagnostics). The desktop's **Settings → Diagnostics** tab opens or tails any 
 
 **Blank or garbled terminals in the desktop app (the pane renders nothing despite the agent
 running).** If `desktop.log` shows the bytes arriving (`[renderer] TermView first data` / `first write
-done`) but the pane stays empty, the terminal layer is failing to paint. The usual cause is
-**software compositing** — most often an **RDP/VDI session** (no hardware GPU) or hardware acceleration
-disabled by policy/drivers — where xterm updates the DOM but Chromium's software compositor doesn't
-flush the paint until a reflow (the tell-tale sign is that **resizing the window/pane makes the text
-appear**). Only xterm's layered screen is affected, which is why the rest of the app still paints.
+done`) but the pane stays empty, the terminal layer is failing to paint. This is seen most often in an
+**RDP/VDI session** (no hardware GPU, so Chromium composites in software — logged as
+`softwareCompositing` and `remoteSession` in the startup `gpu status` line of `desktop.log`). The
+tell-tale sign is that **resizing the app window makes the text appear** — and, importantly, that
+*only* an OS-**window** resize fixes it (dragging a pane splitter does not). That points the cause at
+the **native window present**: Chromium pauses/throttles the window's paints when it believes the
+window is occluded, so the rastered terminal is never presented until a real window resize forces it.
 
-The app now **detects software compositing** (logged as `softwareCompositing` in the startup
-`gpu status` line of `desktop.log`) and **forces repaints** automatically while a terminal is attached
-— both a full-window `invalidate()` from the main process and a synchronous reflow of the terminal
-element in the renderer (the same thing a manual resize does) — so it should paint without resizing.
-Note that **"Disable hardware acceleration" does not help on RDP** — there is no GPU to disable, so it
-leaves you in the same software-compositing path; the forced-repaint behaviour is what fixes it. If a
-pane is still blank, resize the window once (it will repaint) and capture the `gpu status` line for a
-bug report.
+The app now ships with **`--disable-features=CalculateNativeWinOcclusion`** (the same switch VS Code
+uses), exposed as **Settings → Diagnostics → "Disable window occlusion"** (on by default; restart to
+apply). This is the primary fix. Note that **"Disable hardware acceleration" does not help on RDP** —
+there is no GPU to disable. If a pane is still blank after restarting with this on, enable **Settings →
+Diagnostics → "Paint diagnostics"**, reproduce once, and send `desktop.log`: it records a window-paint
+liveness signal, capture-page pixel sampling of the terminal region, and a paint-mechanism matrix that
+together distinguish a paused window present from a renderer raster failure. (The older automatic
+forced-repaints — `invalidate()` and a renderer reflow — proved ineffective for this and are now off
+by default; re-enable them for A/B testing with `HANGAR_LEGACY_REPAINT=1`.)
 
 If the desktop UI freezes or panes attach with no output during rapid workspace/shell switching, the
 host's control pipe is likely backed up (its RPCs are processed serially). `host.log` now logs
