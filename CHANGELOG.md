@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.7.2](https://github.com/thirschel/Hangar/compare/v1.7.1...v1.7.2) (2026-06-21)
+
+### Bug Fixes
+
+* blank terminal panes on RDP / no-GPU Windows hosts (canvas renderer + VT emulator deadlock) ([#75](https://github.com/thirschel/Hangar/issues/75)) ([69c0cb8](https://github.com/thirschel/Hangar/commit/69c0cb86d879896ea52f0c9dc4edd67a13e52470))
+
 ## [1.7.1](https://github.com/thirschel/Hangar/compare/v1.7.0...v1.7.1) (2026-06-20)
 
 ### Bug Fixes
