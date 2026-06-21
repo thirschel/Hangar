@@ -42,6 +42,7 @@ const mockCs = {
     arch: 'x64',
     githubUrl: 'https://github.com/thirschel/Hangar',
     author: 'Hangar contributors',
+    softwareCompositing: false,
   }),
   checkForUpdate: async () => ({ status: 'not-available' }),
   downloadUpdate: asyncNoop,

@@ -19,6 +19,7 @@ export type AppInfo = {
   arch: string;
   githubUrl: string;
   author: string;
+  softwareCompositing: boolean;
 };
 
 export type UpdateStatus = {

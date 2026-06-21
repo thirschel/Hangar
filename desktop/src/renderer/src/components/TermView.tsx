@@ -18,6 +18,27 @@ const TERM_FONT_FAMILY =
   '"CaskaydiaCove Nerd Font", "CaskaydiaMono Nerd Font", "MesloLGM Nerd Font", "MesloLGS NF", "FiraCode Nerd Font", "JetBrainsMono Nerd Font", "Hack Nerd Font", "Cascadia Code NF", "Cascadia Mono NF", Consolas, "Cascadia Mono", "Cascadia Code", monospace';
 const TERM_FONT_SIZE = 13;
 
+// Software compositing (RDP/VDI with no GPU) is fetched once and cached. In that
+// mode Chromium's software compositor frequently fails to flush xterm's paint, so
+// the terminal stays blank until a reflow; the TermView forces reflows below only
+// when this is true (no effect on normal GPU machines). This DOM-reflow path is a
+// complement to the canvas renderer: it still helps when the DOM renderer is in
+// use (terminalRenderer 'dom', or before the canvas renderer is active).
+let swCompositing = false;
+let swCompositingRequested = false;
+function ensureSoftwareCompositingFlag(): void {
+  if (swCompositingRequested) return;
+  swCompositingRequested = true;
+  void window.cs
+    .getAppInfo()
+    .then((info) => {
+      swCompositing = Boolean(info.softwareCompositing);
+    })
+    .catch(() => {
+      /* default false; no forced repaints */
+    });
+}
+
 type TermViewProps = {
   // The daemon session to stream (agent ws_… or shell sh_…). Null renders nothing.
   sessionName: string | null;
@@ -353,6 +374,37 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       });
     };
 
+    ensureSoftwareCompositingFlag();
+    // forceReflow forces a synchronous relayout + repaint of the terminal. Under
+    // software compositing (RDP) xterm updates the DOM but the compositor may not
+    // flush the paint until a reflow (the "resize the pane to make it appear"
+    // bug); toggling display off/on within one tick forces that paint without any
+    // visible flicker (the browser never paints the intermediate state). No-op on
+    // GPU machines. Coalesced via scheduleReflow so streamed output is cheap.
+    let reflowTimer: ReturnType<typeof setTimeout> | null = null;
+    const forceReflow = (): void => {
+      if (!swCompositing) return;
+      try {
+        term.refresh(0, Math.max(0, term.rows - 1));
+      } catch {
+        // term may be disposed mid-teardown.
+      }
+      const el = containerRef.current;
+      if (el) {
+        const prev = el.style.display;
+        el.style.display = 'none';
+        void el.offsetHeight; // read forces a synchronous reflow
+        el.style.display = prev;
+      }
+    };
+    const scheduleReflow = (): void => {
+      if (!swCompositing || reflowTimer) return;
+      reflowTimer = setTimeout(() => {
+        reflowTimer = null;
+        forceReflow();
+      }, 60);
+    };
+
     const inputDisposable = term.onData((data) => window.cs.sendInput(session, data));
     const unsubData = window.cs.onData((d) => {
       if (d.session === session) {
@@ -389,6 +441,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         if (wasAtBottom) {
           term.scrollToBottom();
         }
+        scheduleReflow();
       } else {
         // A term:data event for another session reached this view. This is expected
         // (each pane's onData sees all sessions and filters), so it is NOT an error;
@@ -480,6 +533,17 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           // Initial-snapshot repaint nudge (no-op unless software compositing +
           // a renderer-only nudge mode). The native-window nudge fires in main.
           nudgeRenderer(false);
+          // DOM-renderer fallback for software compositing: paint the initial
+          // snapshot without a manual resize. Spaced because xterm's render lands
+          // a frame or two after write. No-op on GPU machines / canvas renderer.
+          if (swCompositing) {
+            for (const delay of [0, 120, 400, 1000]) {
+              const t = setTimeout(() => {
+                if (!disposed) forceReflow();
+              }, delay);
+              t.unref?.();
+            }
+          }
         })
         .catch((error: unknown) => {
           if (disposed) return;
@@ -536,6 +600,9 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       }
       if (resizeTimer) {
         clearTimeout(resizeTimer);
+      }
+      if (reflowTimer) {
+        clearTimeout(reflowTimer);
       }
       el.removeEventListener('contextmenu', onContextMenu);
       el.removeEventListener('wheel', onWheel);

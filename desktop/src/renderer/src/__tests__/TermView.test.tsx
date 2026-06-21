@@ -205,5 +205,11 @@ describe('TermView startup ordering', () => {
       expect.objectContaining({ expected: 'ws_self', count: expect.any(Number) }),
       'info',
     );
+    // …and never as a per-event error (the source of the prior log spam, #72).
+    expect(diagSpy).not.toHaveBeenCalledWith(
+      'TermView data session mismatch',
+      expect.anything(),
+      'error',
+    );
   });
 });

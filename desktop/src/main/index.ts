@@ -49,6 +49,10 @@ export type AppInfo = {
   arch: string;
   githubUrl: string;
   author: string;
+  // True when Chromium is compositing in software (e.g. RDP/VDI, no GPU). The
+  // renderer uses this to force terminal repaints that the software compositor
+  // otherwise drops. See render-detect.ts / isSoftwareCompositing.
+  softwareCompositing: boolean;
 };
 
 const CS_EXE =
@@ -846,6 +850,7 @@ ipcMain.handle(
     arch: process.arch,
     githubUrl: 'https://github.com/thirschel/Hangar',
     author: 'Hangar contributors',
+    softwareCompositing,
   }),
 );
 
