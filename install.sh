@@ -8,8 +8,9 @@ REPO_NAME="Hangar"
 PROJECT_NAME="hangar_daemon"
 RELEASE_BINARY_NAME="hangar-daemon"
 CHECKSUMS_NAME="checksums.txt"
-CHECKSUMS_SIGNATURE_NAME="${CHECKSUMS_NAME}.sig"
-CHECKSUMS_CERTIFICATE_NAME="${CHECKSUMS_NAME}.pem"
+# cosign 3.x signs blobs into a single Sigstore bundle (replaces the legacy
+# .sig + .pem pair); verification needs cosign v3+.
+CHECKSUMS_BUNDLE_NAME="${CHECKSUMS_NAME}.bundle"
 # The issuer check below limits this to GitHub Actions OIDC; this regex scopes
 # the signing identity to workflows/refs in the thirschel/Hangar repository.
 COSIGN_CERTIFICATE_IDENTITY_REGEXP='^https://github.com/thirschel/Hangar/'
@@ -143,18 +144,13 @@ download_and_verify_release_metadata() {
     fi
 
     if command -v cosign > /dev/null 2>&1; then
-        if ! download_file "${release_url}/${CHECKSUMS_SIGNATURE_NAME}" "${tmp_dir}/${CHECKSUMS_SIGNATURE_NAME}" "${CHECKSUMS_SIGNATURE_NAME}"; then
-            rm -rf "$tmp_dir"
-            exit 1
-        fi
-        if ! download_file "${release_url}/${CHECKSUMS_CERTIFICATE_NAME}" "${tmp_dir}/${CHECKSUMS_CERTIFICATE_NAME}" "${CHECKSUMS_CERTIFICATE_NAME}"; then
+        if ! download_file "${release_url}/${CHECKSUMS_BUNDLE_NAME}" "${tmp_dir}/${CHECKSUMS_BUNDLE_NAME}" "${CHECKSUMS_BUNDLE_NAME}"; then
             rm -rf "$tmp_dir"
             exit 1
         fi
         echo "Verifying ${CHECKSUMS_NAME} signature with cosign"
         if ! cosign verify-blob \
-            --certificate "${tmp_dir}/${CHECKSUMS_CERTIFICATE_NAME}" \
-            --signature "${tmp_dir}/${CHECKSUMS_SIGNATURE_NAME}" \
+            --bundle "${tmp_dir}/${CHECKSUMS_BUNDLE_NAME}" \
             --certificate-identity-regexp "$COSIGN_CERTIFICATE_IDENTITY_REGEXP" \
             --certificate-oidc-issuer "$COSIGN_CERTIFICATE_OIDC_ISSUER" \
             "${tmp_dir}/${CHECKSUMS_NAME}"; then

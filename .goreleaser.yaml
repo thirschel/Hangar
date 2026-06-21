@@ -35,9 +35,13 @@ signs:
   - cmd: cosign
     artifacts: checksum
     output: true
+    # cosign 3.x writes a single self-contained Sigstore bundle by default and
+    # ignores the legacy --output-signature/--output-certificate flags, so emit
+    # ${artifact}.bundle instead of separate .sig/.pem files. Consumers verify
+    # with `cosign verify-blob --bundle <file>` (requires cosign v3+).
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
       - --yes
-      - --output-signature=${signature}
-      - --output-certificate=${certificate}
+      - --bundle=${signature}
       - ${artifact}

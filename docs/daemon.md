@@ -248,7 +248,7 @@ Hangar's Windows desktop app is the product surface; the `cs` daemon/CLI is the 
 
 ## Unix/macOS/WSL standalone release installs
 
-The scripts below install the Hangar fork's standalone `cs` daemon/CLI from [`thirschel/Hangar`](https://github.com/thirschel/Hangar). Before extracting or running the downloaded archive, they fetch `checksums.txt`, `checksums.txt.sig`, and `checksums.txt.pem`; verify the checksum file with `cosign` when available; then require the archive SHA256 to match `checksums.txt`. If `cosign` is not installed, the scripts abort unless you explicitly acknowledge checksum-only verification with `--skip-signature-check` or `-SkipSignatureCheck`.
+The scripts below install the Hangar fork's standalone `cs` daemon/CLI from [`thirschel/Hangar`](https://github.com/thirschel/Hangar). Before extracting or running the downloaded archive, they fetch `checksums.txt` and `checksums.txt.bundle`; verify the checksum file with `cosign` (v3+, which reads the Sigstore bundle format) when available; then require the archive SHA256 to match `checksums.txt`. If `cosign` is not installed, the scripts abort unless you explicitly acknowledge checksum-only verification with `--skip-signature-check` or `-SkipSignatureCheck`.
 
 ### Homebrew
 
