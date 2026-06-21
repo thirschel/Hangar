@@ -13,8 +13,9 @@ $RepoName = "Hangar"
 $ProjectName = "hangar_daemon"
 $ReleaseBinaryName = "hangar-daemon"
 $ChecksumsName = "checksums.txt"
-$ChecksumsSignatureName = "$ChecksumsName.sig"
-$ChecksumsCertificateName = "$ChecksumsName.pem"
+# cosign 3.x signs blobs into a single Sigstore bundle (replaces the legacy
+# .sig + .pem pair); verification needs cosign v3+.
+$ChecksumsBundleName = "$ChecksumsName.bundle"
 # The issuer check below limits this to GitHub Actions OIDC; this regex scopes
 # the signing identity to workflows/refs in the thirschel/Hangar repository.
 $CosignCertificateIdentityRegexp = "^https://github.com/thirschel/Hangar/"
@@ -223,16 +224,13 @@ function Test-ReleaseVerification {
     Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsName" -OutFile $checksumsPath -Description $ChecksumsName
 
     if (Test-CommandExists "cosign") {
-        $signaturePath = Join-Path $TempDir $ChecksumsSignatureName
-        $certificatePath = Join-Path $TempDir $ChecksumsCertificateName
+        $bundlePath = Join-Path $TempDir $ChecksumsBundleName
 
-        Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsSignatureName" -OutFile $signaturePath -Description $ChecksumsSignatureName
-        Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsCertificateName" -OutFile $certificatePath -Description $ChecksumsCertificateName
+        Invoke-DownloadFile -Uri "$ReleaseUrl/$ChecksumsBundleName" -OutFile $bundlePath -Description $ChecksumsBundleName
 
         Write-Status "Verifying $ChecksumsName signature with cosign" "Info"
         & cosign verify-blob `
-            --certificate $certificatePath `
-            --signature $signaturePath `
+            --bundle $bundlePath `
             --certificate-identity-regexp $CosignCertificateIdentityRegexp `
             --certificate-oidc-issuer $CosignCertificateOidcIssuer `
             $checksumsPath
