@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.7.3](https://github.com/thirschel/Hangar/compare/v1.7.2...v1.7.3) (2026-06-21)
+
+### Bug Fixes
+
+* **release:** emit cosign Sigstore bundle for checksums (cosign v3) ([#76](https://github.com/thirschel/Hangar/issues/76)) ([e9655dd](https://github.com/thirschel/Hangar/commit/e9655dd8b2662a38eeebe8c663c7aa675d8430d4))
+
 ## [1.7.2](https://github.com/thirschel/Hangar/compare/v1.7.1...v1.7.2) (2026-06-21)
 
 ### Bug Fixes
