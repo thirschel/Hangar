@@ -231,6 +231,7 @@ func (s *conptySession) start() error {
 	s.drainDone = make(chan struct{})
 	s.procDone = make(chan struct{})
 	go s.drain()
+	go s.pumpEmuReplies()
 	go s.wait()
 	go s.autoYesLoop()
 	pid := 0
@@ -313,6 +314,43 @@ func (s *conptySession) drain() {
 				delete(s.subs, sub)
 			}
 			s.subMu.Unlock()
+			return
+		}
+	}
+}
+
+// pumpEmuReplies forwards the VT emulator's terminal replies back to the agent.
+//
+// The emulator is itself a terminal: it answers capability queries -- DECRQM
+// (ESC[?...$p), primary/secondary device attributes (ESC[c / ESC[>c),
+// cursor-position reports (ESC[6n), color reports, ... -- by writing the reply
+// to an UNBUFFERED io.Pipe (vt's Emulator.pr/pw). That write blocks until the
+// pipe is read. drain() feeds agent output to s.emu.Write while holding subMu
+// (and SafeEmulator's own lock), so if nothing drains the reply pipe a single
+// agent query wedges drain() forever -- it stalls inside emu.Write still holding
+// subMu, which freezes capture/attach and back-pressures the child to a halt
+// (blank pane). copilot trips this at startup with its mode-2026 (synchronized
+// output) DECRQM probe; shells never send such queries, which is why shell panes
+// rendered while agent panes did not.
+//
+// Draining the reply pipe here keeps emu.Write non-blocking and, by writing the
+// replies back to the child, makes the host behave like a real terminal that
+// answers the agent's queries. SafeEmulator.Read does not take the emulator
+// lock, so this runs concurrently with drain()'s emu.Write. The goroutine exits
+// when the emulator is closed during close() (emu.Read -> io.EOF).
+func (s *conptySession) pumpEmuReplies() {
+	defer recoverGoroutine("conpty.pumpEmuReplies")
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.emu.Read(buf)
+		if n > 0 {
+			s.writeMu.Lock()
+			if pty := s.pty; pty != nil {
+				_, _ = pty.Write(buf[:n]) // feed the reply back to the agent's input
+			}
+			s.writeMu.Unlock()
+		}
+		if err != nil {
 			return
 		}
 	}
@@ -841,6 +879,21 @@ func (s *conptySession) close() error {
 		close(s.autoYesStop) // stop the AutoYes ticker
 		if s.pty != nil {
 			err = s.pty.Close()
+		}
+		// Closing the ConPTY makes drain()'s s.pty.Read return, so wait (bounded)
+		// for drain to stop writing to the emulator, then close the emulator. That
+		// makes pumpEmuReplies' s.emu.Read return io.EOF so it exits instead of
+		// leaking. Ordering the close after drainDone avoids an emu.Write/emu.Close
+		// race in the normal path; the timeout is a defensive backstop that still
+		// releases a wedged drain (Emulator.Close unblocks a pending emu.Write).
+		if s.drainDone != nil {
+			select {
+			case <-s.drainDone:
+			case <-time.After(procExitWaitTimeout):
+			}
+		}
+		if s.emu != nil {
+			_ = s.emu.Close()
 		}
 		// Closing the ConPTY does not reliably terminate the child on Windows: a
 		// well-behaved TUI exits on its own, but an interactive shell keeps

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSoftwareCompositing } from '../render-detect';
+import { isSoftwareCompositing, mergeDisableFeatures, isRemoteSession } from '../render-detect';
 
 describe('isSoftwareCompositing', () => {
   it('is true when hardware acceleration is explicitly disabled', () => {
@@ -22,5 +22,45 @@ describe('isSoftwareCompositing', () => {
     expect(isSoftwareCompositing({}, false)).toBe(false);
     expect(isSoftwareCompositing(null, false)).toBe(false);
     expect(isSoftwareCompositing(undefined, false)).toBe(false);
+  });
+});
+
+describe('mergeDisableFeatures', () => {
+  it('adds the feature when the existing value is empty', () => {
+    expect(mergeDisableFeatures('', ['CalculateNativeWinOcclusion'])).toBe(
+      'CalculateNativeWinOcclusion',
+    );
+    expect(mergeDisableFeatures(undefined, ['CalculateNativeWinOcclusion'])).toBe(
+      'CalculateNativeWinOcclusion',
+    );
+  });
+
+  it('preserves existing features and appends new ones without clobbering', () => {
+    expect(mergeDisableFeatures('SomeOtherFeature', ['CalculateNativeWinOcclusion'])).toBe(
+      'SomeOtherFeature,CalculateNativeWinOcclusion',
+    );
+  });
+
+  it('de-duplicates and trims, preserving first-seen order', () => {
+    expect(mergeDisableFeatures(' A , B ', ['B', 'C', 'A'])).toBe('A,B,C');
+    expect(mergeDisableFeatures('A,,', ['A'])).toBe('A');
+  });
+});
+
+describe('isRemoteSession', () => {
+  it('is true for an RDP SESSIONNAME (case-insensitive)', () => {
+    expect(isRemoteSession({ SESSIONNAME: 'RDP-Tcp#0' })).toBe(true);
+    expect(isRemoteSession({ SESSIONNAME: 'rdp-tcp#12' })).toBe(true);
+  });
+
+  it('is false for a console/local session', () => {
+    expect(isRemoteSession({ SESSIONNAME: 'Console' })).toBe(false);
+    expect(isRemoteSession({})).toBe(false);
+  });
+
+  it('honors the HANGAR_FORCE_REMOTE override', () => {
+    expect(isRemoteSession({ HANGAR_FORCE_REMOTE: '1' })).toBe(true);
+    expect(isRemoteSession({ HANGAR_FORCE_REMOTE: '0', SESSIONNAME: 'Console' })).toBe(false);
+    expect(isRemoteSession({ HANGAR_FORCE_REMOTE: 'false' })).toBe(false);
   });
 });
