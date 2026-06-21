@@ -88,6 +88,13 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 - *(v5, pending commit)* **Regenerate Agent UI** — `↻ Regenerate` button beside AutoYes, `RegenerateModal`
   (handoff checkbox + live phase progress + **Kill now**), composer disabled while regenerating, and
   broadened "Agent finished" suppression so a regenerate never fires a false finished toast.
+- *(pending commit)* **Multi-agent grid** — mark 2+ agents in the sidebar (`Sidebar` checkboxes /
+  `gridSelectedIds`) and open an in-window grid (`▦ Grid` / `g`) of live, focusable agent terminals
+  (`GridPane` tiles, one `TermView` per session); click a tile and type straight into that agent, and
+  **drag a tile by its header handle to rearrange** (tiles are keyed by id so the live terminals
+  survive the move; order persists in `localStorage`). Renderer-only: reuses the existing per-session
+  stream / `sendInput` / `resize` IPC (no daemon or proto change). Agents-per-row control defaults to
+  Auto (by width), persisted in `localStorage`.
 
 ---
 
@@ -121,6 +128,9 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 | `components/Sidebar.tsx` | Workspace list + **status indicator**, create form, archive. |
 | `components/CenterPane.tsx` | Tabbed surface: Agent / Files / Terminal (all mounted, CSS-toggled). |
 | `components/TermView.tsx` | **Reusable** session-scoped xterm (copy/paste, ConPTY) — used by the agent and the shell. |
+| `components/GridPane.tsx` | Multi-agent grid: tiles a `TermView` per selected agent; per-row control, focus ring, drag-to-reorder. |
+| `components/grid-columns.ts` | Pure "agents per row" math (Auto/effective/cycle); mirrors the Go TUI helper. |
+| `components/grid-reorder.ts` | Pure drag-and-drop reorder helper (move a tile id to a target's slot). |
 | `components/ShellTerminal.tsx` | Lazily ensures `sh_<wsId>` PowerShell, renders a `TermView`. |
 | `components/FilesPanel.tsx` | Lazy file tree + read-only viewer. |
 | `components/ReviewPanel.tsx` | Changed files + rich diff + commit/push. |

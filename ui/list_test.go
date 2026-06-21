@@ -313,6 +313,163 @@ func TestListTracksReposByFullPath(t *testing.T) {
 	require.Len(t, l.repos, 2)
 }
 
+// newStartedTestList builds a list of started, non-paused (i.e. markable)
+// instances, returning the list and the instances in insertion order.
+func newStartedTestList(t *testing.T, titles ...string) (*List, []*session.Instance) {
+	t.Helper()
+	s := spinner.New()
+	l := NewList(&s, false)
+	insts := make([]*session.Instance, len(titles))
+	for i, title := range titles {
+		// waiting=true yields a started, Running (non-paused) instance backed by a
+		// real worktree — the only state ToggleMark accepts.
+		inst := mkStatusInstance(t, title, session.Running, true)
+		l.AddInstance(inst)() // call the finalizer to register the repo path
+		insts[i] = inst
+	}
+	return l, insts
+}
+
+func TestToggleMark_AddsRemovesAndPreservesOrder(t *testing.T) {
+	l, insts := newStartedTestList(t, "a", "b", "c")
+	a, b, c := insts[0], insts[1], insts[2]
+
+	// Mark out of list order: c, a, b. Insertion order must be preserved.
+	l.ToggleMark(c)
+	l.ToggleMark(a)
+	l.ToggleMark(b)
+	require.Equal(t, []*session.Instance{c, a, b}, l.MarkedInstances())
+	require.Equal(t, []string{"c", "a", "b"}, titlesOf(l.MarkedInstances()))
+	require.Equal(t, 3, l.MarkedCount())
+
+	// Toggling an already-marked instance removes just that one; order intact.
+	l.ToggleMark(a)
+	require.False(t, l.IsMarked(a))
+	require.Equal(t, []string{"c", "b"}, titlesOf(l.MarkedInstances()))
+	require.Equal(t, 2, l.MarkedCount())
+}
+
+func TestIsMarked_AndClearMarks(t *testing.T) {
+	l, insts := newStartedTestList(t, "a", "b")
+	a, b := insts[0], insts[1]
+
+	require.False(t, l.IsMarked(a))
+	l.ToggleMark(a)
+	require.True(t, l.IsMarked(a))
+	require.False(t, l.IsMarked(b))
+
+	l.ToggleMark(b)
+	require.Equal(t, 2, l.MarkedCount())
+
+	l.ClearMarks()
+	require.Equal(t, 0, l.MarkedCount())
+	require.Empty(t, l.MarkedInstances())
+	require.False(t, l.IsMarked(a))
+	require.False(t, l.IsMarked(b))
+}
+
+func TestToggleMark_NilAndUnknownAreNoops(t *testing.T) {
+	l, insts := newStartedTestList(t, "a")
+	require.NotPanics(t, func() { l.ToggleMark(nil) })
+	require.Equal(t, 0, l.MarkedCount())
+
+	// An instance that is not in the list cannot be marked.
+	stranger := mkStatusInstance(t, "stranger", session.Running, true)
+	l.ToggleMark(stranger)
+	require.False(t, l.IsMarked(stranger))
+	require.Equal(t, 0, l.MarkedCount())
+
+	// Sanity: a real member can still be marked.
+	l.ToggleMark(insts[0])
+	require.Equal(t, 1, l.MarkedCount())
+}
+
+func TestToggleMark_OnlyStartedNonPaused(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s, false)
+
+	started := mkStatusInstance(t, "started", session.Running, true) // started, non-paused
+	notStarted := mkInstance(t, "not-started")                       // never started
+	paused := newPausedTestInstance(t, "paused", t.TempDir())        // started but paused
+	l.AddInstance(started)
+	l.AddInstance(notStarted)
+	l.AddInstance(paused)
+
+	// A not-started instance stays unmarked after ToggleMark.
+	l.ToggleMark(notStarted)
+	require.False(t, l.IsMarked(notStarted))
+
+	// A paused instance stays unmarked after ToggleMark.
+	l.ToggleMark(paused)
+	require.False(t, l.IsMarked(paused))
+
+	// A started, non-paused instance can be marked.
+	l.ToggleMark(started)
+	require.True(t, l.IsMarked(started))
+	require.Equal(t, 1, l.MarkedCount())
+}
+
+func TestToggleMarkSelected(t *testing.T) {
+	l, insts := newStartedTestList(t, "a", "b")
+	l.SelectInstance(insts[1]) // select "b"
+
+	l.ToggleMarkSelected()
+	require.True(t, l.IsMarked(insts[1]))
+	require.False(t, l.IsMarked(insts[0]))
+
+	l.ToggleMarkSelected() // toggles the same selection back off
+	require.False(t, l.IsMarked(insts[1]))
+	require.Equal(t, 0, l.MarkedCount())
+}
+
+func TestToggleMarkSelected_NoSelectionIsNoop(t *testing.T) {
+	s := spinner.New()
+	l := NewList(&s, false)
+	require.Nil(t, l.GetSelectedInstance())
+	require.NotPanics(t, func() { l.ToggleMarkSelected() })
+	require.Equal(t, 0, l.MarkedCount())
+}
+
+func TestRemoveInstance_DropsMark(t *testing.T) {
+	l, insts := newStartedTestList(t, "a", "b")
+	a, b := insts[0], insts[1]
+	l.ToggleMark(a)
+	l.ToggleMark(b)
+	require.Equal(t, 2, l.MarkedCount())
+
+	// Removing a marked instance must drop it from the marked set as well.
+	l.RemoveInstance(a)
+	require.False(t, l.IsMarked(a))
+	require.Equal(t, []*session.Instance{b}, l.MarkedInstances())
+	require.Equal(t, 1, l.MarkedCount())
+}
+
+func TestMarkedInstances_FiltersStaleMarks(t *testing.T) {
+	l, insts := newStartedTestList(t, "a", "b")
+	a, b := insts[0], insts[1]
+	l.ToggleMark(a)
+	l.ToggleMark(b)
+	require.Equal(t, 2, l.MarkedCount())
+
+	// Simulate a stale mark: drop "a" from the canonical list directly (bypassing
+	// the removal hook). Defensive filtering must skip it.
+	l.items = []*session.Instance{b}
+	require.Equal(t, []*session.Instance{b}, l.MarkedInstances())
+	require.Equal(t, 1, l.MarkedCount())
+}
+
+func TestString_RendersMarkerForMarkedInstance(t *testing.T) {
+	l, insts := newStartedTestList(t, "alpha", "beta")
+	l.SetSize(40, 20)
+
+	// Nothing marked: the marker glyph must not appear anywhere.
+	require.NotContains(t, l.String(), "◉")
+
+	// Marking a started instance renders the marker glyph on its row.
+	l.ToggleMark(insts[0])
+	require.Contains(t, l.String(), "◉")
+}
+
 func newPausedTestInstance(t *testing.T, title string, repoPath string) *session.Instance {
 	t.Helper()
 

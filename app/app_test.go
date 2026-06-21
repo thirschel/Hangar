@@ -41,6 +41,7 @@ func newTestHomeForKeyHandling() *home {
 		menu:              ui.NewMenu(),
 		tabbedWindow:      ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
 		sessionBrowser:    ui.NewSessionBrowser(),
+		gridView:          ui.NewGridView(),
 		errBox:            ui.NewErrBox(),
 		resumedSessionIDs: make(map[string]bool),
 	}
@@ -85,6 +86,77 @@ func TestSessionBrowserStateTransitions(t *testing.T) {
 
 		assert.Equal(t, stateDefault, homeModel.state)
 	})
+}
+
+func gridInst(t *testing.T, title string) *session.Instance {
+	t.Helper()
+	inst, err := session.NewInstance(session.InstanceOptions{Title: title, Path: ".", Program: "echo"})
+	require.NoError(t, err)
+	return inst
+}
+
+func TestGridView_StateTransitions(t *testing.T) {
+	t.Run("g with fewer than 2 marks does not open the grid", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		// No started/marked instances, so the grid must not open.
+		key := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")}
+		_, _ = h.handleKeyPress(key) // menu highlight resend
+		model, _ := h.handleKeyPress(key)
+		hm := model.(*home)
+		assert.Equal(t, stateDefault, hm.state)
+	})
+
+	t.Run("esc leaves the grid", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.gridView.SetInstances([]*session.Instance{gridInst(t, "a"), gridInst(t, "b")})
+		h.state = stateGrid
+		h.menu.SetState(ui.StateGrid)
+
+		model, _ := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyEsc})
+		hm := model.(*home)
+		assert.Equal(t, stateDefault, hm.state)
+	})
+
+	t.Run("ctrl+q releases passthrough without leaving the grid", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.gridView.SetInstances([]*session.Instance{gridInst(t, "a"), gridInst(t, "b")})
+		h.gridView.SetSize(80, 40)
+		h.state = stateGrid
+		h.gridView.SetPassthrough(true)
+
+		model, _ := h.handleKeyPress(tea.KeyMsg{Type: tea.KeyCtrlQ})
+		hm := model.(*home)
+		assert.Equal(t, stateGrid, hm.state)
+		assert.False(t, hm.gridView.Passthrough())
+	})
+
+	t.Run("tab moves focus while navigating", func(t *testing.T) {
+		h := newTestHomeForKeyHandling()
+		h.gridView.SetInstances([]*session.Instance{gridInst(t, "a"), gridInst(t, "b")})
+		h.gridView.SetSize(80, 40)
+		h.state = stateGrid
+
+		_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyTab})
+		assert.Equal(t, 1, h.gridView.FocusIndex())
+	})
+}
+
+func TestGridView_ColumnsPersist(t *testing.T) {
+	fake := &fakeAppState{}
+	h := newTestHome(t, fake)
+	h.gridView.SetInstances([]*session.Instance{gridInst(t, "a"), gridInst(t, "b"), gridInst(t, "c")})
+	h.gridView.SetSize(120, 40)
+	h.state = stateGrid
+
+	// "]" advances Auto(0) -> 1 and persists.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+	assert.Equal(t, 1, h.gridView.Columns())
+	assert.Equal(t, 1, fake.gridColumns)
+
+	// "[" steps back 1 -> 0 (Auto) and persists.
+	_, _ = h.handleKeyPress(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+	assert.Equal(t, 0, h.gridView.Columns())
+	assert.Equal(t, 0, fake.gridColumns)
 }
 
 func TestBuildResumeInstance(t *testing.T) {
@@ -622,14 +694,17 @@ func TestConfirmationModalVisualAppearance(t *testing.T) {
 
 // fakeAppState is an in-memory config.AppState for tests (no disk writes).
 type fakeAppState struct {
-	seen uint32
-	mode int
+	seen        uint32
+	mode        int
+	gridColumns int
 }
 
 func (f *fakeAppState) GetHelpScreensSeen() uint32        { return f.seen }
 func (f *fakeAppState) SetHelpScreensSeen(s uint32) error { f.seen = s; return nil }
 func (f *fakeAppState) GetSidebarMode() int               { return f.mode }
 func (f *fakeAppState) SetSidebarMode(m int) error        { f.mode = m; return nil }
+func (f *fakeAppState) GetGridColumns() int               { return f.gridColumns }
+func (f *fakeAppState) SetGridColumns(c int) error        { f.gridColumns = c; return nil }
 
 func newTestHome(t *testing.T, appState config.AppState) *home {
 	t.Helper()
@@ -642,6 +717,7 @@ func newTestHome(t *testing.T, appState config.AppState) *home {
 		list:         ui.NewList(&s, false),
 		menu:         ui.NewMenu(),
 		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		gridView:     ui.NewGridView(),
 		errBox:       ui.NewErrBox(),
 	}
 }

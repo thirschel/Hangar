@@ -16,6 +16,11 @@ import (
 const readyIcon = "● "
 const pausedIcon = "⏸ "
 
+// markedIcon is the multi-select marker glyph rendered in the left gutter of a
+// marked sidebar row. Unmarked rows reserve the same display width with spaces
+// so the numbers and titles stay column-aligned.
+const markedIcon = "◉ "
+
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
 
@@ -84,6 +89,10 @@ type List struct {
 	// at an instance hidden by the active filter, in which case
 	// GetSelectedInstance() returns nil while the desired selection is retained.
 	selected *session.Instance
+	// marked is the identity-based, insertion-ordered multi-select set used to
+	// launch the multi-agent grid view. Membership mirrors `selected` semantics
+	// (pointer identity). Only started, non-paused instances may be marked.
+	marked []*session.Instance
 	// mode is the active view mode.
 	mode SidebarMode
 	// filter is the active search query (empty = no filter).
@@ -346,11 +355,22 @@ func pulseBackground(level float64) lipgloss.Color {
 	}
 }
 
-func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool, pulse float64) string {
+func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, marked bool, hasMultipleRepos bool, pulse float64) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
 	if idx >= 10 {
 		prefix = prefix[:len(prefix)-1]
 	}
+
+	// Multi-select marker gutter. Marked rows show markedIcon; unmarked rows
+	// reserve the same width with spaces so numbers and titles stay
+	// column-aligned. markerWidth is subtracted from the title and branch width
+	// budgets below so a marker never pushes the title past the edge.
+	marker := strings.Repeat(" ", runewidth.StringWidth(markedIcon))
+	if marked {
+		marker = markedIcon
+	}
+	markerWidth := runewidth.StringWidth(marker)
+
 	titleS := selectedTitleStyle
 	descS := selectedDescStyle
 	if !selected {
@@ -384,7 +404,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	activityWidth := 0
 	if activityText != "" {
 		w := runewidth.StringWidth(activityText) + 1
-		if r.width-3-runewidth.StringWidth(prefix)-1-w >= 4 {
+		if r.width-3-markerWidth-runewidth.StringWidth(prefix)-1-w >= 4 {
 			activityWidth = w
 		} else {
 			activityText = ""
@@ -393,7 +413,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 	// Cut the title if it's too long
 	titleText := i.Title
-	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1 - activityWidth
+	widthAvail := r.width - 3 - markerWidth - runewidth.StringWidth(prefix) - 1 - activityWidth
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
 		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
 	}
@@ -407,7 +427,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3-activityWidth, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
+		lipgloss.Place(r.width-3-activityWidth, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s%s %s", marker, prefix, titleText)),
 		activitySuffix,
 		" ",
 		join,
@@ -434,6 +454,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	}
 
 	remainingWidth := r.width
+	remainingWidth -= markerWidth // for the multi-select marker gutter
 	remainingWidth -= runewidth.StringWidth(prefix)
 	remainingWidth -= runewidth.StringWidth(branchIcon)
 	remainingWidth -= 2 // for the literal " " and "-" in the branchLine format string
@@ -475,7 +496,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		spaces = strings.Repeat(" ", remainingWidth)
 	}
 
-	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
+	branchLine := fmt.Sprintf("%s%s %s-%s%s%s", strings.Repeat(" ", markerWidth), strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
 
 	// join title and subtitle
 	text := lipgloss.JoinVertical(
@@ -553,7 +574,7 @@ func (l *List) String() string {
 			if l.animator != nil {
 				pulse = l.animator.pulseLevel(row.instance)
 			}
-			b.WriteString(l.renderer.Render(row.instance, row.number, selected, hasMultipleRepos, pulse))
+			b.WriteString(l.renderer.Render(row.instance, row.number, selected, l.IsMarked(row.instance), hasMultipleRepos, pulse))
 		}
 		if i != len(l.rows)-1 {
 			b.WriteString("\n\n")
@@ -620,6 +641,9 @@ func (l *List) RemoveInstance(target *session.Instance) {
 	if idx < 0 {
 		return
 	}
+
+	// Drop any multi-select mark so a removed/killed agent can't stay marked.
+	l.unmark(target)
 
 	// Unregister the repo path. Unstarted instances have no repo yet, so skip them
 	// silently rather than logging an expected error.
@@ -773,4 +797,72 @@ func (l *List) MoveSelectedDown() bool {
 // GetInstances returns all instances in the list
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
+}
+
+// ToggleMark toggles multi-select membership for inst. An instance may only be
+// marked when it is non-nil, present in the list, started, and not paused;
+// attempts to mark anything else are ignored. Unmarking is always allowed.
+func (l *List) ToggleMark(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	// Already marked: unmark (always allowed, regardless of current state).
+	if l.unmark(inst) {
+		return
+	}
+	// Marking is only valid for a started, non-paused instance still in the list.
+	if indexOfInstance(l.items, inst) < 0 {
+		return
+	}
+	if !inst.Started() || inst.Status == session.Paused {
+		return
+	}
+	l.marked = append(l.marked, inst)
+}
+
+// ToggleMarkSelected toggles the mark on the currently selected instance, if any.
+func (l *List) ToggleMarkSelected() {
+	if l.selected != nil {
+		l.ToggleMark(l.selected)
+	}
+}
+
+// IsMarked reports whether inst is currently in the multi-select set.
+func (l *List) IsMarked(inst *session.Instance) bool {
+	return indexOfInstance(l.marked, inst) >= 0
+}
+
+// MarkedInstances returns the marked instances in insertion order, defensively
+// skipping any that are no longer present in the canonical list.
+func (l *List) MarkedInstances() []*session.Instance {
+	out := make([]*session.Instance, 0, len(l.marked))
+	for _, inst := range l.marked {
+		if indexOfInstance(l.items, inst) >= 0 {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// MarkedCount returns the number of currently valid marks (those still present
+// in the canonical list).
+func (l *List) MarkedCount() int {
+	return len(l.MarkedInstances())
+}
+
+// ClearMarks removes all multi-select marks.
+func (l *List) ClearMarks() {
+	l.marked = nil
+}
+
+// unmark removes inst from the multi-select set, reporting whether it was
+// present. It is used both by ToggleMark and by removal/cleanup paths so a
+// killed agent can't stay marked.
+func (l *List) unmark(inst *session.Instance) bool {
+	idx := indexOfInstance(l.marked, inst)
+	if idx < 0 {
+		return false
+	}
+	l.marked = append(l.marked[:idx], l.marked[idx+1:]...)
+	return true
 }

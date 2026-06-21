@@ -43,6 +43,16 @@ const (
 	KeyStatusFilter
 	KeySearchApply  // menu hint: enter applies the search
 	KeySearchCancel // menu hint: esc clears the search
+
+	// Multi-agent grid view
+	KeyMark
+	KeyGrid
+	// Grid in-view hints (display-only; the keys are handled inline by the grid view)
+	KeyGridFocus
+	KeyGridType
+	KeyGridColumns
+	KeyGridRelease
+	KeyGridExit
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -71,6 +81,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"p":          KeySubmit,
 	"?":          KeyHelp,
 	"b":          KeyBrowse,
+	"m":          KeyMark,
+	"g":          KeyGrid,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -171,6 +183,37 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeySearchCancel: key.NewBinding(
 		key.WithKeys("esc"),
 		key.WithHelp("esc", "clear"),
+	),
+
+	// -- Multi-agent grid view --
+
+	KeyMark: key.NewBinding(
+		key.WithKeys("m"),
+		key.WithHelp("m", "mark"),
+	),
+	KeyGrid: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "grid view"),
+	),
+	KeyGridFocus: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("↑↓←→/tab", "focus"),
+	),
+	KeyGridType: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "type"),
+	),
+	KeyGridColumns: key.NewBinding(
+		key.WithKeys("[", "]"),
+		key.WithHelp("[ ]", "per row"),
+	),
+	KeyGridRelease: key.NewBinding(
+		key.WithKeys("ctrl+q"),
+		key.WithHelp("ctrl+q", "release"),
+	),
+	KeyGridExit: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "exit"),
 	),
 
 	// -- Special keybindings --

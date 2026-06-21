@@ -54,6 +54,8 @@ const (
 	stateSearch
 	// stateBrowse is the state when the Copilot session browser is displayed.
 	stateBrowse
+	// stateGrid is the state when the multi-agent grid view is displayed.
+	stateGrid
 )
 
 type home struct {
@@ -132,6 +134,8 @@ type home struct {
 	confirmationOverlay *overlay.ConfirmationOverlay
 	// sessionBrowser displays discovered Copilot sessions
 	sessionBrowser *ui.SessionBrowser
+	// gridView displays multiple agents at once as live, focusable tiles.
+	gridView *ui.GridView
 	// resumedSessionIDs tracks Copilot sessions already resumed into workspaces
 	resumedSessionIDs map[string]bool
 	// copilotIndex is the lazily-built content search index backing the browser
@@ -165,11 +169,14 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		state:             stateDefault,
 		appState:          appState,
 		sessionBrowser:    ui.NewSessionBrowser(),
+		gridView:          ui.NewGridView(),
 		resumedSessionIDs: make(map[string]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 	// Restore the persisted sidebar mode (unknown values fall back to Manual).
 	h.list.SetMode(ui.ValidSidebarMode(appState.GetSidebarMode()))
+	// Restore the persisted grid "agents per row" override (0 = Auto).
+	h.gridView.SetColumns(appState.GetGridColumns())
 	// Sidebar motion is on unless disabled in config (also auto-disabled by size/count).
 	h.list.SetMotionConfig(!appConfig.DisableSidebarMotion)
 
@@ -223,6 +230,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
 	m.sessionBrowser.SetSize(msg.Width, contentHeight)
+	m.gridView.SetSize(msg.Width, contentHeight)
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -231,9 +239,15 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
 	}
 
-	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
-	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
-		log.ErrorLog.Print(err)
+	// Size the agent PTYs to match what is on screen: the grid resizes every
+	// visible tile to its box; otherwise sessions track the preview pane.
+	if m.state == stateGrid {
+		m.resizeGridTiles()
+	} else {
+		previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
+		if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
+			log.ErrorLog.Print(err)
+		}
 	}
 	m.menu.SetSize(msg.Width, menuHeight)
 }
@@ -256,7 +270,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case hideErrMsg:
 		m.errBox.Clear()
 	case previewTickMsg:
-		cmd := m.instanceChanged()
+		var cmd tea.Cmd
+		if m.state == stateGrid {
+			cmd = m.gridChanged()
+		} else {
+			cmd = m.instanceChanged()
+		}
 		return m, tea.Batch(
 			cmd,
 			func() tea.Msg {
@@ -370,6 +389,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.animating = false
 		return m, nil
 	case tea.MouseMsg:
+		// In the grid, a left click focuses the clicked tile and starts typing
+		// into it. The grid is drawn one line below the top of the screen
+		// (PaddingTop(1) in View), so screen-Y maps to grid-Y via -1.
+		if m.state == stateGrid {
+			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+				if idx, ok := m.gridView.FocusAt(msg.X, msg.Y-1); ok {
+					m.gridView.SetFocus(idx)
+					m.gridView.SetPassthrough(true)
+				}
+			}
+			return m, nil
+		}
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
@@ -516,6 +547,11 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 }
 
 func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
+	// The grid view owns all key input while active (navigate + passthrough).
+	if m.state == stateGrid {
+		return m.handleGridKey(msg)
+	}
+
 	cmd, returnEarly := m.handleMenuHighlighting(msg)
 	if returnEarly {
 		return m, cmd
@@ -787,6 +823,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.menu.SetState(ui.StateBrowse)
 		m.sessionBrowser.SetQuery("")
 		return m, tea.Batch(tea.WindowSize(), m.loadCopilotSessionsCmd())
+	case keys.KeyMark:
+		if selected := m.list.GetSelectedInstance(); selected != nil {
+			m.list.ToggleMark(selected)
+		}
+		return m, nil
+	case keys.KeyGrid:
+		marked := m.list.MarkedInstances()
+		if len(marked) < 2 {
+			return m, m.transientHint("mark at least 2 started agents (press m), then press g")
+		}
+		return m, m.openGrid(marked)
 	case keys.KeyPrompt:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
@@ -1161,6 +1208,176 @@ func (m *home) instanceChanged() tea.Cmd {
 	}
 	if err := m.tabbedWindow.UpdateTerminal(selected); err != nil {
 		return m.handleError(err)
+	}
+	return nil
+}
+
+// openGrid switches into the multi-agent grid view with the given agents. It
+// returns a WindowSize command so the tiles are laid out and each agent's PTY is
+// resized to its tile before the first capture.
+func (m *home) openGrid(instances []*session.Instance) tea.Cmd {
+	m.gridView.SetInstances(instances)
+	m.gridView.SetFocus(0)
+	m.gridView.SetPassthrough(false)
+	m.gridView.ClearTileContent()
+	m.state = stateGrid
+	m.menu.SetState(ui.StateGrid)
+	return tea.WindowSize()
+}
+
+// exitGrid leaves the grid view and returns to the default layout. The
+// WindowSize command restores every agent's PTY to the preview size.
+func (m *home) exitGrid() (tea.Model, tea.Cmd) {
+	m.gridView.SetPassthrough(false)
+	m.gridView.ClearTileContent()
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+	return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
+}
+
+// handleGridKey routes key input while the grid view is active. In passthrough
+// the focused tile receives every key as raw bytes except the reserved Ctrl+Q,
+// which releases passthrough; otherwise keys navigate, change the column count,
+// enter passthrough, or leave the grid.
+func (m *home) handleGridKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.gridView.Passthrough() {
+		if msg.String() == "ctrl+q" {
+			m.gridView.SetPassthrough(false)
+			return m, nil
+		}
+		focused := m.gridView.FocusedInstance()
+		if focused == nil || !focused.Started() || focused.Paused() {
+			return m, nil
+		}
+		if b := ui.KeyMsgToBytes(msg); len(b) > 0 {
+			if err := focused.SendKeys(string(b)); err != nil {
+				return m, m.handleError(err)
+			}
+		}
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc", "q", "ctrl+c":
+		return m.exitGrid()
+	case "enter", "o":
+		if inst := m.gridView.FocusedInstance(); inst != nil && inst.Started() && !inst.Paused() {
+			m.gridView.SetPassthrough(true)
+		}
+		return m, nil
+	case "tab":
+		m.gridView.FocusNext()
+		return m, nil
+	case "shift+tab":
+		m.gridView.FocusPrev()
+		return m, nil
+	case "up", "k":
+		m.gridView.FocusUp()
+		return m, nil
+	case "down", "j":
+		m.gridView.FocusDown()
+		return m, nil
+	case "left", "h":
+		m.gridView.FocusLeft()
+		return m, nil
+	case "right", "l":
+		m.gridView.FocusRight()
+		return m, nil
+	case "]":
+		m.gridView.CycleColumns()
+		return m, m.afterGridColumnsChanged()
+	case "[":
+		m.gridColumnsPrev()
+		return m, m.afterGridColumnsChanged()
+	}
+
+	// Number keys 1-9 jump focus to that tile.
+	if len(msg.Runes) == 1 && msg.Runes[0] >= '1' && msg.Runes[0] <= '9' {
+		if idx := int(msg.Runes[0] - '1'); idx < len(m.gridView.Instances()) {
+			m.gridView.SetFocus(idx)
+		}
+	}
+	return m, nil
+}
+
+// gridColumnsPrev steps the "agents per row" setting down by one, wrapping from
+// Auto (0) round to n so the control cycles in both directions.
+func (m *home) gridColumnsPrev() {
+	prev := m.gridView.Columns() - 1
+	if prev < 0 {
+		prev = len(m.gridView.Instances())
+	}
+	m.gridView.SetColumns(prev)
+}
+
+// afterGridColumnsChanged persists the new column setting and re-lays-out the
+// grid (resizing each tile's PTY) via a WindowSize command.
+func (m *home) afterGridColumnsChanged() tea.Cmd {
+	if err := m.appState.SetGridColumns(m.gridView.Columns()); err != nil {
+		log.WarningLog.Printf("failed to persist grid columns: %v", err)
+	}
+	return tea.WindowSize()
+}
+
+// resizeGridTiles resizes every displayed agent's PTY to the current tile content
+// size so captured output matches its box. It is a no-op until the grid has a
+// layout.
+func (m *home) resizeGridTiles() {
+	w, h := m.gridView.TileContentSize()
+	if w <= 0 || h <= 0 {
+		return
+	}
+	if w < 2 {
+		w = 2
+	}
+	if h < 2 {
+		h = 2
+	}
+	for _, inst := range m.gridView.Instances() {
+		if inst == nil || !inst.Started() || inst.Paused() {
+			continue
+		}
+		if err := inst.SetPreviewSize(w, h); err != nil {
+			log.InfoLog.Printf("grid: resize tile for %q: %v", inst.Title, err)
+		}
+	}
+}
+
+// gridChanged captures the current screen of every displayed agent (concurrently,
+// since the grid has no fixed cap on agent count) and feeds each into its tile.
+func (m *home) gridChanged() tea.Cmd {
+	instances := m.gridView.Instances()
+	contents := make([]string, len(instances))
+	titles := make([]string, len(instances))
+	var wg sync.WaitGroup
+	for i, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		titles[i] = inst.Title
+		switch {
+		case !inst.Started():
+			contents[i] = "(starting…)"
+		case inst.Paused():
+			contents[i] = "(paused)"
+		default:
+			wg.Add(1)
+			go func(i int, inst *session.Instance) {
+				defer wg.Done()
+				content, err := inst.Preview()
+				if err != nil {
+					contents[i] = fmt.Sprintf("(capture error: %v)", err)
+					return
+				}
+				contents[i] = content
+			}(i, inst)
+		}
+	}
+	wg.Wait()
+	for i := range instances {
+		if titles[i] != "" {
+			m.gridView.SetTileContent(titles[i], contents[i])
+		}
 	}
 	return nil
 }
@@ -1620,6 +1837,9 @@ func (m *home) View() string {
 	} else if m.state == stateBrowse {
 		browserView := lipgloss.NewStyle().PaddingTop(1).Render(m.sessionBrowser.String())
 		return lipgloss.JoinVertical(lipgloss.Center, browserView, m.menu.String(), m.errBox.String())
+	} else if m.state == stateGrid {
+		gridView := lipgloss.NewStyle().PaddingTop(1).Render(m.gridView.String())
+		return lipgloss.JoinVertical(lipgloss.Center, gridView, m.menu.String(), m.errBox.String())
 	}
 
 	return mainView

@@ -27,6 +27,13 @@ type SidebarProps = {
   counts: StatusCounts;
   onStatusFilterChange: (value: StatusFilter) => void;
   searchInputRef?: RefObject<HTMLInputElement | null>;
+  // Grid multi-select (optional so callers that don't use the grid stay simple).
+  // Set of workspace ids currently chosen for the multi-agent grid view.
+  gridSelectedIds?: ReadonlySet<string>;
+  // Toggle a workspace in/out of the grid selection.
+  onToggleGridMember?: (id: string) => void;
+  // Clear the entire grid selection.
+  onClearGridSelection?: () => void;
 };
 
 type WorkspaceRowProps = {
@@ -36,6 +43,10 @@ type WorkspaceRowProps = {
   onSelect: (id: string) => void;
   onArchive: (id: string) => void;
   onSettings: (id: string) => void;
+  // Whether this row is currently part of the grid selection.
+  gridSelected?: boolean;
+  // Provided only when grid selection is enabled; toggles this row's membership.
+  onToggleGrid?: (id: string) => void;
 };
 
 function WorkspaceRowImpl({
@@ -45,6 +56,8 @@ function WorkspaceRowImpl({
   onSelect,
   onArchive,
   onSettings,
+  gridSelected,
+  onToggleGrid,
 }: WorkspaceRowProps): JSX.Element {
   const status = workspaceStatus(w);
   const statusTitle =
@@ -57,11 +70,30 @@ function WorkspaceRowImpl({
           : 'Ready';
   return (
     <div
-      className={`workspace-item${selected ? ' workspace-item--selected' : ''}`}
+      className={`workspace-item${selected ? ' workspace-item--selected' : ''}${
+        onToggleGrid ? ' workspace-item--selectable' : ''
+      }`}
       onClick={() => onSelect(w.id)}
       role="button"
       tabIndex={0}
     >
+      {onToggleGrid && (
+        <span className="workspace-item__grid-slot">
+          {w.alive && (
+            <input
+              type="checkbox"
+              className="workspace-item__grid-check"
+              checked={!!gridSelected}
+              aria-label={`Add ${w.title} to grid`}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                e.stopPropagation();
+                onToggleGrid(w.id);
+              }}
+            />
+          )}
+        </span>
+      )}
       {status === 'busy' ? (
         <span className="workspace-item__spinner" title={statusTitle} aria-label={statusTitle} />
       ) : (
@@ -129,6 +161,8 @@ const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
     prev.onSelect === next.onSelect &&
     prev.onArchive === next.onArchive &&
     prev.onSettings === next.onSettings &&
+    prev.gridSelected === next.gridSelected &&
+    prev.onToggleGrid === next.onToggleGrid &&
     prev.w.id === next.w.id &&
     prev.w.title === next.w.title &&
     prev.w.branch === next.w.branch &&
@@ -222,6 +256,8 @@ function buildGroupedList(
   onArchive: (id: string) => void,
   onSettings: (id: string) => void,
   onNewAtRepo?: (repoPath: string) => void,
+  gridSelectedIds?: ReadonlySet<string>,
+  onToggleGridMember?: (id: string) => void,
 ): ReactNode[] {
   if (mode === 'group-by-repo') {
     const groups = new Map<string, WorkspaceInfo[]>();
@@ -251,6 +287,8 @@ function buildGroupedList(
             onSelect={onSelect}
             onArchive={onArchive}
             onSettings={onSettings}
+            gridSelected={gridSelectedIds?.has(w.id) ?? false}
+            onToggleGrid={onToggleGridMember}
           />,
         );
       }
@@ -274,6 +312,8 @@ function buildGroupedList(
             onSelect={onSelect}
             onArchive={onArchive}
             onSettings={onSettings}
+            gridSelected={gridSelectedIds?.has(w.id) ?? false}
+            onToggleGrid={onToggleGridMember}
           />,
         );
       }
@@ -290,6 +330,8 @@ function buildGroupedList(
             onSelect={onSelect}
             onArchive={onArchive}
             onSettings={onSettings}
+            gridSelected={gridSelectedIds?.has(w.id) ?? false}
+            onToggleGrid={onToggleGridMember}
           />,
         );
       }
@@ -307,6 +349,8 @@ function buildGroupedList(
       onSelect={onSelect}
       onArchive={onArchive}
       onSettings={onSettings}
+      gridSelected={gridSelectedIds?.has(w.id) ?? false}
+      onToggleGrid={onToggleGridMember}
     />
   ));
 }
@@ -327,6 +371,9 @@ export function Sidebar({
   counts,
   onStatusFilterChange,
   searchInputRef,
+  gridSelectedIds,
+  onToggleGridMember,
+  onClearGridSelection,
 }: SidebarProps): JSX.Element {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = searchInputRef ?? internalRef;
@@ -357,6 +404,19 @@ export function Sidebar({
           </button>
         </div>
       </div>
+
+      {onToggleGridMember && gridSelectedIds && gridSelectedIds.size > 0 && (
+        <div className="sidebar__grid-selection">
+          <span className="sidebar__grid-selection-count">{gridSelectedIds.size} selected</span>
+          <button
+            className="sidebar__grid-selection-clear"
+            type="button"
+            onClick={onClearGridSelection}
+          >
+            Clear
+          </button>
+        </div>
+      )}
 
       <div className="sidebar-search">
         <input
@@ -389,7 +449,17 @@ export function Sidebar({
           </div>
         )}
         {workspaces.length > 0 &&
-          buildGroupedList(workspaces, sidebarMode, selectedId, onSelect, onArchive, onSettings, onNewAtRepo)}
+          buildGroupedList(
+            workspaces,
+            sidebarMode,
+            selectedId,
+            onSelect,
+            onArchive,
+            onSettings,
+            onNewAtRepo,
+            gridSelectedIds,
+            onToggleGridMember,
+          )}
       </nav>
     </aside>
   );

@@ -54,6 +54,8 @@ Agents keep working and auto-accept prompts even while the desktop app or TUI is
 
 ![Regenerate an agent with an optional handoff document](web/public/regenerate.png)
 
+**Multi-agent grid** — view several agents at once as a grid of live, focusable tiles and type straight into any of them; agents-per-row defaults to Auto (by width) with no fixed cap. In the **TUI**: mark 2+ sessions (`m`), press `g`, and type into the focused tile (`Ctrl+Q` releases, `Esc` leaves). In the **desktop app**: tick 2+ agents in the sidebar, click **▦ Grid**, then click a tile and type, and drag tiles by their header to rearrange.
+
 ## Installation
 
 ### Download (Windows desktop app)

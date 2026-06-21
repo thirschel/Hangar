@@ -35,6 +35,12 @@ type AppState interface {
 	GetSidebarMode() int
 	// SetSidebarMode persists the sidebar view mode.
 	SetSidebarMode(mode int) error
+	// GetGridColumns returns the persisted "agents per row" override for the
+	// multi-agent grid view. 0 means Auto (derive the column count from the
+	// window width).
+	GetGridColumns() int
+	// SetGridColumns persists the grid view "agents per row" override (0 = Auto).
+	SetGridColumns(columns int) error
 }
 
 // StateManager combines instance storage and app state management
@@ -51,6 +57,10 @@ type State struct {
 	// as an int so config stays decoupled from the ui package. Missing in older
 	// state.json -> 0 -> Manual.
 	SidebarMode int `json:"sidebar_mode"`
+	// GridColumns is the persisted "agents per row" override for the multi-agent
+	// grid view. 0 (the default, and the value in older state.json) means Auto:
+	// the column count is derived from the window width.
+	GridColumns int `json:"grid_columns,omitempty"`
 	// Instances stores the serialized instance data as raw JSON
 	InstancesData json.RawMessage `json:"instances"`
 }
@@ -212,5 +222,17 @@ func (s *State) GetSidebarMode() int {
 // SetSidebarMode persists the sidebar view mode.
 func (s *State) SetSidebarMode(mode int) error {
 	s.SidebarMode = mode
+	return SaveState(s)
+}
+
+// GetGridColumns returns the persisted grid view "agents per row" override
+// (0 = Auto).
+func (s *State) GetGridColumns() int {
+	return s.GridColumns
+}
+
+// SetGridColumns persists the grid view "agents per row" override (0 = Auto).
+func (s *State) SetGridColumns(columns int) error {
+	s.GridColumns = columns
 	return SaveState(s)
 }
