@@ -37,6 +37,41 @@ func TestDetectPromptUsesPolicyClassifier(t *testing.T) {
 }
 
 func TestDetectWaiting(t *testing.T) {
+	// Real Copilot v1.0.64 screen: the agent FINISHED a shell-command turn and is
+	// back at its idle input box. The transcript still contains "shell command"
+	// (which promptpolicy classifies as a prompt), but the agent is idle — the
+	// trailing input-editor box must keep this from reading as Waiting.
+	copilotIdleAfterShell := strings.Join([]string{
+		" ● Tip: /copy",
+		" ❯ Run the shell command: echo hello-from-capture",
+		" ⌄ Thought for 1s",
+		" │ The user is asking me to execute a shell command, so I'll run it for them.",
+		"  $ Shell Echo a test string 2 lines…",
+		" ● Output:  hello-from-capture ",
+		" D:\\dev\\Hangar [⎇ dev*%]                              Session: 22.7 AIC used",
+		"╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+		"┃",
+		"╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+		" / commands · ? help · tab next tab                   Claude Opus 4.8 · 1M context (3%)",
+	}, "\n")
+	// Real Copilot screen: the user has TYPED a prompt-like phrase into the input
+	// box (e.g. a seeded prompt before submit). The agent is not asking anything.
+	copilotTypedTrigger := strings.Join([]string{
+		" D:\\dev\\Hangar [⎇ dev*%]                              Session: 0 AIC used",
+		"╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+		"┃ Do you want to run this command",
+		"╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+		" @ files · # issues                                   Claude Opus 4.8 · 1M context (0%)",
+	}, "\n")
+	// Pure idle box (empty input, idle footer).
+	copilotIdleEmpty := strings.Join([]string{
+		" ● Tip: /app",
+		"╻▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+		"┃",
+		"╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+		" / commands · ? help · tab next tab                   Claude Opus 4.8 · 1M context (0%)",
+	}, "\n")
+
 	cases := []struct {
 		name    string
 		program string
@@ -49,11 +84,72 @@ func TestDetectWaiting(t *testing.T) {
 		{"press enter to continue", "copilot", "Press enter to continue", true},
 		{"copilot banner is not waiting", "copilot", "Copilot v1.0.63 uses AI.\nCheck for mistakes.\nTip: /resume", false},
 		{"plain output is not waiting", "copilot", "thinking...\nwriting code", false},
+		// Idle input box present at the bottom ⇒ idle/ready, never Waiting, even when
+		// the transcript or the typed input contains prompt-like phrases.
+		{"idle box after a finished shell turn", "copilot", copilotIdleAfterShell, false},
+		{"prompt phrase typed into input box", "copilot", copilotTypedTrigger, false},
+		{"empty idle input box", "copilot", copilotIdleEmpty, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := detectWaiting(tc.program, tc.plain); got != tc.want {
 				t.Fatalf("detectWaiting(%q, ...) = %v, want %v", tc.program, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAtIdleInputPrompt(t *testing.T) {
+	cases := []struct {
+		name  string
+		plain string
+		want  bool
+	}{
+		{
+			"trailing input box with footer",
+			strings.Join([]string{" context", "╻▄▄▄▄▄▄▄▄", "┃ some typed text", "╹▀▀▀▀▀▀▀▀", " / commands · ? help"}, "\n"),
+			true,
+		},
+		{
+			"empty input box",
+			strings.Join([]string{"╻▄▄▄▄", "┃", "╹▀▀▀▀", " footer"}, "\n"),
+			true,
+		},
+		{
+			"multi-line input box",
+			strings.Join([]string{"╻▄▄▄▄", "┃ line 1", "┃ line 2", "┃ line 3", "╹▀▀▀▀", " footer"}, "\n"),
+			true,
+		},
+		{
+			"indented caps",
+			strings.Join([]string{" ╻▄▄▄", " ┃", " ╹▀▀▀", " footer"}, "\n"),
+			true,
+		},
+		{
+			"box trailed by blank lines still detected",
+			strings.Join([]string{"╻▄▄▄", "┃", "╹▀▀▀", " footer", "", ""}, "\n"),
+			true,
+		},
+		{
+			"bare prompt block has no input box",
+			"Do you want to run this command?\n 1. Yes\n 3. No",
+			false,
+		},
+		{
+			"box far from bottom is not the trailing input prompt",
+			strings.Join([]string{"╻▄▄▄", "┃", "╹▀▀▀", "line a", "line b", "line c", "line d", "line e"}, "\n"),
+			false,
+		},
+		{
+			"empty screen",
+			"",
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := atIdleInputPrompt(tc.plain); got != tc.want {
+				t.Fatalf("atIdleInputPrompt(...) = %v, want %v", got, tc.want)
 			}
 		})
 	}
