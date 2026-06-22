@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.8.0](https://github.com/thirschel/Hangar/compare/v1.7.3...v1.8.0) (2026-06-22)
+
+### Features
+
+* multi-agent grid view (TUI + desktop) ([#77](https://github.com/thirschel/Hangar/issues/77)) ([d6c803c](https://github.com/thirschel/Hangar/commit/d6c803c853850061da067a648624c6aec1df1dc0))
+
 ## [1.7.3](https://github.com/thirschel/Hangar/compare/v1.7.2...v1.7.3) (2026-06-21)
 
 ### Bug Fixes
