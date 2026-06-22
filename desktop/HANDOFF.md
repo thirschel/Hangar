@@ -92,7 +92,8 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
   `gridSelectedIds`) and open an in-window grid (`▦ Grid` / `g`) of live, focusable agent terminals
   (`GridPane` tiles, one `TermView` per session); click a tile and type straight into that agent, and
   **drag a tile by its header handle to rearrange** (tiles are keyed by id so the live terminals
-  survive the move; order persists in `localStorage`). Renderer-only: reuses the existing per-session
+  survive the move; order persists in `localStorage`). Rows are ≥500px and per-row resizable (drag a
+  tile's bottom edge; heights persist). Renderer-only: reuses the existing per-session
   stream / `sendInput` / `resize` IPC (no daemon or proto change). Agents-per-row control defaults to
   Auto (by width), persisted in `localStorage`.
 
@@ -131,6 +132,7 @@ Node.** Windows-first; the Unix/tmux TUI path is unchanged.
 | `components/GridPane.tsx` | Multi-agent grid: tiles a `TermView` per selected agent; per-row control, focus ring, drag-to-reorder. |
 | `components/grid-columns.ts` | Pure "agents per row" math (Auto/effective/cycle); mirrors the Go TUI helper. |
 | `components/grid-reorder.ts` | Pure drag-and-drop reorder helper (move a tile id to a target's slot). |
+| `components/grid-rows.ts` | Pure per-row height helpers (clamp / normalize / set; 500px floor). |
 | `components/ShellTerminal.tsx` | Lazily ensures `sh_<wsId>` PowerShell, renders a `TermView`. |
 | `components/FilesPanel.tsx` | Lazy file tree + read-only viewer. |
 | `components/ReviewPanel.tsx` | Changed files + rich diff + commit/push. |

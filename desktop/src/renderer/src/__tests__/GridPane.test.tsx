@@ -155,4 +155,52 @@ describe('GridPane', () => {
     // Forward drag lands the dragged tile after the target.
     expect(onReorder).toHaveBeenCalledWith(['b', 'c', 'a']);
   });
+
+  it('renders a resize handle per tile', () => {
+    const { container } = render(
+      <GridPane
+        workspaces={[mkWs('a'), mkWs('b')]}
+        columns={0}
+        onColumnsChange={() => {}}
+        onLeave={() => {}}
+      />,
+    );
+    expect(container.querySelectorAll('.grid-tile__resize')).toHaveLength(2);
+  });
+
+  it('resizes a row by dragging the tile bottom handle', () => {
+    const onRowHeightsChange = vi.fn();
+    const { container } = render(
+      <GridPane
+        workspaces={[mkWs('a'), mkWs('b')]}
+        columns={2} // 2 cols, 2 tiles -> a single row
+        onColumnsChange={() => {}}
+        onLeave={() => {}}
+        onRowHeightsChange={onRowHeightsChange}
+      />,
+    );
+    const handle = container.querySelectorAll('.grid-tile__resize')[0];
+    fireEvent.mouseDown(handle, { clientY: 100 });
+    fireEvent.mouseMove(window, { clientY: 250 });
+    fireEvent.mouseUp(window, { clientY: 250 });
+    // Default 500 + 150px drag = 650 for the single row.
+    expect(onRowHeightsChange).toHaveBeenCalledWith([650]);
+  });
+
+  it('clamps a row to the 500px minimum when dragged up', () => {
+    const onRowHeightsChange = vi.fn();
+    const { container } = render(
+      <GridPane
+        workspaces={[mkWs('a'), mkWs('b')]}
+        columns={2}
+        onColumnsChange={() => {}}
+        onLeave={() => {}}
+        onRowHeightsChange={onRowHeightsChange}
+      />,
+    );
+    const handle = container.querySelectorAll('.grid-tile__resize')[0];
+    fireEvent.mouseDown(handle, { clientY: 300 });
+    fireEvent.mouseUp(window, { clientY: 100 }); // dragged up 200px -> below floor -> 500
+    expect(onRowHeightsChange).toHaveBeenCalledWith([500]);
+  });
 });

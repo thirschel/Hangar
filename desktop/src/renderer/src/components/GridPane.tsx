@@ -4,6 +4,7 @@ import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
 import { effectiveColumns } from './grid-columns';
 import { reorder } from './grid-reorder';
+import { MIN_ROW_HEIGHT, normalizeRowHeights, withRowHeight } from './grid-rows';
 import { workspaceStatus } from './workspace-status';
 
 type GridPaneProps = {
@@ -16,6 +17,11 @@ type GridPaneProps = {
   // Reorder tiles via drag-and-drop; receives the full new id order. When
   // omitted, tiles are not draggable.
   onReorder?: (orderedIds: string[]) => void;
+  // Per-row heights (CSS px, indexed by row); missing rows default to
+  // MIN_ROW_HEIGHT. Rows never shrink below MIN_ROW_HEIGHT.
+  rowHeights?: number[];
+  // Commit new per-row heights after a drag-resize (for persistence).
+  onRowHeightsChange?: (heights: number[]) => void;
 };
 
 // GridPane tiles several agents at once. Each tile is a self-contained, live,
@@ -29,6 +35,8 @@ export function GridPane({
   onColumnsChange,
   onLeave,
   onReorder,
+  rowHeights,
+  onRowHeightsChange,
 }: GridPaneProps): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -37,6 +45,8 @@ export function GridPane({
   // Drag-and-drop reorder state: the tile being dragged and the current drop target.
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // Live per-row heights during an active resize drag (null = use the prop).
+  const [liveHeights, setLiveHeights] = useState<number[] | null>(null);
 
   // Drop the dragged tile onto targetId. Because tiles are keyed by id (and each
   // TermView by sessionName), reordering only moves the keyed nodes — the live
@@ -77,6 +87,32 @@ export function GridPane({
 
   const n = workspaces.length;
   const cols = Math.max(1, effectiveColumns(columns, width, n));
+  const rowCount = Math.ceil(n / cols);
+  const effectiveHeights = liveHeights ?? normalizeRowHeights(rowHeights ?? [], rowCount);
+
+  // Begin a per-row resize drag from a tile's bottom handle. Tiles stretch to
+  // their grid row track, so resizing one tile resizes its whole row. Updates
+  // are live (liveHeights) and committed (onRowHeightsChange) on mouse-up.
+  const startRowResize = (rowIndex: number, startY: number): void => {
+    const base = normalizeRowHeights(rowHeights ?? [], rowCount);
+    const startHeight = base[rowIndex] ?? MIN_ROW_HEIGHT;
+    const prevUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+
+    const compute = (clientY: number): number[] =>
+      withRowHeight(base, rowCount, rowIndex, startHeight + (clientY - startY));
+    const onMove = (ev: MouseEvent): void => setLiveHeights(compute(ev.clientY));
+    const onUp = (ev: MouseEvent): void => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.userSelect = prevUserSelect;
+      const finalHeights = compute(ev.clientY);
+      setLiveHeights(null);
+      onRowHeightsChange?.(finalHeights);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   return (
     <section className="grid-pane" aria-label="Agent grid">
@@ -115,11 +151,15 @@ export function GridPane({
       <div
         className="grid-pane__grid"
         ref={gridRef}
-        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+        style={{
+          gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+          gridTemplateRows: effectiveHeights.map((h) => `${h}px`).join(' '),
+        }}
       >
-        {workspaces.map((w) => {
+        {workspaces.map((w, i) => {
           const status = workspaceStatus(w);
           const focused = w.id === focusedId;
+          const rowIndex = Math.floor(i / cols);
           const dragging = dragId === w.id;
           const dropTarget = !!dragId && dragOverId === w.id && dragId !== w.id;
           return (
@@ -188,6 +228,16 @@ export function GridPane({
               <div className="grid-tile__term">
                 <TermView key={w.sessionName} sessionName={w.sessionName} />
               </div>
+              <div
+                className="grid-tile__resize"
+                title="Drag to resize row height"
+                aria-hidden="true"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  startRowResize(rowIndex, e.clientY);
+                }}
+              />
             </div>
           );
         })}

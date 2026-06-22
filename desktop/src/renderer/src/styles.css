@@ -2386,3 +2386,28 @@ body.is-row-resizing .center-terminal__resizer::after {
   outline: 2px dashed var(--accent);
   outline-offset: -2px;
 }
+.grid-tile__resize {
+  flex: 0 0 6px;
+  position: relative;
+  cursor: ns-resize;
+}
+.grid-tile__resize::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  transform: translateX(-50%);
+  width: 36px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.grid-tile:hover .grid-tile__resize::after,
+.grid-tile__resize:hover::after {
+  opacity: 1;
+}
+.grid-tile__resize:hover {
+  background: var(--bg-hover);
+}

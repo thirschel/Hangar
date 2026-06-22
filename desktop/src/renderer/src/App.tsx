@@ -43,6 +43,7 @@ const SIDEBAR_ORDER_KEY = 'cs.workspaceOrder';
 const STATUS_FILTER_KEY = 'cs.statusFilter';
 const GRID_COLUMNS_KEY = 'cs.gridColumns';
 const GRID_ORDER_KEY = 'cs.gridOrder';
+const GRID_ROW_HEIGHTS_KEY = 'cs.gridRowHeights';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -102,6 +103,14 @@ export function App(): JSX.Element {
     try {
       const arr = JSON.parse(localStorage.getItem(GRID_ORDER_KEY) ?? '[]');
       return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
+  const [gridRowHeights, setGridRowHeights] = useState<number[]>(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem(GRID_ROW_HEIGHTS_KEY) ?? '[]');
+      return Array.isArray(arr) ? arr.filter((x): x is number => typeof x === 'number') : [];
     } catch {
       return [];
     }
@@ -600,6 +609,11 @@ export function App(): JSX.Element {
     localStorage.setItem(GRID_ORDER_KEY, JSON.stringify(orderedIds));
   }, []);
 
+  const onGridRowHeightsChange = useCallback((heights: number[]): void => {
+    setGridRowHeights(heights);
+    localStorage.setItem(GRID_ROW_HEIGHTS_KEY, JSON.stringify(heights));
+  }, []);
+
   const onConfirmRemove = useCallback(
     async (deleteWorktree: boolean): Promise<void> => {
       if (!workspaceToRemove) return;
@@ -756,6 +770,8 @@ export function App(): JSX.Element {
             columns={gridColumns}
             onColumnsChange={onGridColumnsChange}
             onReorder={onGridReorder}
+            rowHeights={gridRowHeights}
+            onRowHeightsChange={onGridRowHeightsChange}
             onLeave={() => setGridMode(false)}
           />
         ) : (
