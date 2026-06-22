@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Modal } from '../components/Modal';
 
@@ -60,5 +60,65 @@ describe('Modal', () => {
     );
 
     expect(container).toMatchSnapshot();
+  });
+
+  it('does not close when the backdrop (overlay) is clicked', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <Modal title="Test Modal" onClose={onClose}>
+        <p>Modal content</p>
+      </Modal>,
+    );
+
+    const overlay = container.querySelector('.modal-overlay') as HTMLElement;
+    fireEvent.click(overlay);
+
+    expect(onClose).not.toHaveBeenCalled();
+    // Clicking the backdrop must not even begin the exit animation.
+    expect(overlay).not.toHaveClass('modal-overlay--closing');
+  });
+
+  it('does not close when content inside the modal is clicked', () => {
+    const onClose = vi.fn();
+    render(
+      <Modal title="Test Modal" onClose={onClose}>
+        <p>Modal content</p>
+      </Modal>,
+    );
+
+    fireEvent.click(screen.getByText('Modal content'));
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('still closes on Escape (begins the exit animation)', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <Modal title="Test Modal" onClose={onClose}>
+        <p>Modal content</p>
+      </Modal>,
+    );
+
+    const overlay = container.querySelector('.modal-overlay') as HTMLElement;
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+
+    // Esc begins the exit animation (onClose then fires on the overlay's
+    // animationend, which a real browser dispatches and jsdom does not).
+    expect(overlay).toHaveClass('modal-overlay--closing');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('does not close on Escape while busy', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <Modal title="Test Modal" onClose={onClose} busy>
+        <p>Modal content</p>
+      </Modal>,
+    );
+
+    const overlay = container.querySelector('.modal-overlay') as HTMLElement;
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+
+    expect(overlay).not.toHaveClass('modal-overlay--closing');
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

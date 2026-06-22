@@ -23,14 +23,15 @@ type ModalProps = {
   error?: string | null;
   /** Extra class on the .modal element (e.g. "modal--create"). */
   className?: string;
-  /** While true, Esc / backdrop clicks won't dismiss (e.g. a request is in flight). */
+  /** While true, Esc won't dismiss (e.g. a request is in flight). */
   busy?: boolean;
 };
 
 /**
  * Shared modal shell: dimmed + blurred backdrop, scale/fade enter & exit animations,
- * Esc / click-outside dismissal, and focus containment. Used by the Settings and
- * Create-workspace modals. Programmatic closes (after a successful save/create) go
+ * Esc-key dismissal, and focus containment. Clicking the backdrop does NOT dismiss —
+ * modals close via their footer button (or Esc) so an accidental outside click can't
+ * discard in-progress input. Programmatic closes (after a successful save/create) go
  * through the imperative `close()` handle so the exit animation still plays.
  */
 export const Modal = forwardRef<ModalHandle, ModalProps>(function Modal(
@@ -72,14 +73,12 @@ export const Modal = forwardRef<ModalHandle, ModalProps>(function Modal(
     <div
       ref={overlayRef}
       className={`modal-overlay${closing ? ' modal-overlay--closing' : ''}`}
-      onClick={() => close(false)}
       onAnimationEnd={onOverlayAnimEnd}
     >
       <div
         className={`modal${className ? ` ${className}` : ''}`}
         role="dialog"
         aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
       >
         <div className="modal__header">{title}</div>
         <div className="modal__body">{children}</div>
