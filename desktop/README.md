@@ -52,7 +52,10 @@ Then: click **+** in the sidebar → pick a git repo, give it a title (and optio
 `copilot` and a base branch) → **Create**. The agent boots in the center terminal; type in it or use
 the composer. Create more workspaces to run agents in parallel; switch between them in the sidebar;
 the right panel shows each one's changed files and diff; **×** archives a workspace (removes the
-worktree, keeps the branch). Close and reopen the app — workspaces persist (the daemon keeps them).
+worktree, keeps the branch). Closing the window minimizes to the tray and keeps the daemon (and live
+sessions) running; **quitting** (tray → Quit, or Ctrl+Q) stops the daemon so `cs.exe` exits with the
+app. Either way workspaces/branches persist on disk — after a real quit the daemon recreates each
+session on next launch (as it does after a reboot).
 
 **Multi-agent grid:** select 2+ agents with the checkboxes in the sidebar (they appear on hover or
 when checked), then click **▦ Grid** in the top bar (or press `g`) to tile them as live terminals —
