@@ -293,6 +293,16 @@ go1.25.11`). Key pinned deps: `charmbracelet/x/xpty`, `.../x/conpty`, `.../x/vt`
 
 ## 9. Known limitations & gotchas
 
+- **In-place (no-worktree) workspaces.** `CreateWorkspace` accepts `noWorktree`: when set, the host
+  skips `git.NewGitWorktree`/`Setup` and opens the agent **directly in the selected folder**
+  (`WorktreePath = RepoPath`). When that folder is a git repo, `Branch`/`BaseSHA` come from its HEAD
+  and Diff/Commit/Push run against it (full parity); a non-git folder still opens with those features
+  off. Three safety rules: (1) `load()` skips the worktrees-dir containment check for these entries
+  (their path is intentionally outside the managed dir); (2) `archive()` never deletes the folder or
+  branch for an in-place workspace, even if `DeleteWorktree` is set; (3) the diff helpers use a
+  throwaway `GIT_INDEX_FILE` so the background diff refresh never mutates/locks the user's real index
+  (`git/diff.go` `stageUntrackedForDiff`). `WorkspaceInfo.HasWorktree` distinguishes the two kinds for
+  the sidebar icon. Protocol v10.
 - **No cross-reboot persistence.** Sessions live only while the host process lives (same as tmux's
   server dying on reboot). After a reboot, `cs` recreates each missing session in its worktree.
 - **Desktop app quit stops the host.** Unlike the TUI (whose exit leaves the host running for

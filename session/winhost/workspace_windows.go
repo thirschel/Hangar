@@ -47,6 +47,7 @@ type workspace struct {
 	AgentSessionID string `json:"agentSessionId"`          // stable agent session UUID for resume (copilot)
 	Shell          string `json:"shell,omitempty"`         // "cmd", "powershell", "pwsh"; empty = config default
 	CopilotResume  bool   `json:"copilotResume,omitempty"` // agent is copilot or a detected copilot wrapper (e.g. "cpa") -> resumable
+	NoWorktree     bool   `json:"noWorktree,omitempty"`    // in-place session: opened directly against RepoPath, no managed worktree
 }
 
 type workspaceManager struct {
@@ -139,7 +140,7 @@ func (m *workspaceManager) load() {
 				continue
 			}
 		}
-		if w.WorktreePath != "" {
+		if w.WorktreePath != "" && !w.NoWorktree {
 			if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
 				m.host.logger.Printf("workspaces.json: skipping workspace %q: unsafe worktree path: %v", w.ID, err)
 				continue
@@ -443,7 +444,32 @@ func truncateTitle(s string) string {
 // worktreeFor reconstructs a GitWorktree handle from stored metadata so we can
 // run diff/remove without re-resolving paths.
 func (w *workspace) worktreeFor() *git.GitWorktree {
-	return git.NewGitWorktreeFromStorage(w.RepoPath, w.WorktreePath, w.SessionName, w.Branch, w.BaseSHA, w.ExistingBranch)
+	wt := git.NewGitWorktreeFromStorage(w.RepoPath, w.WorktreePath, w.SessionName, w.Branch, w.BaseSHA, w.ExistingBranch)
+	// In-place sessions run diffs against the user's real repo, so the diff
+	// helpers must not mutate/lock its index with `git add -N`.
+	wt.SetNoStage(w.NoWorktree)
+	return wt
+}
+
+// inPlaceGitInfo returns the repo toplevel, current branch, and HEAD SHA for an
+// in-place session's folder. All three are empty when dir is not inside a git
+// work tree (a detached HEAD also yields an empty branch), in which case the
+// caller opens the session with git features disabled.
+func inPlaceGitInfo(dir string) (repoPath, branch, baseSHA string) {
+	top, err := runWorkspaceGit(dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", "", ""
+	}
+	repoPath = filepath.Clean(strings.TrimSpace(top))
+	if b, err := runWorkspaceGit(dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		if bn := strings.TrimSpace(b); bn != "HEAD" {
+			branch = bn
+		}
+	}
+	if s, err := runWorkspaceGit(dir, "rev-parse", "HEAD"); err == nil {
+		baseSHA = strings.TrimSpace(s)
+	}
+	return repoPath, branch, baseSHA
 }
 
 func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
@@ -471,6 +497,7 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		RunCommand:     w.RunCommand, Running: running, PreviewURL: previewURL,
 		Busy: busy, Waiting: waiting,
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
+		HasWorktree: !w.NoWorktree,
 	}
 }
 
@@ -1347,41 +1374,71 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		agentSessionID = newUUID()
 	}
 
-	var (
-		wt     *git.GitWorktree
-		branch string
-		err    error
-	)
-	if req.BaseBranch != "" {
-		wt, err = git.NewGitWorktreeFromBranch(req.RepoPath, req.BaseBranch, gitName)
-		branch = req.BaseBranch
-	} else {
-		wt, branch, err = git.NewGitWorktree(req.RepoPath, gitName)
-	}
-	if err != nil {
-		return proto.Errorf(req.ID, "prepare worktree: %v", err)
-	}
-	phase("prepare-worktree")
-	if err := wt.Setup(); err != nil {
-		return proto.Errorf(req.ID, "create worktree: %v", err)
-	}
-	phase("setup-worktree")
-
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
-		// Roll back the worktree so a failed create leaves no orphan.
-		_ = wt.Remove()
-		_ = wt.Prune()
-		return proto.Errorf(req.ID, "start agent: %v", err)
+
+	var (
+		repoPath, worktreePath, branch, baseSHA string
+		existingBranch                          bool
+	)
+
+	if req.NoWorktree {
+		// In-place session: open the agent directly in the selected folder, no
+		// managed worktree. Git features (diff/commit/push, branch label) come
+		// from the folder's repo when it is one; a non-repo folder still opens.
+		dir, derr := filepath.Abs(req.RepoPath)
+		if derr != nil {
+			return proto.Errorf(req.ID, "resolve folder: %v", derr)
+		}
+		if fi, serr := os.Stat(dir); serr != nil || !fi.IsDir() {
+			return proto.Errorf(req.ID, "folder not found: %s", req.RepoPath)
+		}
+		worktreePath = dir
+		repoPath, branch, baseSHA = inPlaceGitInfo(dir)
+		if repoPath == "" {
+			repoPath = dir
+		}
+		phase("resolve-folder")
+		if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktreePath, shell, cols, rows, req.AutoYes); err != nil {
+			return proto.Errorf(req.ID, "start agent: %v", err)
+		}
+		phase("start-agent")
+	} else {
+		var (
+			wt  *git.GitWorktree
+			err error
+		)
+		if req.BaseBranch != "" {
+			wt, err = git.NewGitWorktreeFromBranch(req.RepoPath, req.BaseBranch, gitName)
+			branch = req.BaseBranch
+		} else {
+			wt, branch, err = git.NewGitWorktree(req.RepoPath, gitName)
+		}
+		if err != nil {
+			return proto.Errorf(req.ID, "prepare worktree: %v", err)
+		}
+		phase("prepare-worktree")
+		if err := wt.Setup(); err != nil {
+			return proto.Errorf(req.ID, "create worktree: %v", err)
+		}
+		phase("setup-worktree")
+
+		if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+			// Roll back the worktree so a failed create leaves no orphan.
+			_ = wt.Remove()
+			_ = wt.Prune()
+			return proto.Errorf(req.ID, "start agent: %v", err)
+		}
+		phase("start-agent")
+		repoPath, worktreePath, baseSHA = wt.GetRepoPath(), wt.GetWorktreePath(), wt.GetBaseCommitSHA()
+		existingBranch = req.BaseBranch != ""
 	}
-	phase("start-agent")
 
 	w := &workspace{
-		ID: id, Title: title, Program: program, RepoPath: wt.GetRepoPath(),
-		WorktreePath: wt.GetWorktreePath(), Branch: branch, BaseSHA: wt.GetBaseCommitSHA(),
-		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: req.BaseBranch != "",
+		ID: id, Title: title, Program: program, RepoPath: repoPath,
+		WorktreePath: worktreePath, Branch: branch, BaseSHA: baseSHA,
+		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: existingBranch,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID, Shell: shell,
-		CopilotResume: copilotResume,
+		CopilotResume: copilotResume, NoWorktree: req.NoWorktree,
 	}
 	m.mu.Lock()
 	m.wss[id] = w
@@ -1442,8 +1499,13 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	m.host.runs.stop(w.ID)
 	m.host.killSession(sessionName)
 
-	// Phase 2: Optional worktree/branch deletion
-	if req.DeleteWorktree {
+	// Phase 2: Optional worktree/branch deletion. An in-place session never owns
+	// a managed worktree or branch (WorktreePath is the user's folder), so we must
+	// never delete anything for it — archiving only stops the agent.
+	switch {
+	case w.NoWorktree:
+		m.host.logger.Printf("archived in-place workspace %q (%s) - left folder %s untouched", w.Title, w.ID, w.WorktreePath)
+	case req.DeleteWorktree:
 		wt := w.worktreeFor()
 
 		// Refuse to delete a worktree path that is not contained within the
@@ -1472,7 +1534,7 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 		_ = cmd.Run() // Ignore errors - branch might not exist locally
 
 		m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
-	} else {
+	default:
 		// Keep worktree and branch - just prune references
 		wt := w.worktreeFor()
 		_ = wt.Prune()
@@ -1531,6 +1593,10 @@ func (m *workspaceManager) commit(req *proto.Request) *proto.Response {
 		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
 	}
 
+	if w.NoWorktree && w.Branch == "" {
+		return proto.Errorf(req.ID, "this in-place session is not in a git repository")
+	}
+
 	status, err := runWorkspaceGit(w.WorktreePath, "status", "--porcelain")
 	if err != nil {
 		return proto.Errorf(req.ID, "check workspace status: %v", err)
@@ -1560,6 +1626,10 @@ func (m *workspaceManager) push(req *proto.Request) *proto.Response {
 	m.mu.Unlock()
 	if !ok {
 		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
+	}
+
+	if w.NoWorktree && w.Branch == "" {
+		return proto.Errorf(req.ID, "this in-place session is not in a git repository")
 	}
 
 	if _, err := runWorkspaceGit(w.WorktreePath, "remote", "get-url", "origin"); err != nil {

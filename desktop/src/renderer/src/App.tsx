@@ -419,7 +419,7 @@ export function App(): JSX.Element {
         case 'p': {
           e.preventDefault();
           const sel = ws.find((w) => w.id === selectedId);
-          if (sel && (sel.added > 0 || sel.removed > 0)) {
+          if (sel && sel.branch && (sel.added > 0 || sel.removed > 0)) {
             void window.cs.pushWorkspace(sel.id);
           }
           break;
@@ -849,6 +849,7 @@ export function App(): JSX.Element {
         <RemoveWorkspaceModal
           workspaceTitle={workspaceToRemove.title}
           hasUncommittedChanges={workspaceToRemove.added > 0 || workspaceToRemove.removed > 0}
+          hasWorktree={workspaceToRemove.hasWorktree}
           onConfirm={onConfirmRemove}
           onClose={() => setWorkspaceToRemove(null)}
         />

@@ -5,22 +5,28 @@ import { Modal, type ModalHandle } from './Modal';
 type RemoveWorkspaceModalProps = {
   workspaceTitle: string;
   hasUncommittedChanges: boolean;
+  hasWorktree: boolean;
   onConfirm: (deleteWorktree: boolean) => Promise<void>;
   onClose: () => void;
 };
 
 /**
  * Confirmation modal for removing a workspace from the manager.
- * 
+ *
  * By default, removing a workspace KEEPS the worktree directory and branch on disk
  * (so you can continue working from the CLI or re-open it later). The user can opt-in
  * to also delete the worktree directory and its branch via a checkbox.
- * 
+ *
+ * In-place sessions (hasWorktree === false) have no managed worktree, so the
+ * delete option is hidden — removing only stops the agent and never touches the
+ * user's folder or branch.
+ *
  * Shows a warning when the worktree has uncommitted changes.
  */
 export function RemoveWorkspaceModal({
   workspaceTitle,
   hasUncommittedChanges,
+  hasWorktree,
   onConfirm,
   onClose,
 }: RemoveWorkspaceModalProps): JSX.Element {
@@ -81,31 +87,38 @@ export function RemoveWorkspaceModal({
           </p>
         )}
 
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={deleteWorktree}
-            onChange={(e) => setDeleteWorktree(e.target.checked)}
-            disabled={busy}
-          />
-          <span>
-            Also delete the worktree directory and its branch from disk
-          </span>
-        </label>
+        {hasWorktree ? (
+          <>
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={deleteWorktree}
+                onChange={(e) => setDeleteWorktree(e.target.checked)}
+                disabled={busy}
+              />
+              <span>Also delete the worktree directory and its branch from disk</span>
+            </label>
 
-        <p className="help-text">
-          {deleteWorktree ? (
-            <>
-              The worktree directory and branch will be <strong>permanently deleted</strong>.
-              Any uncommitted work will be lost.
-            </>
-          ) : (
-            <>
-              The worktree directory and branch will be kept on disk.
-              You can continue working from the CLI or re-open it later.
-            </>
-          )}
-        </p>
+            <p className="help-text">
+              {deleteWorktree ? (
+                <>
+                  The worktree directory and branch will be{' '}
+                  <strong>permanently deleted</strong>. Any uncommitted work will be lost.
+                </>
+              ) : (
+                <>
+                  The worktree directory and branch will be kept on disk. You can continue working
+                  from the CLI or re-open it later.
+                </>
+              )}
+            </p>
+          </>
+        ) : (
+          <p className="help-text">
+            This session runs in-place in the selected folder. Removing it only stops the agent —
+            your files and current branch are left untouched.
+          </p>
+        )}
       </form>
     </Modal>
   );

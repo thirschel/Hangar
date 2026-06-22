@@ -75,8 +75,19 @@ func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error)
 // so a slow traversal (e.g. a worktree containing a pathological symlink tree)
 // is killed when ctx is cancelled or times out instead of blocking for minutes.
 func (g *GitWorktree) runGitCommandContext(ctx context.Context, path string, args ...string) (string, error) {
+	return g.runGitCommandEnvContext(ctx, nil, path, args...)
+}
+
+// runGitCommandEnvContext is like runGitCommandContext but additionally sets
+// extra environment variables on the git process (e.g. GIT_INDEX_FILE to direct
+// staging at a throwaway index). A nil extraEnv inherits the parent environment
+// unchanged.
+func (g *GitWorktree) runGitCommandEnvContext(ctx context.Context, extraEnv []string, path string, args ...string) (string, error) {
 	baseArgs := []string{"-C", path}
 	cmd := exec.CommandContext(ctx, "git", append(baseArgs, args...)...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	hideConsole(cmd)
 
 	output, err := cmd.CombinedOutput()

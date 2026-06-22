@@ -41,6 +41,9 @@ export interface WorkspaceInfo {
   regenerating: boolean;
   regenPhase?: string;
   shell: string;
+  // True when backed by a managed git worktree; false for an in-place session
+  // opened directly against repoPath. Drives the sidebar worktree icon.
+  hasWorktree: boolean;
 }
 
 export interface CopilotSessionInfo {
@@ -130,6 +133,9 @@ export interface Request {
   // ArchiveWorkspace: when true, also delete the worktree directory and
   // its branch; when false (default), keep the worktree and branch on disk.
   deleteWorktree?: boolean;
+  // CreateWorkspace (v10): when true, open the session in-place against repoPath
+  // without creating a git worktree.
+  noWorktree?: boolean;
   // Run methods (v3)
   command?: string;
   sinceOffset?: number;

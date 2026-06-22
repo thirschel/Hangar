@@ -107,6 +107,15 @@ function WorkspaceRowImpl({
         <div className="workspace-item__name">{w.title}</div>
         <div className="workspace-item__detail">
           <span className="workspace-item__branch">{w.branch}</span>
+          {w.hasWorktree && (
+            <span
+              className="workspace-item__worktree"
+              title="Isolated git worktree"
+              aria-label="Isolated git worktree"
+            >
+              ⎇
+            </span>
+          )}
           {(w.added > 0 || w.removed > 0) && (
             <span className="diffstat">
               <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
@@ -166,6 +175,7 @@ const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
     prev.w.id === next.w.id &&
     prev.w.title === next.w.title &&
     prev.w.branch === next.w.branch &&
+    prev.w.hasWorktree === next.w.hasWorktree &&
     prev.w.added === next.w.added &&
     prev.w.removed === next.w.removed &&
     prev.w.alive === next.w.alive &&
@@ -435,7 +445,10 @@ export function Sidebar({
         {workspaces.length === 0 && !filter && statusFilter === 'all' && (
           <div className="empty-state">
             <div className="empty-state__title">No workspaces yet</div>
-            <p>Click + to start a parallel agent in its own git worktree.</p>
+            <p>
+              Click + to start a parallel agent — in its own git worktree, or in-place in a folder
+              you pick.
+            </p>
           </div>
         )}
         {workspaces.length === 0 && (filter || statusFilter !== 'all') && (

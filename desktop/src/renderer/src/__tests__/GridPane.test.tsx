@@ -34,6 +34,7 @@ function mkWs(id: string, over: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
     waiting: false,
     regenerating: false,
     shell: 'pwsh',
+    hasWorktree: true,
     ...over,
   };
 }

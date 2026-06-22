@@ -88,8 +88,8 @@ func TestReadFrameTruncatedBodyErrors(t *testing.T) {
 }
 
 func TestRegenerateFieldsRoundTrip(t *testing.T) {
-	if Version != 9 {
-		t.Fatalf("Version = %d, want 9", Version)
+	if Version != 10 {
+		t.Fatalf("Version = %d, want 10", Version)
 	}
 	var buf bytes.Buffer
 	req := &Request{ID: 1, Method: MethodRegenerateAgent, WorkspaceID: "ws1", Handoff: true, Cols: 100, Rows: 40}
@@ -116,6 +116,34 @@ func TestRegenerateFieldsRoundTrip(t *testing.T) {
 	}
 	if gotResp.Workspace == nil || !gotResp.Workspace.Regenerating || gotResp.Workspace.RegenPhase != "handoff" ||
 		gotResp.Workspace.LastOutputUnix != 1710000123 {
+		t.Fatalf("response round-trip mismatch: %+v", gotResp.Workspace)
+	}
+}
+
+func TestNoWorktreeFieldsRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	req := &Request{ID: 1, Method: MethodCreateWorkspace, RepoPath: "C:/repo", NoWorktree: true}
+	if err := WriteFrame(&buf, req); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	got, err := ReadRequest(&buf)
+	if err != nil {
+		t.Fatalf("ReadRequest: %v", err)
+	}
+	if got.Method != MethodCreateWorkspace || got.RepoPath != "C:/repo" || !got.NoWorktree {
+		t.Fatalf("request round-trip mismatch: %+v", got)
+	}
+
+	buf.Reset()
+	resp := &Response{ID: 2, OK: true, Workspace: &WorkspaceInfo{ID: "ws1", HasWorktree: false}}
+	if err := WriteFrame(&buf, resp); err != nil {
+		t.Fatalf("WriteFrame: %v", err)
+	}
+	gotResp, err := ReadResponse(&buf)
+	if err != nil {
+		t.Fatalf("ReadResponse: %v", err)
+	}
+	if gotResp.Workspace == nil || gotResp.Workspace.HasWorktree {
 		t.Fatalf("response round-trip mismatch: %+v", gotResp.Workspace)
 	}
 }

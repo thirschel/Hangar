@@ -33,7 +33,11 @@ import (
 // CaptureHistory now also honors the request's Cols/Rows, rendering stored
 // scrollback at the client's display width so it aligns with the fitted xterm
 // grid (additive; clips/reveals rows, never reflows — no version change).
-const Version = 9
+// v10 adds in-place (no-worktree) workspaces (Request.NoWorktree plus
+// WorkspaceInfo.HasWorktree). Bumping the version guarantees a new client cannot
+// silently request a no-worktree session against an old host that would ignore
+// the flag and create a worktree in the selected folder's repo anyway.
+const Version = 10
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -143,6 +147,11 @@ type Request struct {
 	// its branch; when false (default), keep the worktree and branch on disk.
 	DeleteWorktree bool `json:"deleteWorktree,omitempty"`
 
+	// CreateWorkspace (v10): when true, open the session in-place against RepoPath
+	// (the selected folder) WITHOUT creating a git worktree. Git features still
+	// work when the folder is a repo; a non-repo folder opens with them disabled.
+	NoWorktree bool `json:"noWorktree,omitempty"`
+
 	// Shell selects the shell used to launch the agent: "cmd", "powershell", "pwsh".
 	// Empty falls back to the config default_shell, which itself defaults to "cmd".
 	Shell string `json:"shell,omitempty"`
@@ -193,6 +202,11 @@ type WorkspaceInfo struct {
 	Regenerating bool   `json:"regenerating"`
 	RegenPhase   string `json:"regenPhase,omitempty"`
 	Shell        string `json:"shell,omitempty"`
+	// HasWorktree (v10) is true when the workspace is backed by a managed git
+	// worktree, and false for an in-place session opened directly against
+	// RepoPath. Drives the sidebar worktree icon and archive safety. Defaults to
+	// true for workspaces persisted before v10 (they all had worktrees).
+	HasWorktree bool `json:"hasWorktree"`
 }
 
 // FileDiffInfo is a per-file change summary in a WorkspaceDiff response.
