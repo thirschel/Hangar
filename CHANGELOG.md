@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.9.1](https://github.com/thirschel/Hangar/compare/v1.9.0...v1.9.1) (2026-06-22)
+
+### Bug Fixes
+
+* minor bug fixes ([#89](https://github.com/thirschel/Hangar/issues/89)) ([d42a5e3](https://github.com/thirschel/Hangar/commit/d42a5e3873c25b7aaf5501396cd134b29f568a99)), closes [#79](https://github.com/thirschel/Hangar/issues/79) [#78](https://github.com/thirschel/Hangar/issues/78) [#88](https://github.com/thirschel/Hangar/issues/88)
+
 ## [1.9.0](https://github.com/thirschel/Hangar/compare/v1.8.0...v1.9.0) (2026-06-22)
 
 ### Features
