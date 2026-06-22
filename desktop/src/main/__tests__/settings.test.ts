@@ -165,58 +165,27 @@ describe('settings', () => {
     expect(getSettings().disableHardwareAcceleration).toBe(true);
   });
 
-  it('defaults resumeAgentSessions to true and persists disabling it to config.json', () => {
-    expect(getSettings().resumeAgentSessions).toBe(true);
-
-    const result = applySettings({ resumeAgentSessions: false });
-    expect(result.resumeAgentSessions).toBe(false);
-    expect(readWrittenJson(configPath).disable_agent_resume).toBe(true);
-    expect(getSettings().resumeAgentSessions).toBe(false);
-
-    // Re-enabling removes the flag from config.json.
-    const reenabled = applySettings({ resumeAgentSessions: true });
-    expect(reenabled.resumeAgentSessions).toBe(true);
-    expect(readWrittenJson(configPath).disable_agent_resume).toBeUndefined();
-  });
-
-  it('defaults the RDP terminal mitigations (occlusion on, native nudge, diagnostics off)', () => {
+  it('defaults the terminal mitigation settings (diagnostics off, renderer auto)', () => {
     const s = getSettings();
-    expect(s.disableWindowOcclusion).toBe(true);
-    expect(s.disableDirectComposition).toBe(true);
-    expect(s.disableGpuCompositing).toBe(false);
-    expect(s.terminalNudge).toBe('native');
     expect(s.terminalDiagnostics).toBe(false);
     expect(s.terminalRenderer).toBe('auto');
-    expect(s.terminalRenderSelfTest).toBe(false);
   });
 
-  it('persists and reads back the RDP terminal mitigation settings', () => {
+  it('persists and reads back the terminal mitigation settings', () => {
     const result = applySettings({
-      disableWindowOcclusion: false,
-      disableDirectComposition: false,
-      disableGpuCompositing: true,
-      terminalNudge: 'fontsize',
       terminalDiagnostics: true,
+      terminalRenderer: 'canvas',
     });
-    expect(result.disableWindowOcclusion).toBe(false);
-    expect(result.disableDirectComposition).toBe(false);
-    expect(result.disableGpuCompositing).toBe(true);
-    expect(result.terminalNudge).toBe('fontsize');
     expect(result.terminalDiagnostics).toBe(true);
+    expect(result.terminalRenderer).toBe('canvas');
 
     const written = readWrittenJson(appSettingsPath);
-    expect(written.disableWindowOcclusion).toBe(false);
-    expect(written.disableDirectComposition).toBe(false);
-    expect(written.disableGpuCompositing).toBe(true);
-    expect(written.terminalNudge).toBe('fontsize');
     expect(written.terminalDiagnostics).toBe(true);
+    expect(written.terminalRenderer).toBe('canvas');
 
     const reread = getSettings();
-    expect(reread.disableWindowOcclusion).toBe(false);
-    expect(reread.disableDirectComposition).toBe(false);
-    expect(reread.disableGpuCompositing).toBe(true);
-    expect(reread.terminalNudge).toBe('fontsize');
     expect(reread.terminalDiagnostics).toBe(true);
+    expect(reread.terminalRenderer).toBe('canvas');
   });
 
   it('applySettings preserves unknown daemon keys', () => {

@@ -2007,6 +2007,39 @@ body.is-row-resizing .center-terminal__resizer::after {
   line-height: 1.4;
 }
 
+.diagnostics-experimental {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.diagnostics-experimental > summary {
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.diagnostics-experimental > summary::-webkit-details-marker {
+  display: none;
+}
+
+.diagnostics-experimental > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: var(--space-2);
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.diagnostics-experimental[open] > summary::before {
+  transform: rotate(90deg);
+}
+
 .log-viewer {
   display: flex;
   flex-direction: column;
