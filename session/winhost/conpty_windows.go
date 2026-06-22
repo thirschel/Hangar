@@ -1046,7 +1046,19 @@ func detectPrompt(program, plain string) bool {
 // AutoYes approval prompts PLUS common interactive selection/confirmation footers
 // (e.g. copilot's "↑/↓ to select · enter to confirm · esc to cancel"). It must NOT
 // drive AutoYes — tapping Enter on a selection menu would pick the default option.
+//
+// Prompt-like phrases also occur naturally in the conversation transcript (the
+// agent's narration, the user's own submitted message) and in the input editor as
+// the user (or a seeded prompt) types. Matching those produced a persistent false
+// "Waiting" right after a session started or resumed. So before any phrase match we
+// apply a POSITIONAL guard: if the agent is sitting at its idle text-input box, it
+// is ready for input (idle), not blocking on a question it asked — return false. A
+// genuine approval/selection replaces that box with its own choice widget, so the
+// existing matchers still fire for real prompts.
 func detectWaiting(program, plain string) bool {
+	if atIdleInputPrompt(plain) {
+		return false
+	}
 	if detectPrompt(program, plain) {
 		return true
 	}
@@ -1065,4 +1077,62 @@ func detectWaiting(program, plain string) bool {
 		}
 	}
 	return false
+}
+
+// Caps that bound the agent's text-input editor box. Copilot (and similar Charm/Ink
+// TUIs) draw the editor as a top line beginning with '╻', one or more '┃' content
+// lines, and a bottom line beginning with '╹'.
+const (
+	inputBoxTopCap = '╻'
+	inputBoxBotCap = '╹'
+)
+
+// atIdleInputPrompt reports whether the screen ends with the agent's text-input
+// editor box, i.e. the agent is sitting at its input prompt (idle/ready for the
+// user to type) rather than blocking on a question it asked. It is a POSITIONAL
+// signal used by detectWaiting so that prompt-like phrases in the scrollback
+// transcript or in the user's own typed/seeded input are not misread as the agent
+// waiting. Agents that do not render this box yield false here, leaving their
+// detection unchanged.
+func atIdleInputPrompt(plain string) bool {
+	lines := strings.Split(plain, "\n")
+	// Drop trailing blank lines so the box's bottom cap and footer sit at the end.
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	if end == 0 {
+		return false
+	}
+	// The bottom cap appears within the last few lines (a one- or two-line footer
+	// may follow it).
+	botCap := -1
+	for i := end - 1; i >= 0 && i >= end-4; i-- {
+		if firstNonSpaceRune(lines[i]) == inputBoxBotCap {
+			botCap = i
+			break
+		}
+	}
+	if botCap < 0 {
+		return false
+	}
+	// A matching top cap sits just above; allow a few content lines for multi-line
+	// input the user may have typed.
+	for i := botCap - 1; i >= 0 && i >= botCap-16; i-- {
+		if firstNonSpaceRune(lines[i]) == inputBoxTopCap {
+			return true
+		}
+	}
+	return false
+}
+
+// firstNonSpaceRune returns the first non-space/tab rune of s, or 0 if none.
+func firstNonSpaceRune(s string) rune {
+	for _, r := range s {
+		if r == ' ' || r == '\t' {
+			continue
+		}
+		return r
+	}
+	return 0
 }

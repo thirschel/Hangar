@@ -12,7 +12,9 @@ import {
   connectAttachStream,
   connectPipe,
   ensureHost,
+  killHostProcess,
   randomClientNonce,
+  requestHostShutdown,
   verifyAuthenticatedHello,
   type DirEntry,
   type FileContents,
@@ -25,7 +27,6 @@ import {
   markSetupComplete,
   type Settings,
   type ShellProfile,
-  type TerminalNudge,
 } from './settings';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
@@ -89,63 +90,39 @@ const hardwareAccelerationDisabled = ((): boolean => {
 // (the switch has no effect afterward). Over RDP, Chromium's occlusion tracker
 // frequently false-positives the window as occluded and pauses the software
 // compositor — leaving the terminal blank until a resize. VS Code ships this
-// switch by default; we gate it on a setting (default on) and append it
-// MERGE-SAFELY so it never clobbers another --disable-features value. See
-// docs/rdp-blank-terminal.md.
+// switch by default; we apply it unconditionally (merge-safely so it never
+// clobbers another --disable-features value). See docs/rdp-blank-terminal-postmortem.md.
 const windowOcclusionDisabled = ((): boolean => {
   try {
-    if (getSettings().disableWindowOcclusion) {
-      const merged = mergeDisableFeatures(app.commandLine.getSwitchValue('disable-features'), [
-        'CalculateNativeWinOcclusion',
-      ]);
-      app.commandLine.appendSwitch('disable-features', merged);
-      // Companion "occlusion set": stop Chromium throttling/backgrounding a window
-      // it believes is occluded/hidden over RDP.
-      app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-      app.commandLine.appendSwitch('disable-renderer-backgrounding');
-      return true;
-    }
+    const merged = mergeDisableFeatures(app.commandLine.getSwitchValue('disable-features'), [
+      'CalculateNativeWinOcclusion',
+    ]);
+    app.commandLine.appendSwitch('disable-features', merged);
+    // Companion "occlusion set": stop Chromium throttling/backgrounding a window
+    // it believes is occluded/hidden over RDP.
+    app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+    app.commandLine.appendSwitch('disable-renderer-backgrounding');
+    return true;
   } catch {
-    // Settings unreadable at startup; leave native occlusion detection enabled.
+    // Command line unavailable this early; leave native occlusion detection enabled.
+    return false;
   }
-  return false;
 })();
 
 // Disable Chromium's DirectComposition present path BEFORE the app is ready. Over
 // RDP, DirectComposition/MPO is the most common reason content is composited but
-// never PRESENTED to the screen (the box's capturePixelProbe shows a populated,
-// live composited surface while the terminal is visually blank — the native
-// present-path / H1 signature). Disabling it routes presents through a path the
+// never PRESENTED to the screen. Disabling it routes presents through a path the
 // RDP stack reliably blits. ONLY applied in detected remote sessions so local GPU
-// machines (where DirectComposition is the efficient path) are unaffected; also
-// gated on a setting (default on) so it can be A/B'd on the box. See
-// docs/rdp-blank-terminal.md.
+// machines (where DirectComposition is the efficient path) are unaffected. See
+// docs/rdp-blank-terminal-postmortem.md.
 const directCompositionDisabled = ((): boolean => {
   try {
-    if (getSettings().disableDirectComposition && isRemoteSession()) {
+    if (isRemoteSession()) {
       app.commandLine.appendSwitch('disable-direct-composition');
       return true;
     }
   } catch {
     // Settings unreadable at startup; leave DirectComposition enabled.
-  }
-  return false;
-})();
-
-// Last-resort, OPT-IN ONLY (default off): force-disable GPU compositing entirely.
-// The research consensus is to AVOID --disable-gpu* (they can entrench the software
-// path and break Chromium's fallback), so this is never on by default; it exists so
-// an affected box can A/B it after the safer levers (occlusion, direct-composition,
-// nudge) fail. Gated on the setting alone. See docs/rdp-blank-terminal.md.
-const gpuCompositingDisabled = ((): boolean => {
-  try {
-    if (getSettings().disableGpuCompositing) {
-      app.commandLine.appendSwitch('disable-gpu-compositing');
-      app.commandLine.appendSwitch('disable-gpu');
-      return true;
-    }
-  } catch {
-    // Settings unreadable at startup; leave GPU compositing enabled.
   }
   return false;
 })();
@@ -156,74 +133,9 @@ function hostVerbose(): boolean {
 
 // isSoftwareCompositing is defined in ./render-detect (electron-free + tested).
 // softwareCompositing is resolved once the app is ready (getGPUFeatureStatus is
-// only meaningful then) and gates the terminal repaint nudge below.
+// only meaningful then) and gates the terminal renderer selection (canvas under
+// software compositing) exposed to the renderer via cs:get-render-info.
 let softwareCompositing = false;
-
-// terminalNudgeMode reads the configured nudge mode (default 'native'). The main
-// process performs the 'native' (OS-window) nudge; renderer-only modes
-// ('fontsize'/'cols') are handled in TermView. Guarded so settings-read failures
-// never break the data path.
-function terminalNudgeMode(): TerminalNudge {
-  try {
-    return getSettings().terminalNudge ?? 'native';
-  } catch {
-    return 'native';
-  }
-}
-
-// forceWindowNudge performs a frame-stable native-window "resize" — the mechanical
-// replica of the only confirmed fix for the RDP blank-terminal bug (an OS-window
-// resize). It grows the window by 1px, holds ~2 frames, then restores. 1px is
-// sub-cell, so it does not change cols/rows. Skipped when minimized/maximized/
-// fullscreen (setBounds is unreliable there). Unconditional — callers apply the
-// software-compositing/mode gate.
-//
-// windowNudgeActive is a single in-flight guard: overlapping nudges (e.g. an
-// agent + shell attaching concurrently, or rapid workspace switches) must NOT
-// re-capture the already-nudged height as their restore baseline, or the restore
-// would land 1px high and the drift would accumulate. A nudge requested while one
-// is in flight is simply dropped — the active nudge already does the repaint.
-let windowNudgeActive = false;
-function forceWindowNudge(): void {
-  const w = mainWindow;
-  if (!w || w.isDestroyed() || w.isMinimized() || w.isMaximized() || w.isFullScreen()) return;
-  if (windowNudgeActive) return;
-  windowNudgeActive = true;
-  try {
-    const bounds = w.getBounds();
-    w.setBounds({ ...bounds, height: bounds.height + 1 });
-    const t = setTimeout(() => {
-      try {
-        if (w && !w.isDestroyed()) w.setBounds(bounds);
-      } catch {
-        // Window may have been resized/closed in the meantime; ignore.
-      } finally {
-        windowNudgeActive = false;
-      }
-    }, 120);
-    t.unref?.();
-  } catch {
-    // getBounds/setBounds can throw during teardown; ignore.
-    windowNudgeActive = false;
-  }
-}
-
-// nudgeWindowRepaint is the gated native nudge: a no-op unless software
-// compositing is detected and the nudge mode is 'native'.
-function nudgeWindowRepaint(): void {
-  if (!softwareCompositing || terminalNudgeMode() !== 'native') return;
-  forceWindowNudge();
-}
-
-// nudgeTerminalRepaintBurst fires the native nudge on attach plus one retry, to
-// catch the initial snapshot whose async xterm render may land after the first
-// nudge. Bounded to ≤2 fires. No-op on GPU machines / non-native modes.
-function nudgeTerminalRepaintBurst(): void {
-  if (!softwareCompositing || terminalNudgeMode() !== 'native') return;
-  nudgeWindowRepaint();
-  const t = setTimeout(() => nudgeWindowRepaint(), 700);
-  t.unref?.();
-}
 
 // capturePixelProbe records a decision signal for the RDP blank-terminal bug: it
 // captures the composited surface and logs ONLY non-background pixel counts + a
@@ -237,7 +149,6 @@ function nudgeTerminalRepaintBurst(): void {
 // means it rasterized but never presented (H1). Gated behind the
 // terminalDiagnostics setting (capturePage has a cost) + one in-flight capture.
 const terminalRects = new Map<string, { x: number; y: number; width: number; height: number }>();
-let lastTerminalSession: string | undefined;
 let captureInFlight = false;
 async function capturePixelProbe(tag: string, session?: string): Promise<void> {
   try {
@@ -329,12 +240,39 @@ let authenticatedHello: Response | null = null;
 // shell terminal can stream concurrently. Bounded in practice to the selected
 // workspace's agent (+ its shell), which are swapped when the selection changes.
 const attachments = new Map<string, net.Socket>();
-// Shell sessions (sh_<workspaceId>) this app run created, for cleanup on archive
-// and quit so no orphan PowerShell is left in the daemon.
-const shellSessions = new Set<string>();
+// Per-workspace shell program (sh_<workspaceId> -> program string), so an explicit
+// shell switch can detect a changed program and respawn while a reattached,
+// daemon-persisted shell is left intact.
 const shellSessionPrograms = new Map<string, string>();
 let setupPromise: Promise<ControlClient> | null = null;
 let isQuitting = false;
+// Set once the quit teardown (host shutdown + cleanup) has run, so the second
+// `before-quit` pass — the one we re-issue after the async teardown — is allowed
+// through instead of looping.
+let quitTeardownDone = false;
+
+// Single-instance lock. Hangar drives a single per-user session-host; a second
+// app process must not spin up another window/daemon client. The primary instance
+// holds the lock; a second launch fails to acquire it, surfaces the already-running
+// window via the `second-instance` event, and quits. `whenReady` is also guarded so
+// a losing instance never creates a window.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    revealMainWindow();
+  });
+}
+
+// Reveal + focus the main window (restoring from minimized and un-hiding from the
+// tray). Used when a second launch is attempted against the running instance.
+function revealMainWindow(): void {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+}
 
 process.on('uncaughtException', (err) => log.error('uncaughtException', err));
 process.on('unhandledRejection', (reason) => log.error('unhandledRejection', reason));
@@ -452,10 +390,6 @@ async function attachSession(
 
   sendToRenderer('term:ready', { session: sessionName });
   log.info('attachSession ready', { session: sessionName, elapsedMs: Date.now() - start });
-  // Nudge the initial snapshot to present under software compositing (no-op on
-  // GPU machines / non-native nudge modes), and capture a decision-signal probe
-  // when diagnostics are enabled.
-  nudgeTerminalRepaintBurst();
   // Probe after a delay so the renderer has reported its terminal rect and paint
   // has had time to (not) land — the decision signal is "did the terminal region
   // rasterize, and if so did it present?".
@@ -466,7 +400,6 @@ async function attachSession(
 
 function detachSession(sessionName: string): void {
   terminalRects.delete(sessionName);
-  if (lastTerminalSession === sessionName) lastTerminalSession = undefined;
   const socket = attachments.get(sessionName);
   if (socket) {
     socket.destroy();
@@ -682,18 +615,17 @@ ipcMain.handle(
         elapsedMs: Date.now() - createStart,
       });
       if (!created.ok) throw new Error(created.error || 'failed to start shell');
-      shellSessionPrograms.set(session, program);
-      log.info('cs:ensure-shell ready', { session, program: programName, created: true, elapsedMs: Date.now() - start });
-    } else if (tracked === undefined) {
-      // Reattached to a pre-existing session; record its assumed program so a
-      // later explicit shell switch still triggers a respawn.
-      shellSessionPrograms.set(session, program);
-      log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
-    } else {
-      log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
-    }
-    shellSessions.add(session);
-    return session;
+        shellSessionPrograms.set(session, program);
+        log.info('cs:ensure-shell ready', { session, program: programName, created: true, elapsedMs: Date.now() - start });
+      } else if (tracked === undefined) {
+        // Reattached to a pre-existing session; record its assumed program so a
+        // later explicit shell switch still triggers a respawn.
+        shellSessionPrograms.set(session, program);
+        log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
+      } else {
+        log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
+      }
+      return session;
   },
 );
 
@@ -701,7 +633,6 @@ ipcMain.handle(
 ipcMain.handle('cs:close-shell', async (_event, workspaceId: string): Promise<void> => {
   const session = `sh_${workspaceId}`;
   detachSession(session);
-  shellSessions.delete(session);
   shellSessionPrograms.delete(session);
   try {
     const client = await getControlClient();
@@ -948,7 +879,6 @@ ipcMain.on(
     const height = Math.round(args.height ?? 0);
     if (width >= 1 && height >= 1) {
       terminalRects.set(s, { x, y, width, height });
-      lastTerminalSession = s;
     }
   },
 );
@@ -966,15 +896,11 @@ ipcMain.handle('cs:open-devtools', async (): Promise<void> => {
 // so TermView can gate its renderer-only nudge + diagnostics. softwareCompositing
 // is only known post-ready, so the renderer reads it lazily after the window opens.
 ipcMain.handle('cs:get-render-info', async () => {
-  let terminalNudge: TerminalNudge = 'native';
   let terminalDiagnostics = false;
-  let terminalRenderSelfTest = false;
   let terminalRenderer: 'auto' | 'dom' | 'canvas' = 'auto';
   try {
     const s = getSettings();
-    terminalNudge = s.terminalNudge ?? 'native';
     terminalDiagnostics = s.terminalDiagnostics ?? false;
-    terminalRenderSelfTest = s.terminalRenderSelfTest ?? false;
     terminalRenderer = s.terminalRenderer ?? 'auto';
   } catch {
     // Fall back to defaults if settings are unreadable.
@@ -984,24 +910,15 @@ ipcMain.handle('cs:get-render-info', async () => {
     windowOcclusionDisabled,
     hardwareAccelerationDisabled,
     remoteSession: isRemoteSession(),
-    terminalNudge,
     terminalDiagnostics,
-    terminalRenderSelfTest,
     terminalRenderer,
   };
 });
 
-// cs:force-repaint runs the manual "Force terminal repaint" command: the native
-// window nudge (unconditional — the user explicitly asked) plus a broadcast so the
-// renderer also runs its fontSize nudge. A user escape hatch + self-report aid on
-// the affected box.
-ipcMain.handle('cs:force-repaint', async (): Promise<void> => {
-  forceWindowNudge();
-  sendToRenderer('cs:terminal-nudge', {});
-  void capturePixelProbe('force-repaint', lastTerminalSession);
-});
-
 app.whenReady().then(() => {
+  // A losing single-instance process already called app.quit(); never build a
+  // window/tray/host client for it.
+  if (!isPrimaryInstance) return;
   // Windows taskbar + toast identity. Without an explicit AppUserModelId the OS
   // attributes the app (and its taskbar icon/notifications) to the generic
   // electron.exe rather than to Hangar. Dev runs (which execute under the stock
@@ -1021,12 +938,9 @@ app.whenReady().then(() => {
   try {
     const featureStatus = app.getGPUFeatureStatus() as unknown as Record<string, unknown>;
     softwareCompositing = isSoftwareCompositing(featureStatus, hardwareAccelerationDisabled);
-    let terminalNudge: TerminalNudge = 'native';
     let terminalDiagnostics = false;
     try {
-      const s = getSettings();
-      terminalNudge = s.terminalNudge ?? 'native';
-      terminalDiagnostics = s.terminalDiagnostics ?? false;
+      terminalDiagnostics = getSettings().terminalDiagnostics ?? false;
     } catch {
       // Defaults already set.
     }
@@ -1034,10 +948,8 @@ app.whenReady().then(() => {
       hardwareAccelerationDisabled,
       windowOcclusionDisabled,
       directCompositionDisabled,
-      gpuCompositingDisabled,
       softwareCompositing,
       remoteSession: isRemoteSession(),
-      terminalNudge,
       terminalDiagnostics,
       featureStatus,
     });
@@ -1056,25 +968,57 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', () => {
-  isQuitting = true;
-  globalShortcut.unregisterAll();
-  destroyTray();
-  // Best-effort: kill scratch shell sessions so no orphan PowerShell lingers.
+// shutdownHost stops the per-user session-host so `cs.exe` exits when the desktop
+// app really quits (not when merely minimized to the tray). It prefers the graceful
+// Shutdown RPC — which closes every session, stops runs, and exits the host without
+// orphaning agent child processes — and falls back to force-killing the host process
+// tree by PID so the daemon never lingers. Only the primary instance owns the host.
+async function shutdownHost(): Promise<void> {
+  if (!isPrimaryInstance) return;
+  const hostPid = authenticatedHello?.hostPid;
+  let stopped = false;
   if (control && !control.isClosed()) {
-    for (const session of shellSessions) {
-      control.call({ method: 'KillSession', session }).catch(() => {});
-    }
+    stopped = await requestHostShutdown(control);
   }
-  detachAll();
+  if (!stopped && typeof hostPid === 'number') {
+    killHostProcess(hostPid);
+  }
+}
+
+// finalizeQuit runs the one-time quit teardown asynchronously (the host Shutdown RPC
+// is awaited), then re-issues the quit. `before-quit` defers to this and is re-entrant
+// safe via quitTeardownDone.
+async function finalizeQuit(): Promise<void> {
+  try {
+    globalShortcut.unregisterAll();
+    destroyTray();
+    await shutdownHost();
+    detachAll();
+    if (control) {
+      control.close();
+      control = null;
+    }
+  } catch (error) {
+    log.error('finalizeQuit error', error);
+  } finally {
+    quitTeardownDone = true;
+    app.quit();
+  }
+}
+
+app.on('before-quit', (e) => {
+  isQuitting = true;
+  // Second pass (re-issued by finalizeQuit): let the real quit proceed.
+  if (quitTeardownDone) return;
+  // First pass: defer the quit so the host can be shut down gracefully (async),
+  // then quit for real once teardown completes.
+  e.preventDefault();
+  void finalizeQuit();
 });
 
 app.on('window-all-closed', () => {
-  // Detach only — workspaces live in the daemon and persist across UI restarts.
-  detachAll();
-  if (control) {
-    control.close();
-    control = null;
-  }
+  // Route through app.quit() → before-quit, which owns the full teardown (host
+  // shutdown + cleanup). Workspaces/branches persist on disk; the live host is
+  // stopped so `cs.exe` exits with the app.
   app.quit();
 });

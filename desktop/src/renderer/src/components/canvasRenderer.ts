@@ -10,7 +10,7 @@
 //
 // It is intentionally minimal (monospace text, fg/bg colors, bold/italic/dim/
 // underline/inverse, block cursor, selection highlight, scrollback). It does not do
-// ligatures, decorations/links, or blink. See docs/rdp-blank-terminal.md.
+// ligatures, decorations/links, or blink. See docs/rdp-blank-terminal-postmortem.md.
 
 import type { IDisposable, Terminal } from '@xterm/xterm';
 

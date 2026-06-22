@@ -177,6 +177,27 @@ bounded `rawRing` is only a supplementary fallback. The drain goroutine must **n
 subscriber** (per-subscriber bounded channel; drop on overflow) and **never hold a lock during pipe
 I/O**.
 
+### Gotcha: VT emulator reply-pipe deadlock (blank panes)
+
+The June 2026 RDP/no-GPU "blank agent pane" bug had two visually similar halves. The shell pane
+painted correctly, but agent panes (notably copilot) stayed blank on native Windows hosts, which made
+it look like an RDP or Chromium presentation failure.
+
+The host-side root cause was lower-level: `drain()` fed child output into `SafeEmulator.Write` while
+holding `subMu`, and `x/vt` answers terminal queries by writing replies to an **unbuffered** `io.Pipe`.
+Because the host never read that pipe, the first terminal query blocked inside `emu.Write`, leaving
+`subMu` held, stopping ConPTY draining, and eventually wedging capture/attach RPCs. copilot triggered
+this immediately with its mode-2026 DECRQM probe (`ESC[?2026$p`); ordinary shells did not query the
+terminal, so they never hit the deadlock.
+
+The fix is `pumpEmuReplies()`: a per-session goroutine that continuously drains emulator replies and
+writes them back to the ConPTY, as a real terminal would. Shutdown now closes the ConPTY, waits for
+`drainDone`, then closes the emulator so the reply pump exits cleanly without racing normal writes.
+
+The desktop still needs its separate presentation fix: under software compositing / no-GPU RDP hosts,
+it auto-selects the 2D canvas terminal renderer so already-rendered bytes can actually paint. See
+`docs/rdp-blank-terminal-postmortem.md` for the full write-up.
+
 **Attach hand-off via bubbletea `tea.Exec` (the subtle one).** *(commit `0f28d83`)* A plain blocking
 attach left bubbletea's own input reader consuming `CONIN$` (stolen keystrokes) and did no full
 repaint on detach (the TUI rendered on top of the agent's leftover screen). The fix routes the
@@ -274,6 +295,11 @@ go1.25.11`). Key pinned deps: `charmbracelet/x/xpty`, `.../x/conpty`, `.../x/vt`
 
 - **No cross-reboot persistence.** Sessions live only while the host process lives (same as tmux's
   server dying on reboot). After a reboot, `cs` recreates each missing session in its worktree.
+- **Desktop app quit stops the host.** Unlike the TUI (whose exit leaves the host running for
+  persistence), quitting the Hangar **desktop app** sends the host a `Shutdown` RPC — which closes
+  every session, stops runs, and exits the process — with a `taskkill /T /F` fallback, so `cs.exe`
+  exits with the app and live agent sessions end (like after a reboot). Workspaces/branches/`state.json`
+  persist on disk and are recreated on next launch. Minimizing to the tray keeps the host alive.
 - **Pause/Resume loses the agent conversation** on Windows (fresh start by design).
 - **Terminal tab disabled** on native Windows.
 - **AutoYes prompt strings are agent-version-specific.** The copilot match was captured from copilot

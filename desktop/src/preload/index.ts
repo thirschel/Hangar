@@ -8,7 +8,7 @@ import type {
   Response,
   WorkspaceInfo,
 } from '../main/host-client';
-import type { Settings, ShellProfile, TerminalNudge } from '../main/settings';
+import type { Settings, ShellProfile } from '../main/settings';
 
 export type AppInfo = {
   version: string;
@@ -49,16 +49,14 @@ export type TermError = {
 };
 
 // Resolved render/compositing state (RDP blank-terminal mitigations). The renderer
-// reads this lazily after the window opens to gate its renderer-only repaint nudge
-// and the diagnostics probe. See docs/rdp-blank-terminal.md.
+// reads this lazily after the window opens to select the terminal renderer and gate
+// its diagnostics probe. See docs/rdp-blank-terminal-postmortem.md.
 export type RenderInfo = {
   softwareCompositing: boolean;
   windowOcclusionDisabled: boolean;
   hardwareAccelerationDisabled: boolean;
   remoteSession: boolean;
-  terminalNudge: TerminalNudge;
   terminalDiagnostics: boolean;
-  terminalRenderSelfTest: boolean;
   terminalRenderer: 'auto' | 'dom' | 'canvas';
 };
 
@@ -259,18 +257,15 @@ const api = {
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
-  // RDP blank-terminal mitigations: resolved compositing/nudge state, the manual
-  // "Force terminal repaint" command, and a broadcast the main process fires so
-  // TermView runs its renderer-only nudge.
+  // RDP blank-terminal mitigations: resolved compositing state used to select the
+  // terminal renderer (canvas under software compositing) and gate diagnostics.
   getRenderInfo: (): Promise<RenderInfo> => ipcRenderer.invoke('cs:get-render-info'),
-  forceRepaint: (): Promise<void> => ipcRenderer.invoke('cs:force-repaint'),
   // Report a session's terminal pane rect (CSS px, viewport-relative) so the main
   // process can isolate the terminal region in its capturePage diagnostics probe.
   setTerminalRect: (
     session: string,
     rect: { x: number; y: number; width: number; height: number },
   ): void => ipcRenderer.send('cs:set-terminal-rect', { session, ...rect }),
-  onTerminalNudge: (callback: () => void): Unsubscribe => on('cs:terminal-nudge', callback),
   getLogPaths: (): Promise<LogPaths> => ipcRenderer.invoke('cs:get-log-paths'),
   openLogFolder: (): Promise<void> => ipcRenderer.invoke('cs:open-log-folder'),
   openLogFile: (which: LogWhich): Promise<void> => ipcRenderer.invoke('cs:open-log-file', { which }),
