@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,44 @@ func (d *DiffStats) IsEmpty() bool {
 	return d.Added == 0 && d.Removed == 0 && d.Content == ""
 }
 
+// stageUntrackedForDiff makes untracked files visible to a subsequent
+// `git diff <base>` (which otherwise omits them). For a managed worktree it runs
+// the cheap `git add -N .` against the worktree's own disposable index. For an
+// in-place session (noStage) it instead seeds a throwaway index from HEAD and
+// marks intent-to-add there, returning the GIT_INDEX_FILE env to use for the
+// diff command — so the user's real repo index is never modified or locked by
+// the background diff refresh. The returned cleanup must always be called.
+func (g *GitWorktree) stageUntrackedForDiff(ctx context.Context) (env []string, cleanup func(), err error) {
+	cleanup = func() {}
+	if !g.noStage {
+		if _, err := g.runGitCommandContext(ctx, g.worktreePath, "add", "-N", "."); err != nil {
+			return nil, cleanup, err
+		}
+		return nil, cleanup, nil
+	}
+
+	tmp, terr := os.CreateTemp("", "hangar-diff-index-*")
+	if terr != nil {
+		return nil, cleanup, terr
+	}
+	idx := tmp.Name()
+	_ = tmp.Close()
+	cleanup = func() { _ = os.Remove(idx) }
+	env = []string{"GIT_INDEX_FILE=" + idx}
+
+	// Seed the throwaway index with HEAD so tracked files are recognized, then
+	// mark untracked files intent-to-add in that index only.
+	if _, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "read-tree", "HEAD"); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	if _, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "add", "-N", "."); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return env, cleanup, nil
+}
+
 // Diff returns the git diff between the worktree and the base branch along with statistics
 func (g *GitWorktree) Diff() *DiffStats {
 	stats := &DiffStats{}
@@ -35,14 +74,15 @@ func (g *GitWorktree) Diff() *DiffStats {
 		return stats
 	}
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
+	ctx := context.Background()
+	env, cleanup, err := g.stageUntrackedForDiff(ctx)
 	if err != nil {
 		stats.Error = err
 		return stats
 	}
+	defer cleanup()
 
-	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", sha)
+	content, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "--no-pager", "diff", sha)
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -72,14 +112,15 @@ func (g *GitWorktree) DiffNumstat() *DiffStats {
 		return stats
 	}
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
+	ctx := context.Background()
+	env, cleanup, err := g.stageUntrackedForDiff(ctx)
 	if err != nil {
 		stats.Error = err
 		return stats
 	}
+	defer cleanup()
 
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", sha)
+	out, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "--no-pager", "diff", "--numstat", sha)
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -107,13 +148,14 @@ func (g *GitWorktree) DiffNumstatTimeout(timeout time.Duration) *DiffStats {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// -N stages untracked files (intent to add), including them in the diff.
-	if _, err := g.runGitCommandContext(ctx, g.worktreePath, "add", "-N", "."); err != nil {
+	env, cleanup, err := g.stageUntrackedForDiff(ctx)
+	if err != nil {
 		stats.Error = err
 		return stats
 	}
+	defer cleanup()
 
-	out, err := g.runGitCommandContext(ctx, g.worktreePath, "--no-pager", "diff", "--numstat", sha)
+	out, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "--no-pager", "diff", "--numstat", sha)
 	if err != nil {
 		stats.Error = err
 		return stats
@@ -136,11 +178,13 @@ func (g *GitWorktree) ChangedFiles() ([]FileDiffStat, error) {
 	if err := ValidateSHA(sha); err != nil {
 		return nil, fmt.Errorf("invalid base commit SHA: %w", err)
 	}
-	// -N stages untracked files (intent to add) so they show up in the diff.
-	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
+	ctx := context.Background()
+	env, cleanup, err := g.stageUntrackedForDiff(ctx)
+	if err != nil {
 		return nil, err
 	}
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", sha)
+	defer cleanup()
+	out, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "--no-pager", "diff", "--numstat", sha)
 	if err != nil {
 		return nil, err
 	}
@@ -166,10 +210,13 @@ func (g *GitWorktree) FileDiff(path string) (string, error) {
 	if err := ValidateSHA(sha); err != nil {
 		return "", fmt.Errorf("invalid base commit SHA: %w", err)
 	}
-	if _, err := g.runGitCommand(g.worktreePath, "add", "-N", "."); err != nil {
+	ctx := context.Background()
+	env, cleanup, err := g.stageUntrackedForDiff(ctx)
+	if err != nil {
 		return "", err
 	}
-	return g.runGitCommand(g.worktreePath, "--no-pager", "diff", sha, "--", path)
+	defer cleanup()
+	return g.runGitCommandEnvContext(ctx, env, g.worktreePath, "--no-pager", "diff", sha, "--", path)
 }
 
 // Each line is formatted as <added>\t<removed>\t<path>. Binary files report

@@ -16,6 +16,7 @@ import (
 
 	cslog "hangar/log"
 	"hangar/session/agentcmd"
+	"hangar/session/winhost/proto"
 )
 
 // TestMain initializes the global logger so tests that drive config/git (e.g.
@@ -622,5 +623,127 @@ func TestToInfoMapsLastOutput(t *testing.T) {
 	// No live session for this workspace -> 0 (unknown).
 	if got := m.toInfo(&workspace{ID: "ws2", SessionName: "missing"}).LastOutputUnix; got != 0 {
 		t.Fatalf("LastOutputUnix (no session) = %d, want 0", got)
+	}
+}
+
+// TestInPlaceGitInfo verifies the in-place folder probe: a git repo yields its
+// toplevel, current branch, and HEAD SHA; a plain folder yields all-empty so the
+// caller opens the session with git features disabled.
+func TestInPlaceGitInfo(t *testing.T) {
+	repo := initTempRepo(t)
+	repoPath, branch, baseSHA := inPlaceGitInfo(repo)
+	if repoPath == "" {
+		t.Fatalf("expected a repoPath for a git repo, got empty")
+	}
+	if branch != "main" {
+		t.Fatalf("branch = %q, want main", branch)
+	}
+	if len(baseSHA) != 40 {
+		t.Fatalf("baseSHA = %q, want a 40-char sha", baseSHA)
+	}
+
+	plain := t.TempDir()
+	if rp, br, sha := inPlaceGitInfo(plain); rp != "" || br != "" || sha != "" {
+		t.Fatalf("non-git folder should yield empty git info, got (%q,%q,%q)", rp, br, sha)
+	}
+}
+
+// TestToInfoHasWorktree verifies the sidebar signal: worktree-backed workspaces
+// report HasWorktree=true and in-place ones report false.
+func TestToInfoHasWorktree(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	h := newHost(io.Discard, time.Minute)
+	m := h.workspaces
+
+	if !m.toInfo(&workspace{ID: "w1", SessionName: "s1"}).HasWorktree {
+		t.Fatalf("worktree-backed workspace should report HasWorktree=true")
+	}
+	if m.toInfo(&workspace{ID: "w2", SessionName: "s2", NoWorktree: true}).HasWorktree {
+		t.Fatalf("in-place workspace should report HasWorktree=false")
+	}
+}
+
+// TestLoadKeepsInPlaceSkipsUncontained guards the load() fix: an in-place
+// workspace whose path is (correctly) outside the managed worktrees dir must
+// survive a host restart, while a worktree-backed workspace with an uncontained
+// path is still rejected as unsafe (F-09).
+func TestLoadKeepsInPlaceSkipsUncontained(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	outside := t.TempDir() // not under the managed worktrees dir
+
+	// saveLocked silently no-ops if the config dir is missing, so create it.
+	p, err := workspacesPath()
+	if err != nil {
+		t.Fatalf("workspacesPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h1 := newHost(io.Discard, time.Minute)
+	m1 := h1.workspaces
+	m1.mu.Lock()
+	m1.wss = map[string]*workspace{
+		"inplace": {ID: "inplace", SessionName: "ws_inplace", NoWorktree: true, WorktreePath: outside},
+		"bad":     {ID: "bad", SessionName: "ws_bad", WorktreePath: outside}, // worktree-backed + uncontained
+	}
+	m1.saveLocked()
+	m1.mu.Unlock()
+
+	// A fresh manager loads from the same workspaces.json.
+	h2 := newHost(io.Discard, time.Minute)
+	m2 := h2.workspaces
+	m2.mu.Lock()
+	_, hasInplace := m2.wss["inplace"]
+	_, hasBad := m2.wss["bad"]
+	n := len(m2.wss)
+	m2.mu.Unlock()
+
+	if !hasInplace {
+		t.Fatalf("in-place workspace with uncontained path should be kept on load")
+	}
+	if hasBad {
+		t.Fatalf("worktree-backed workspace with uncontained path should be skipped on load")
+	}
+	if n != 1 {
+		t.Fatalf("expected exactly 1 workspace loaded, got %d", n)
+	}
+}
+
+// TestArchiveInPlaceLeavesFolder guards the archive safety rule: archiving an
+// in-place session must never delete the user's folder or branch, even when the
+// request sets DeleteWorktree.
+func TestArchiveInPlaceLeavesFolder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	repo := initTempRepo(t) // a real folder we must NOT delete
+	marker := filepath.Join(repo, "README.md")
+
+	h := newHost(io.Discard, time.Minute)
+	m := h.workspaces
+	m.mu.Lock()
+	m.wss["ip"] = &workspace{ID: "ip", SessionName: "ws_ip", NoWorktree: true, WorktreePath: repo, RepoPath: repo, Branch: "main"}
+	m.mu.Unlock()
+
+	resp := m.archive(&proto.Request{ID: 1, WorkspaceID: "ip", DeleteWorktree: true})
+	if resp == nil || !resp.OK {
+		t.Fatalf("archive failed: %+v", resp)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("in-place folder must be left intact after archive, stat err=%v", err)
+	}
+	m.mu.Lock()
+	_, still := m.wss["ip"]
+	m.mu.Unlock()
+	if still {
+		t.Fatalf("workspace should be removed from the registry after archive")
 	}
 }

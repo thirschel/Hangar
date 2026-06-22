@@ -72,6 +72,8 @@ export type CreateWorkspaceArgs = {
   baseBranch?: string;
   autoYes?: boolean;
   shell?: string;
+  // When true, open the session in-place against repoPath without a git worktree.
+  noWorktree?: boolean;
 };
 
 export type RunOutput = {
@@ -114,6 +116,7 @@ const api = {
       baseBranch: args.baseBranch,
       autoYes: args.autoYes,
       shell: args.shell,
+      noWorktree: args.noWorktree,
     });
     if (!r.ok || !r.workspace) throw new Error(r.error || 'CreateWorkspace failed');
     return r.workspace;

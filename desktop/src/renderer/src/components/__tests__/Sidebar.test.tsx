@@ -29,6 +29,7 @@ function workspace(overrides: Partial<WorkspaceInfo>): WorkspaceInfo {
     waiting: false,
     regenerating: false,
     shell: 'cmd',
+    hasWorktree: true,
     ...overrides,
   };
 }
@@ -130,5 +131,18 @@ describe('Sidebar grid multi-select', () => {
 
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+  });
+});
+
+describe('Sidebar worktree icon', () => {
+  it('shows the worktree icon only for worktree-backed sessions', () => {
+    const workspaces = [
+      workspace({ id: 'a', title: 'Alpha', hasWorktree: true }),
+      workspace({ id: 'b', title: 'Bravo', hasWorktree: false }),
+    ];
+
+    render(<Sidebar {...baseProps({ workspaces })} />);
+
+    expect(screen.getAllByLabelText('Isolated git worktree')).toHaveLength(1);
   });
 });

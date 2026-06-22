@@ -20,6 +20,7 @@ export function CreateWorkspaceModal({
   const [defaultProgram, setDefaultProgram] = useState('copilot');
   const [shell, setShell] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
+  const [worktree, setWorktree] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modalRef = useRef<ModalHandle>(null);
@@ -60,8 +61,9 @@ export function CreateWorkspaceModal({
         repoPath: repoPath.trim(),
         title: title.trim() || undefined,
         program: program.trim() || undefined,
-        baseBranch: baseBranch.trim() || undefined,
+        baseBranch: worktree ? baseBranch.trim() || undefined : undefined,
         shell: shell || undefined,
+        noWorktree: worktree ? undefined : true,
       });
       modalRef.current?.close();
     } catch (e) {
@@ -136,14 +138,25 @@ export function CreateWorkspaceModal({
             <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
           </select>
         </label>
-        <label>
-          Base branch <span className="hint">(optional)</span>
+        <label className="create-form__check">
           <input
-            value={baseBranch}
-            onChange={(e) => setBaseBranch(e.target.value)}
-            placeholder="main"
+            type="checkbox"
+            checked={worktree}
+            onChange={(e) => setWorktree(e.target.checked)}
           />
+          Create an isolated git worktree{' '}
+          <span className="hint">(off: open the agent directly in the selected folder)</span>
         </label>
+        {worktree && (
+          <label>
+            Base branch <span className="hint">(optional)</span>
+            <input
+              value={baseBranch}
+              onChange={(e) => setBaseBranch(e.target.value)}
+              placeholder="main"
+            />
+          </label>
+        )}
       </div>
     </Modal>
   );

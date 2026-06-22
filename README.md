@@ -32,6 +32,14 @@ Claude Code, Codex, Gemini, GitHub Copilot CLI, and Aider side by side from one 
 
 Every session on its own branch/worktree; tasks never collide.
 
+### In-place sessions (no worktree)
+
+Prefer to work directly in a folder? Uncheck **Create an isolated git worktree** in the New
+workspace dialog to open the agent straight in the selected folder — no worktree, no new branch.
+It edits your real files on your current branch, and Diff/Commit/Push operate on that folder when
+it's a git repo (any non-git folder still opens, just without those git features). Worktree-backed
+sessions are marked with a ⎇ icon in the sidebar so the two kinds are easy to tell apart.
+
 ### Review before you ship
 
 Inspect each session's diff, then commit & push or checkout & pause.

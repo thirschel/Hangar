@@ -30,6 +30,7 @@ function workspace(overrides: Partial<WorkspaceInfo>): WorkspaceInfo {
     waiting: false,
     regenerating: false,
     shell: 'cmd',
+    hasWorktree: true,
     ...overrides,
   };
 }

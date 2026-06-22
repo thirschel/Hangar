@@ -41,7 +41,16 @@ type GitWorktree struct {
 	// isExistingBranch is true if the branch existed before the session was created.
 	// When true, the branch will not be deleted on cleanup.
 	isExistingBranch bool
+	// noStage is true for in-place (no-worktree) sessions. When set, the diff
+	// helpers must never run `git add -N` against the repo's real index (which a
+	// background refresh would otherwise mutate/lock every tick); they use a
+	// throwaway index instead.
+	noStage bool
 }
+
+// SetNoStage marks this worktree as in-place so diff computations avoid mutating
+// the repo's real index. See the noStage field.
+func (g *GitWorktree) SetNoStage(v bool) { g.noStage = v }
 
 func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName string, branchName string, baseCommitSHA string, isExistingBranch bool) *GitWorktree {
 	return &GitWorktree{
