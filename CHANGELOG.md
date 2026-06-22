@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.9.2](https://github.com/thirschel/Hangar/compare/v1.9.1...v1.9.2) (2026-06-22)
+
+### Bug Fixes
+
+* **desktop:** don't dismiss modals when clicking outside ([#90](https://github.com/thirschel/Hangar/issues/90)) ([41a0a52](https://github.com/thirschel/Hangar/commit/41a0a52db5ac446476716d2dd556b61f9d2c2027)), closes [#79](https://github.com/thirschel/Hangar/issues/79) [#78](https://github.com/thirschel/Hangar/issues/78) [#88](https://github.com/thirschel/Hangar/issues/88)
+
 ## [1.9.1](https://github.com/thirschel/Hangar/compare/v1.9.0...v1.9.1) (2026-06-22)
 
 ### Bug Fixes
