@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.9.0](https://github.com/thirschel/Hangar/compare/v1.8.0...v1.9.0) (2026-06-22)
+
+### Features
+
+* **desktop:** per-row dropdown + resizable grid rows ([5d689cb](https://github.com/thirschel/Hangar/commit/5d689cbc9146e175aab6c90150e844739a5adc4a))
+
 ## [1.8.0](https://github.com/thirschel/Hangar/compare/v1.7.3...v1.8.0) (2026-06-22)
 
 ### Features
