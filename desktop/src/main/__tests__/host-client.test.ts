@@ -1,8 +1,14 @@
 import { EventEmitter } from 'node:events';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import type net from 'node:net';
-import { describe, expect, it, vi } from 'vitest';
-import { frame, FrameDecoder, ControlClient } from '../host-client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { frame, FrameDecoder, ControlClient, requestHostShutdown, killHostProcess } from '../host-client';
+
+vi.mock('node:child_process', () => ({
+  execFileSync: vi.fn(),
+  spawn: vi.fn(),
+}));
 
 class MockSocket extends EventEmitter {
   public readonly writes: Buffer[] = [];
@@ -255,5 +261,85 @@ describe('ControlClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('requestHostShutdown', () => {
+  it('sends a Shutdown RPC and returns true when the host acknowledges', async () => {
+    const call = vi.fn().mockResolvedValue({ id: 1, ok: true });
+    const client = { call, isClosed: () => false };
+
+    await expect(requestHostShutdown(client)).resolves.toBe(true);
+    expect(call).toHaveBeenCalledWith({ method: 'Shutdown' });
+  });
+
+  it('returns false without sending anything when the client is already closed', async () => {
+    const call = vi.fn();
+    const client = { call, isClosed: () => true };
+
+    await expect(requestHostShutdown(client)).resolves.toBe(false);
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it('returns false when the host replies not-ok', async () => {
+    const call = vi.fn().mockResolvedValue({ id: 1, ok: false, error: 'boom' });
+    const client = { call, isClosed: () => false };
+
+    await expect(requestHostShutdown(client)).resolves.toBe(false);
+  });
+
+  it('returns false when the Shutdown RPC rejects (e.g. pipe closed)', async () => {
+    const call = vi.fn().mockRejectedValue(new Error('control pipe closed'));
+    const client = { call, isClosed: () => false };
+
+    await expect(requestHostShutdown(client)).resolves.toBe(false);
+  });
+
+  it('returns false when the host does not respond before the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      // A call that never settles: only the timeout can resolve the race.
+      const call = vi.fn().mockReturnValue(new Promise<never>(() => {}));
+      const client = { call, isClosed: () => false };
+
+      const pending = requestHostShutdown(client, 50);
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('killHostProcess', () => {
+  beforeEach(() => {
+    vi.mocked(execFileSync).mockReset();
+  });
+
+  it('force-kills the host process tree via taskkill for a valid pid', () => {
+    vi.mocked(execFileSync).mockReturnValue(Buffer.from(''));
+
+    expect(killHostProcess(4242)).toBe(true);
+    expect(execFileSync).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '4242', '/T', '/F'],
+      expect.objectContaining({ windowsHide: true }),
+    );
+  });
+
+  it('returns false and never spawns taskkill for an invalid pid', () => {
+    expect(killHostProcess(0)).toBe(false);
+    expect(killHostProcess(-1)).toBe(false);
+    expect(killHostProcess(Number.NaN)).toBe(false);
+    expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it('returns false when taskkill throws (process already gone)', () => {
+    vi.mocked(execFileSync).mockImplementation(() => {
+      throw new Error('process not found');
+    });
+
+    expect(killHostProcess(4242)).toBe(false);
   });
 });

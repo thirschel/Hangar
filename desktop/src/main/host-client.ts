@@ -614,6 +614,59 @@ export async function ensureHost(csExe: string, opts?: { verbose?: boolean }): P
   throw new Error('session-host did not publish a valid host.json');
 }
 
+// requestHostShutdown asks the running session-host to stop via the authenticated
+// control client. The host closes every live session (so no agent child processes
+// are orphaned), stops all runs, and exits its own process after replying — the
+// same teardown `cs reset` uses. Bounded by a short timeout so a wedged host can
+// never block the desktop app from quitting. Returns true if the host acknowledged.
+export async function requestHostShutdown(
+  client: Pick<ControlClient, 'call' | 'isClosed'>,
+  timeoutMs = 4000,
+): Promise<boolean> {
+  if (client.isClosed()) {
+    return false;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Shutdown RPC timed out after ${timeoutMs}ms`)), timeoutMs);
+    // Don't keep the event loop alive solely for this timer while quitting.
+    timer.unref?.();
+  });
+  try {
+    const resp = await Promise.race([client.call({ method: 'Shutdown' }), timeout]);
+    return resp.ok === true;
+  } catch (error) {
+    log.error('requestHostShutdown failed', error instanceof Error ? error.message : String(error));
+    return false;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+// killHostProcess force-terminates the session-host process tree (the daemon plus
+// any ConPTY child consoles) by PID. Used only as a fallback when the graceful
+// Shutdown RPC is unavailable or fails, so `cs.exe` never lingers after the desktop
+// app quits. Windows-only: `taskkill /T` kills the whole tree, `/F` forces it.
+// Returns true if taskkill exited 0 (taskkill exits non-zero when the process is
+// already gone, which is harmless for a best-effort fallback).
+export function killHostProcess(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch (error) {
+    log.error('killHostProcess failed', { pid, error: error instanceof Error ? error.message : String(error) });
+    return false;
+  }
+}
+
 export async function connectAttachStream(
   attachPipe: string,
   attachToken: string,

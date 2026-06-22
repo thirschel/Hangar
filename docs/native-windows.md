@@ -274,6 +274,11 @@ go1.25.11`). Key pinned deps: `charmbracelet/x/xpty`, `.../x/conpty`, `.../x/vt`
 
 - **No cross-reboot persistence.** Sessions live only while the host process lives (same as tmux's
   server dying on reboot). After a reboot, `cs` recreates each missing session in its worktree.
+- **Desktop app quit stops the host.** Unlike the TUI (whose exit leaves the host running for
+  persistence), quitting the Hangar **desktop app** sends the host a `Shutdown` RPC — which closes
+  every session, stops runs, and exits the process — with a `taskkill /T /F` fallback, so `cs.exe`
+  exits with the app and live agent sessions end (like after a reboot). Workspaces/branches/`state.json`
+  persist on disk and are recreated on next launch. Minimizing to the tray keeps the host alive.
 - **Pause/Resume loses the agent conversation** on Windows (fresh start by design).
 - **Terminal tab disabled** on native Windows.
 - **AutoYes prompt strings are agent-version-specific.** The copilot match was captured from copilot

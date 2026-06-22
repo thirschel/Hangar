@@ -12,7 +12,9 @@ import {
   connectAttachStream,
   connectPipe,
   ensureHost,
+  killHostProcess,
   randomClientNonce,
+  requestHostShutdown,
   verifyAuthenticatedHello,
   type DirEntry,
   type FileContents,
@@ -329,12 +331,39 @@ let authenticatedHello: Response | null = null;
 // shell terminal can stream concurrently. Bounded in practice to the selected
 // workspace's agent (+ its shell), which are swapped when the selection changes.
 const attachments = new Map<string, net.Socket>();
-// Shell sessions (sh_<workspaceId>) this app run created, for cleanup on archive
-// and quit so no orphan PowerShell is left in the daemon.
-const shellSessions = new Set<string>();
+// Per-workspace shell program (sh_<workspaceId> -> program string), so an explicit
+// shell switch can detect a changed program and respawn while a reattached,
+// daemon-persisted shell is left intact.
 const shellSessionPrograms = new Map<string, string>();
 let setupPromise: Promise<ControlClient> | null = null;
 let isQuitting = false;
+// Set once the quit teardown (host shutdown + cleanup) has run, so the second
+// `before-quit` pass — the one we re-issue after the async teardown — is allowed
+// through instead of looping.
+let quitTeardownDone = false;
+
+// Single-instance lock. Hangar drives a single per-user session-host; a second
+// app process must not spin up another window/daemon client. The primary instance
+// holds the lock; a second launch fails to acquire it, surfaces the already-running
+// window via the `second-instance` event, and quits. `whenReady` is also guarded so
+// a losing instance never creates a window.
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    revealMainWindow();
+  });
+}
+
+// Reveal + focus the main window (restoring from minimized and un-hiding from the
+// tray). Used when a second launch is attempted against the running instance.
+function revealMainWindow(): void {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+}
 
 process.on('uncaughtException', (err) => log.error('uncaughtException', err));
 process.on('unhandledRejection', (reason) => log.error('unhandledRejection', reason));
@@ -682,18 +711,17 @@ ipcMain.handle(
         elapsedMs: Date.now() - createStart,
       });
       if (!created.ok) throw new Error(created.error || 'failed to start shell');
-      shellSessionPrograms.set(session, program);
-      log.info('cs:ensure-shell ready', { session, program: programName, created: true, elapsedMs: Date.now() - start });
-    } else if (tracked === undefined) {
-      // Reattached to a pre-existing session; record its assumed program so a
-      // later explicit shell switch still triggers a respawn.
-      shellSessionPrograms.set(session, program);
-      log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
-    } else {
-      log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
-    }
-    shellSessions.add(session);
-    return session;
+        shellSessionPrograms.set(session, program);
+        log.info('cs:ensure-shell ready', { session, program: programName, created: true, elapsedMs: Date.now() - start });
+      } else if (tracked === undefined) {
+        // Reattached to a pre-existing session; record its assumed program so a
+        // later explicit shell switch still triggers a respawn.
+        shellSessionPrograms.set(session, program);
+        log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
+      } else {
+        log.info('cs:ensure-shell ready', { session, program: programName, created: false, elapsedMs: Date.now() - start });
+      }
+      return session;
   },
 );
 
@@ -701,7 +729,6 @@ ipcMain.handle(
 ipcMain.handle('cs:close-shell', async (_event, workspaceId: string): Promise<void> => {
   const session = `sh_${workspaceId}`;
   detachSession(session);
-  shellSessions.delete(session);
   shellSessionPrograms.delete(session);
   try {
     const client = await getControlClient();
@@ -1002,6 +1029,9 @@ ipcMain.handle('cs:force-repaint', async (): Promise<void> => {
 });
 
 app.whenReady().then(() => {
+  // A losing single-instance process already called app.quit(); never build a
+  // window/tray/host client for it.
+  if (!isPrimaryInstance) return;
   // Windows taskbar + toast identity. Without an explicit AppUserModelId the OS
   // attributes the app (and its taskbar icon/notifications) to the generic
   // electron.exe rather than to Hangar. Dev runs (which execute under the stock
@@ -1056,25 +1086,57 @@ app.whenReady().then(() => {
   });
 });
 
-app.on('before-quit', () => {
-  isQuitting = true;
-  globalShortcut.unregisterAll();
-  destroyTray();
-  // Best-effort: kill scratch shell sessions so no orphan PowerShell lingers.
+// shutdownHost stops the per-user session-host so `cs.exe` exits when the desktop
+// app really quits (not when merely minimized to the tray). It prefers the graceful
+// Shutdown RPC — which closes every session, stops runs, and exits the host without
+// orphaning agent child processes — and falls back to force-killing the host process
+// tree by PID so the daemon never lingers. Only the primary instance owns the host.
+async function shutdownHost(): Promise<void> {
+  if (!isPrimaryInstance) return;
+  const hostPid = authenticatedHello?.hostPid;
+  let stopped = false;
   if (control && !control.isClosed()) {
-    for (const session of shellSessions) {
-      control.call({ method: 'KillSession', session }).catch(() => {});
-    }
+    stopped = await requestHostShutdown(control);
   }
-  detachAll();
+  if (!stopped && typeof hostPid === 'number') {
+    killHostProcess(hostPid);
+  }
+}
+
+// finalizeQuit runs the one-time quit teardown asynchronously (the host Shutdown RPC
+// is awaited), then re-issues the quit. `before-quit` defers to this and is re-entrant
+// safe via quitTeardownDone.
+async function finalizeQuit(): Promise<void> {
+  try {
+    globalShortcut.unregisterAll();
+    destroyTray();
+    await shutdownHost();
+    detachAll();
+    if (control) {
+      control.close();
+      control = null;
+    }
+  } catch (error) {
+    log.error('finalizeQuit error', error);
+  } finally {
+    quitTeardownDone = true;
+    app.quit();
+  }
+}
+
+app.on('before-quit', (e) => {
+  isQuitting = true;
+  // Second pass (re-issued by finalizeQuit): let the real quit proceed.
+  if (quitTeardownDone) return;
+  // First pass: defer the quit so the host can be shut down gracefully (async),
+  // then quit for real once teardown completes.
+  e.preventDefault();
+  void finalizeQuit();
 });
 
 app.on('window-all-closed', () => {
-  // Detach only — workspaces live in the daemon and persist across UI restarts.
-  detachAll();
-  if (control) {
-    control.close();
-    control = null;
-  }
+  // Route through app.quit() → before-quit, which owns the full teardown (host
+  // shutdown + cleanup). Workspaces/branches persist on disk; the live host is
+  // stopped so `cs.exe` exits with the app.
   app.quit();
 });
