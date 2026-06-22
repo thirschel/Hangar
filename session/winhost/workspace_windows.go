@@ -1341,15 +1341,10 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 
 	// Give resumable agents (copilot, or a detected copilot wrapper such as `cpa`)
 	// a stable session UUID so a relaunch after a daemon restart continues the same
-	// conversation instead of starting fresh. Skipped when resume is disabled, which
-	// launches the agent plain (no --session-id) — a workaround for environments
-	// where copilot's new-session handshake hangs and it never draws its UI.
+	// conversation instead of starting fresh.
 	agentSessionID := ""
-	if copilotResume && !cfg.DisableAgentResume {
+	if copilotResume {
 		agentSessionID = newUUID()
-	}
-	if copilotResume && cfg.DisableAgentResume {
-		m.host.logger.Printf("workspace create: agent resume disabled; launching %q without --session-id seed", progName)
 	}
 
 	var (

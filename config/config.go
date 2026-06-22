@@ -55,12 +55,6 @@ type Config struct {
 	// Default false (motion enabled). Motion also auto-disables when the terminal
 	// is too small or there are too many visible workspaces.
 	DisableSidebarMotion bool `json:"disable_sidebar_motion,omitempty"`
-	// DisableAgentResume turns off seeding a stable session id for resumable agents
-	// (copilot). Default false (resume enabled): a new workspace launches
-	// `copilot --session-id=<uuid>` so the conversation survives a restart. When
-	// true, the agent launches plain (no --session-id / --resume) — a workaround for
-	// environments where the new-session handshake hangs and the agent never draws.
-	DisableAgentResume bool `json:"disable_agent_resume,omitempty"`
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and

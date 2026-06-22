@@ -2,7 +2,7 @@
 
 > **Status:** Fixed · **Platform:** Windows (native session host) · **Severity:** High (agent unusable)
 > **Root cause confirmed on-box, 2026-06-20.** This document supersedes the earlier "launch
-> environment" hypothesis recorded in `docs/rdp-blank-terminal-handoff.md` (that hypothesis was
+> environment" hypothesis from the exploratory investigation notes (that hypothesis was
 > **disproven**; see §"Why it escaped").
 
 ## Summary
@@ -99,8 +99,8 @@ pane rendered and the agent pane did not.
 
 - **Wrong-layer symptom.** The visible failure (blank pane on a GPU-less RDP box) pointed straight at the
   renderer, where a genuine, separate RDP problem had recently been fixed (the 2D-canvas terminal
-  renderer). The two issues were conflated; the agent hang was attributed to the **launch environment**
-  (see `rdp-blank-terminal-handoff.md`). That hypothesis was wrong.
+  renderer). The two issues were conflated; the agent hang was attributed to the **launch environment**.
+  That hypothesis was wrong.
 - **The shell pane worked.** A working shell next to a broken agent reads as "agent launch / environment
   problem," not "host render-path problem." In reality the discriminator was simply *which control
   sequences the program emits.*
@@ -241,7 +241,7 @@ A systematic elimination, because the symptom pointed at the wrong layer.
 | `pumpEmuReplies()` drains the emulator reply pipe (the fix) | Code | ✅ |
 | `conpty_emu_reply_windows_test.go` — fails if the reply pipe isn't drained | Test | ✅ |
 | **Codebase rule:** any code that writes to a vt emulator (`emu.Write`) must also drain its `Read`/reply pipe — the emulator can block on query replies | Docs/Memory | ✅ |
-| Update `docs/rdp-blank-terminal*.md` to point at this root cause (they describe the earlier, incorrect "launch environment" hypothesis) | Docs | ✅ |
+| Fold the concise root cause into `docs/native-windows.md` and retire the exploratory RDP blank-terminal notes | Docs | ✅ |
 | Add an end-to-end winhost test that launches a real query-emitting program through a `conptySession` and asserts the screen renders | Test | ☐ |
 | When bumping `charmbracelet/x/vt`, re-verify the reply-pipe contract (a buffered change could mask, or a stricter change could re-expose, this class of hang) | Process | ☐ |
 

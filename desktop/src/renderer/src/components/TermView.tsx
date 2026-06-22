@@ -115,69 +115,14 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     let mismatchCount = 0;
     let mismatchLastLog = 0;
 
-    // RDP/software-compositing repaint-nudge state. renderInfo gates the
-    // renderer-only nudge; isNudging blocks the ResizeObserver from recursing
-    // while we briefly change fontSize/cols; nudgeCount bounds automatic fires.
+    // renderInfo gates the canvas-renderer selection and the diagnostics probe.
     let renderInfo: Awaited<ReturnType<typeof window.cs.getRenderInfo>> | null = null;
-    let isNudging = false;
-    let nudgeCount = 0;
-    // Canvas-viability self-test: when enabled, an animated 2D <canvas> is overlaid
-    // on the pane to decide whether a SINGLE canvas surface presents on this machine
-    // (if it animates while xterm is blank, a single-surface renderer / host-side
-    // canvas is the fix; if it's also blank, the failure is below the renderer).
-    let selfTestRaf = 0;
     let canvasRenderer: CanvasTermRenderer | null = null;
-    let selfTestEl: HTMLDivElement | null = null;
-    const startRenderSelfTest = (): void => {
-      const container = containerRef.current;
-      if (disposed || !container || selfTestEl) return;
-      const host = document.createElement('div');
-      host.style.cssText =
-        'position:absolute;top:8px;left:8px;z-index:9999;background:#000;border:1px solid #888;' +
-        'padding:6px;font:12px monospace;color:#d4d4d4;pointer-events:none;';
-      const label = document.createElement('div');
-      label.textContent = 'render self-test — starting…';
-      const canvas = document.createElement('canvas');
-      canvas.width = 320;
-      canvas.height = 80;
-      canvas.style.cssText = 'display:block;margin-top:6px;width:320px;height:80px;';
-      host.appendChild(label);
-      host.appendChild(canvas);
-      if (!container.style.position) container.style.position = 'relative';
-      container.appendChild(host);
-      selfTestEl = host;
-      const ctx = canvas.getContext('2d');
-      let frames = 0;
-      let framesAtLastLog = 0;
-      let lastLog = performance.now();
-      diag('RenderSelfTest start', { session });
-      const loop = (now: number): void => {
-        frames += 1;
-        if (ctx) {
-          ctx.fillStyle = `hsl(${(frames * 3) % 360},70%,40%)`;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.fillStyle = '#ffffff';
-          ctx.font = '18px monospace';
-          ctx.fillText(`canvas frame ${frames}`, 10, 30);
-          const x = (frames * 4) % Math.max(1, canvas.width - 44);
-          ctx.fillRect(x, canvas.height - 18, 40, 12);
-        }
-        if (now - lastLog >= 1000) {
-          label.textContent = `render self-test • frame ${frames}`;
-          diag('RenderSelfTest raf', { session, framesPerSec: frames - framesAtLastLog });
-          framesAtLastLog = frames;
-          lastLog = now;
-        }
-        selfTestRaf = requestAnimationFrame(loop);
-      };
-      selfTestRaf = requestAnimationFrame(loop);
-    };
     void window.cs
       .getRenderInfo()
       .then((info) => {
         if (disposed) return;
         renderInfo = info;
-        if (info.terminalRenderSelfTest) startRenderSelfTest();
         // Canvas renderer: paint the terminal to one 2D <canvas> instead of xterm's
         // DOM rows (the fix for RDP/no-GPU machines where the DOM layer never
         // presents but a canvas does). xterm still parses/buffers/handles input.
@@ -208,7 +153,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         }
       })
       .catch(() => {
-        // Render info is best-effort; the nudge just no-ops without it.
+        // Render info is best-effort; canvas selection just no-ops without it.
       });
 
     const termIsAtBottom = (): boolean =>
@@ -301,11 +246,8 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     el.addEventListener('wheel', onWheelCapture, { capture: true, passive: false });
 
     // Track the last cols/rows actually sent to the host so a re-fit that lands on
-    // the SAME size doesn't issue a redundant ConPTY resize. This is what keeps the
-    // native-window repaint nudge (a 1px, sub-cell window resize) from propagating a
-    // PTY resize / SIGWINCH to the agent — its ResizeObserver-driven re-fit nets the
-    // same cols/rows, so cs.resize is skipped — while genuine size changes still go
-    // through. (Also de-spams the host on same-size refits during tab switches.)
+    // the SAME size doesn't issue a redundant ConPTY resize (de-spams the host on
+    // same-size refits during tab switches; genuine size changes still go through).
     let lastSentCols = 0;
     let lastSentRows = 0;
     const resize = (): void => {
@@ -332,47 +274,6 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       }
     };
     refitRef.current = resize;
-
-    // Renderer-only re-raster nudge (RDP/software-compositing): briefly toggle
-    // fontSize (or cols) by ±1 across two animation frames, then restore, forcing
-    // xterm to re-rasterize without an OS-window resize. Guarded by isNudging so
-    // the transient size change does not re-enter the ResizeObserver→fit path and
-    // recurse. NEVER calls window.cs.resize (no PTY resize / SIGWINCH). Bounded to
-    // 2 automatic fires; `force` (the manual "Force terminal repaint" command)
-    // bypasses the gate and the bound. See docs/rdp-blank-terminal.md.
-    const nudgeRenderer = (force: boolean): void => {
-      if (disposed || isNudging) return;
-      const mode = renderInfo?.terminalNudge;
-      const eligible =
-        !!renderInfo?.softwareCompositing && (mode === 'fontsize' || mode === 'cols');
-      if (!force) {
-        if (!eligible || nudgeCount >= 2) return;
-        nudgeCount += 1;
-      }
-      const useCols = mode === 'cols';
-      isNudging = true;
-      const restoreFont = term.options?.fontSize ?? 13;
-      const baseCols = term.cols;
-      const baseRows = term.rows;
-      try {
-        if (useCols) term.resize(Math.max(1, baseCols + 1), baseRows);
-        else term.options.fontSize = restoreFont + 1;
-      } catch {
-        // Restore below still runs.
-      }
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          try {
-            if (useCols) term.resize(baseCols, baseRows);
-            else term.options.fontSize = restoreFont;
-          } catch {
-            // Element/term may be tearing down; ignore.
-          }
-          isNudging = false;
-          diag('TermView nudge fired', { session, mode: useCols ? 'cols' : 'fontsize', force });
-        });
-      });
-    };
 
     ensureSoftwareCompositingFlag();
     // forceReflow forces a synchronous relayout + repaint of the terminal. Under
@@ -414,7 +315,6 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         if (!firstDataLogged) {
           firstDataLogged = true;
           diag('TermView first data', { session, bytes: bytes.byteLength });
-          nudgeRenderer(false);
         }
         // Log an escaped preview of the first few chunks (diagnostics only) so a
         // blank pane can be diagnosed: if the agent only emits control/query
@@ -471,15 +371,9 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
         term.writeln(`\r\n\x1b[31m[stream error: ${e.message}]\x1b[0m`);
       }
     });
-    // Manual "Force terminal repaint" command (Settings → Diagnostics): run the
-    // renderer-only nudge regardless of mode/compositing (the user asked for it).
-    const unsubNudge = window.cs.onTerminalNudge(() => nudgeRenderer(true));
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const scheduleResize = (): void => {
-      // Ignore the transient size change our own nudge causes (prevents the
-      // ResizeObserver→fit→nudge re-entrancy loop).
-      if (isNudging) return;
       if (resizeTimer) {
         clearTimeout(resizeTimer);
       }
@@ -530,9 +424,6 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           }
           resize();
           term.focus();
-          // Initial-snapshot repaint nudge (no-op unless software compositing +
-          // a renderer-only nudge mode). The native-window nudge fires in main.
-          nudgeRenderer(false);
           // DOM-renderer fallback for software compositing: paint the initial
           // snapshot without a manual resize. Spaced because xterm's render lands
           // a frame or two after write. No-op on GPU machines / canvas renderer.
@@ -593,11 +484,6 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       disposed = true;
       if (settleRaf1) cancelAnimationFrame(settleRaf1);
       if (settleRaf2) cancelAnimationFrame(settleRaf2);
-      if (selfTestRaf) cancelAnimationFrame(selfTestRaf);
-      if (selfTestEl) {
-        selfTestEl.remove();
-        selfTestEl = null;
-      }
       if (resizeTimer) {
         clearTimeout(resizeTimer);
       }
@@ -612,7 +498,6 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       unsubData();
       unsubClosed();
       unsubError();
-      unsubNudge();
       diag('TermView unmount', { session, dataEvents, dataBytes });
       window.cs.detachSession(session);
       if (canvasRenderer) {
