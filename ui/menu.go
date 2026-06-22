@@ -42,6 +42,7 @@ const (
 	StatePrompt
 	StateSearch
 	StateBrowse
+	StateGrid
 )
 
 type Menu struct {
@@ -88,7 +89,7 @@ func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
 	// Only change the state if we're not in a special state (NewInstance, Prompt,
 	// Search, or Browse) that owns the menu and must not be reset by background updates.
-	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateSearch && m.state != StateBrowse {
+	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateSearch && m.state != StateBrowse && m.state != StateGrid {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -125,6 +126,8 @@ func (m *Menu) updateOptions() {
 		m.options = searchMenuOptions
 	case StateBrowse:
 		m.options = []keys.KeyName{keys.KeyUp, keys.KeyDown, keys.KeyEnter}
+	case StateGrid:
+		m.options = []keys.KeyName{keys.KeyGridFocus, keys.KeyGridType, keys.KeyGridColumns, keys.KeyGridRelease, keys.KeyGridExit}
 	}
 }
 
@@ -152,7 +155,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// System group (includes sidebar view controls)
-	systemGroup := []keys.KeyName{keys.KeySearch, keys.KeyStatusFilter, keys.KeyModeCycle, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeySearch, keys.KeyStatusFilter, keys.KeyModeCycle, keys.KeyMark, keys.KeyGrid, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
 	// Combine all groups
 	options = append(options, actionGroup...)

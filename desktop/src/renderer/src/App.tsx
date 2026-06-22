@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
+import { GridPane } from './components/GridPane';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
 import { BreadcrumbCopy } from './components/BreadcrumbCopy';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
@@ -40,6 +41,8 @@ const GUTTER_W = 6;
 const SIDEBAR_MODE_KEY = 'cs.sidebarMode';
 const SIDEBAR_ORDER_KEY = 'cs.workspaceOrder';
 const STATUS_FILTER_KEY = 'cs.statusFilter';
+const GRID_COLUMNS_KEY = 'cs.gridColumns';
+const GRID_ORDER_KEY = 'cs.gridOrder';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -89,8 +92,23 @@ export function App(): JSX.Element {
     }
   });
   const [showHelp, setShowHelp] = useState(false);
+  const [gridMode, setGridMode] = useState(false);
+  const [gridSelectedIds, setGridSelectedIds] = useState<Set<string>>(() => new Set());
+  const [gridColumns, setGridColumns] = useState<number>(() => {
+    const v = Number(localStorage.getItem(GRID_COLUMNS_KEY));
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+  });
+  const [gridOrder, setGridOrder] = useState<string[]>(() => {
+    try {
+      const arr = JSON.parse(localStorage.getItem(GRID_ORDER_KEY) ?? '[]');
+      return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
   const ready = useRef(false);
   const workspacesRef = useRef<WorkspaceInfo[]>([]);
+  const gridSelectedIdsRef = useRef<Set<string>>(new Set());
   const aliveRef = useRef<Map<string, boolean>>(new Map());
   const sessionNameRef = useRef<Map<string, string>>(new Map());
   const regeneratingRef = useRef<Map<string, boolean>>(new Map());
@@ -295,6 +313,10 @@ export function App(): JSX.Element {
           e.preventDefault();
           setShowBrowser(true);
           break;
+        case 'g':
+          e.preventDefault();
+          setGridMode((g) => (g ? false : gridSelectedIdsRef.current.size >= 2));
+          break;
         case '/':
           e.preventDefault();
           searchInputRef.current?.focus();
@@ -463,6 +485,43 @@ export function App(): JSX.Element {
     (selected?.regenerating ?? false) ||
     (optimisticRegenId !== null && optimisticRegenId === selected?.id);
 
+  // Keep a ref to the current grid selection for the keydown handler (subscribed
+  // with a narrow deps list).
+  gridSelectedIdsRef.current = gridSelectedIds;
+
+  // The selected agents to tile: ordered by the user's drag-and-drop order
+  // (gridOrder), with any newly-selected agents appended in sidebar display order.
+  const gridWorkspaces = useMemo(() => {
+    const selected = displayedWorkspaces.filter((w) => gridSelectedIds.has(w.id));
+    const byId = new Map(selected.map((w) => [w.id, w]));
+    const ranked = gridOrder
+      .map((id) => byId.get(id))
+      .filter((w): w is WorkspaceInfo => w !== undefined);
+    const rankedIds = new Set(ranked.map((w) => w.id));
+    const unranked = selected.filter((w) => !rankedIds.has(w.id));
+    return [...ranked, ...unranked];
+  }, [displayedWorkspaces, gridSelectedIds, gridOrder]);
+
+  // Drop archived/removed workspaces from the grid selection.
+  useEffect(() => {
+    setGridSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const present = new Set(workspaces.map((w) => w.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (present.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [workspaces]);
+
+  // Leave grid mode if there is nothing left to show.
+  useEffect(() => {
+    if (gridMode && gridWorkspaces.length === 0) setGridMode(false);
+  }, [gridMode, gridWorkspaces.length]);
+
   useEffect(() => {
     if (!selected) setShowRegen(false);
   }, [selected]);
@@ -517,6 +576,28 @@ export function App(): JSX.Element {
       localStorage.setItem(SIDEBAR_MODE_KEY, next);
       return next;
     });
+  }, []);
+
+  const toggleGridMember = useCallback((id: string): void => {
+    setGridSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearGridSelection = useCallback((): void => setGridSelectedIds(new Set()), []);
+
+  const onGridColumnsChange = useCallback((cols: number): void => {
+    setGridColumns(cols);
+    if (cols > 0) localStorage.setItem(GRID_COLUMNS_KEY, String(cols));
+    else localStorage.removeItem(GRID_COLUMNS_KEY);
+  }, []);
+
+  const onGridReorder = useCallback((orderedIds: string[]): void => {
+    setGridOrder(orderedIds);
+    localStorage.setItem(GRID_ORDER_KEY, JSON.stringify(orderedIds));
   }, []);
 
   const onConfirmRemove = useCallback(
@@ -604,6 +685,17 @@ export function App(): JSX.Element {
         </div>
         <button
           type="button"
+          className={`top-bar__grid${gridMode ? ' is-active' : ''}`}
+          title={gridMode ? 'Close agent grid' : 'Open a grid of the selected agents (select 2+)'}
+          aria-label="Toggle agent grid"
+          aria-pressed={gridMode}
+          disabled={!gridMode && gridSelectedIds.size < 2}
+          onClick={() => setGridMode((g) => !g)}
+        >
+          ▦ Grid{!gridMode && gridSelectedIds.size >= 2 ? ` (${gridSelectedIds.size})` : ''}
+        </button>
+        <button
+          type="button"
           className="top-bar__help"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
@@ -624,7 +716,9 @@ export function App(): JSX.Element {
       <main
         className="workspace"
         style={{
-          gridTemplateColumns: `${SIDEBAR_W}px minmax(${CENTER_MIN}px, 1fr) ${GUTTER_W}px ${sideWidth}px`,
+          gridTemplateColumns: gridMode
+            ? `${SIDEBAR_W}px minmax(0, 1fr)`
+            : `${SIDEBAR_W}px minmax(${CENTER_MIN}px, 1fr) ${GUTTER_W}px ${sideWidth}px`,
         }}
       >
         <Sidebar
@@ -652,27 +746,42 @@ export function App(): JSX.Element {
             setStatusFilter(v);
           }}
           searchInputRef={searchInputRef}
+          gridSelectedIds={gridSelectedIds}
+          onToggleGridMember={toggleGridMember}
+          onClearGridSelection={clearGridSelection}
         />
-        <CenterPane
-          workspace={selected}
-          onToggleAutoYes={toggleAutoYes}
-          onRegenerate={() => setShowRegen(true)}
-          regenerating={selectedRegenerating}
-          regenPhase={selected?.regenPhase}
-          onKillNow={() => {
-            if (selected) void window.cs.forceRegenerate(selected.id);
-          }}
-        />
-        <div
-          className="col-gutter"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize right panel"
-          title="Drag to resize · double-click to reset"
-          onMouseDown={onGutterDown}
-          onDoubleClick={resetSide}
-        />
-        <RightPanel workspace={selected} />
+        {gridMode ? (
+          <GridPane
+            workspaces={gridWorkspaces}
+            columns={gridColumns}
+            onColumnsChange={onGridColumnsChange}
+            onReorder={onGridReorder}
+            onLeave={() => setGridMode(false)}
+          />
+        ) : (
+          <>
+            <CenterPane
+              workspace={selected}
+              onToggleAutoYes={toggleAutoYes}
+              onRegenerate={() => setShowRegen(true)}
+              regenerating={selectedRegenerating}
+              regenPhase={selected?.regenPhase}
+              onKillNow={() => {
+                if (selected) void window.cs.forceRegenerate(selected.id);
+              }}
+            />
+            <div
+              className="col-gutter"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize right panel"
+              title="Drag to resize · double-click to reset"
+              onMouseDown={onGutterDown}
+              onDoubleClick={resetSide}
+            />
+            <RightPanel workspace={selected} />
+          </>
+        )}
       </main>
 
       <footer className="status-bar">

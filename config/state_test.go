@@ -38,6 +38,33 @@ func TestState_DefaultStateSidebarModeIsManual(t *testing.T) {
 	require.Equal(t, 0, DefaultState().GetSidebarMode())
 }
 
+func TestState_GridColumnsJSONRoundTrip(t *testing.T) {
+	s := DefaultState()
+	require.Equal(t, 0, s.GetGridColumns())
+
+	s.GridColumns = 3
+	data, err := json.Marshal(s)
+	require.NoError(t, err)
+
+	var loaded State
+	require.NoError(t, json.Unmarshal(data, &loaded))
+	require.Equal(t, 3, loaded.GetGridColumns())
+}
+
+func TestState_GridColumnsBackCompatMissingField(t *testing.T) {
+	// Old state.json had no grid_columns field; it must default to 0 (Auto).
+	old := []byte(`{"help_screens_seen": 3, "sidebar_mode": 2, "instances": []}`)
+
+	var loaded State
+	require.NoError(t, json.Unmarshal(old, &loaded))
+	require.Equal(t, 0, loaded.GetGridColumns())
+	require.Equal(t, 2, loaded.GetSidebarMode())
+}
+
+func TestState_DefaultStateGridColumnsIsAuto(t *testing.T) {
+	require.Equal(t, 0, DefaultState().GetGridColumns())
+}
+
 // requireNoLeftoverTempFiles asserts that an atomic SaveState left no temp files
 // (the "state-*.json.tmp" scratch files) behind in the config directory.
 func requireNoLeftoverTempFiles(t *testing.T, configDir string) {

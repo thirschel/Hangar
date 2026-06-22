@@ -54,6 +54,12 @@ the composer. Create more workspaces to run agents in parallel; switch between t
 the right panel shows each one's changed files and diff; **×** archives a workspace (removes the
 worktree, keeps the branch). Close and reopen the app — workspaces persist (the daemon keeps them).
 
+**Multi-agent grid:** select 2+ agents with the checkboxes in the sidebar (they appear on hover or
+when checked), then click **▦ Grid** in the top bar (or press `g`) to tile them as live terminals —
+click any tile and type straight into that agent. Change agents-per-row from the grid's top bar
+(default Auto, derived from the window width), and **drag a tile by its header handle (⠿) to
+rearrange the grid** (the arrangement persists). **✕ Close grid** returns to the single-agent view.
+
 ## Validate
 
 ```powershell
