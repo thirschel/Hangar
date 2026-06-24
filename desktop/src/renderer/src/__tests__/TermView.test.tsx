@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // factory (which vitest hoists above imports) can close over it. fit() writes the
 // FITTED size onto the terminal it was loaded into, mimicking the real FitAddon
 // adopting the measured pane.
-const { fitSpy, writelnSpy, writeSpy, pasteSpy, clearSelectionSpy, keyHandlerRef, selectionState } =
+const { fitSpy, writelnSpy, writeSpy, pasteSpy, clearSelectionSpy, keyHandlerRef, oscHandlerRef, selectionState } =
   vi.hoisted(() => ({
     fitSpy: vi.fn(function (this: { term: { cols: number; rows: number } }) {
       this.term.cols = 100;
@@ -17,6 +17,9 @@ const { fitSpy, writelnSpy, writeSpy, pasteSpy, clearSelectionSpy, keyHandlerRef
     pasteSpy: vi.fn(),
     clearSelectionSpy: vi.fn(),
     keyHandlerRef: { handler: undefined as ((e: KeyboardEvent) => boolean) | undefined },
+    oscHandlerRef: {
+      handler: undefined as ((data: string) => boolean | Promise<boolean>) | undefined,
+    },
     selectionState: { text: '' },
   }));
 
@@ -63,6 +66,15 @@ vi.mock('@xterm/xterm', () => {
     attachCustomKeyEventHandler(cb: (e: KeyboardEvent) => boolean): void {
       keyHandlerRef.handler = cb;
     }
+    parser = {
+      registerOscHandler: (
+        ident: number,
+        cb: (data: string) => boolean | Promise<boolean>,
+      ): { dispose: () => void } => {
+        if (ident === 52) oscHandlerRef.handler = cb;
+        return { dispose: vi.fn() };
+      },
+    };
     onData(): { dispose: () => void } {
       return { dispose: vi.fn() };
     }
@@ -112,6 +124,7 @@ describe('TermView startup ordering', () => {
     pasteSpy.mockClear();
     clearSelectionSpy.mockClear();
     keyHandlerRef.handler = undefined;
+    oscHandlerRef.handler = undefined;
     selectionState.text = '';
   });
 
@@ -281,5 +294,40 @@ describe('TermView startup ordering', () => {
     expect(preventDefault).toHaveBeenCalled();
     expect(clipboardRead).toHaveBeenCalled();
     await vi.waitFor(() => expect(pasteSpy).toHaveBeenCalledWith('clipboard text'));
+  });
+
+  it('writes the system clipboard when the agent emits an OSC 52 copy sequence', async () => {
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined);
+    window.cs.clipboardWrite = clipboardWrite;
+
+    await act(async () => {
+      render(<TermView sessionName="ws_osc" />);
+    });
+    await vi.waitFor(() => expect(oscHandlerRef.handler).toBeDefined());
+
+    // OSC 52 payload xterm hands the handler: "<selection>;<base64>". base64 of
+    // "hello" is aGVsbG8=. The handler should claim it (return true) and route the
+    // decoded text to the main-process clipboard bridge.
+    const handled = await oscHandlerRef.handler?.('c;aGVsbG8=');
+
+    expect(handled).toBe(true);
+    expect(clipboardWrite).toHaveBeenCalledWith('hello');
+  });
+
+  it('ignores an OSC 52 read request (payload "?") without touching the clipboard', async () => {
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined);
+    window.cs.clipboardWrite = clipboardWrite;
+
+    await act(async () => {
+      render(<TermView sessionName="ws_osc_read" />);
+    });
+    await vi.waitFor(() => expect(oscHandlerRef.handler).toBeDefined());
+
+    const handled = await oscHandlerRef.handler?.('c;?');
+
+    // A read/paste request is not serviced: the handler declines it and never
+    // writes the clipboard.
+    expect(handled).toBe(false);
+    expect(clipboardWrite).not.toHaveBeenCalled();
   });
 });
