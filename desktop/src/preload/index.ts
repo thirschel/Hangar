@@ -259,6 +259,11 @@ const api = {
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
+  // Terminal clipboard goes through the main-process clipboard module (Electron's
+  // navigator.clipboard is unreliable from xterm's keydown path and gates readText
+  // behind the clipboard-read permission). See TermView copySelection()/paste().
+  clipboardWrite: (text: string): Promise<void> => ipcRenderer.invoke('cs:clipboard-write', text),
+  clipboardRead: (): Promise<string> => ipcRenderer.invoke('cs:clipboard-read'),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
   // RDP blank-terminal mitigations: resolved compositing state used to select the
   // terminal renderer (canvas under software compositing) and gate diagnostics.

@@ -170,16 +170,31 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const copySelection = (): boolean => {
       const sel = term.getSelection();
       if (!sel) return false;
-      void navigator.clipboard.writeText(sel);
+      void window.cs.clipboardWrite(sel).catch((error) => {
+        diag(
+          'TermView clipboard write failed',
+          { session, message: error instanceof Error ? error.message : String(error) },
+          'error',
+        );
+      });
       return true;
     };
     const paste = (): void => {
-      void navigator.clipboard.readText().then((text) => {
-        // Route through xterm so the text is wrapped for bracketed-paste mode
-        // when the app enables it (and so right-click and Ctrl+Shift+V behave
-        // identically). term.paste fires onData, which forwards to sendInput.
-        if (text) term.paste(text);
-      });
+      void window.cs
+        .clipboardRead()
+        .then((text) => {
+          // Route through xterm so the text is wrapped for bracketed-paste mode
+          // when the app enables it (and so right-click and Ctrl+Shift+V behave
+          // identically). term.paste fires onData, which forwards to sendInput.
+          if (text) term.paste(text);
+        })
+        .catch((error) => {
+          diag(
+            'TermView clipboard read failed',
+            { session, message: error instanceof Error ? error.message : String(error) },
+            'error',
+          );
+        });
     };
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;

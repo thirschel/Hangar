@@ -33,6 +33,8 @@ const mockCs = {
   pickFolder: async () => null,
   getDefaultProgram: async () => 'copilot',
   openExternal: asyncNoop,
+  clipboardWrite: asyncNoop,
+  clipboardRead: async () => '',
   getAppInfo: async () => ({
     version: '0.1.0',
     appName: 'hangar-desktop',
