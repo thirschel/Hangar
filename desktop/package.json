@@ -1,6 +1,6 @@
 {
   "name": "hangar-desktop",
-  "version": "1.10.0",
+  "version": "1.10.1",
   "private": true,
   "description": "Electron + TypeScript + React desktop app for Hangar (Windows core-daemon thin client).",
   "author": "Hangar",
