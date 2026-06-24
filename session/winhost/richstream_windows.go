@@ -15,6 +15,28 @@ type richSub struct {
 }
 
 func (s *sdkSession) onSDKEvent(ev copilot.SessionEvent) {
+	// MCP status events fan out to one frame per server, so they are handled here
+	// rather than in sdkEventFrame (which maps one event to a single frame).
+	switch data := ev.Data.(type) {
+	case *copilot.SessionMCPServersLoadedData:
+		for _, sv := range data.Servers {
+			s.emitFrame(proto.EventFrame{
+				Kind:      proto.EventKindMCPStatus,
+				MCPServer: sv.Name,
+				Status:    string(sv.Status),
+				Error:     stringPtrValue(sv.Error),
+			})
+		}
+		return
+	case *copilot.SessionMCPServerStatusChangedData:
+		s.emitFrame(proto.EventFrame{
+			Kind:      proto.EventKindMCPStatus,
+			MCPServer: data.ServerName,
+			Status:    string(data.Status),
+			Error:     stringPtrValue(data.Error),
+		})
+		return
+	}
 	frame, ok := sdkEventFrame(ev)
 	if !ok {
 		return

@@ -68,6 +68,7 @@ func TestRichEventKindConstantsAndEnvelopeFields(t *testing.T) {
 		"EventKindTitle":             EventKindTitle,
 		"EventKindIdle":              EventKindIdle,
 		"EventKindError":             EventKindError,
+		"EventKindMCPStatus":         EventKindMCPStatus,
 	}
 	want := map[string]string{
 		"EventKindAssistantMessage":  "assistant.message",
@@ -81,6 +82,7 @@ func TestRichEventKindConstantsAndEnvelopeFields(t *testing.T) {
 		"EventKindTitle":             "title",
 		"EventKindIdle":              "idle",
 		"EventKindError":             "error",
+		"EventKindMCPStatus":         "mcp.status",
 	}
 	for name, got := range kinds {
 		if got != want[name] {

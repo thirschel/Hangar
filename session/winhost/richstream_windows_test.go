@@ -99,6 +99,37 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 	}
 }
 
+func TestOnSDKEventMCPStatusFrames(t *testing.T) {
+	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", nil, nil)
+	defer s.close()
+
+	failed := "boom"
+	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServersLoadedData{Servers: []copilot.MCPServersLoadedServer{
+		{Name: "github", Status: copilot.MCPServerStatusConnected},
+		{Name: "broken", Status: copilot.MCPServerStatusFailed, Error: &failed},
+	}}})
+	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServerStatusChangedData{ServerName: "github", Status: copilot.MCPServerStatusNeedsAuth}})
+
+	frames := s.richTranscript(0)
+	if len(frames) != 3 {
+		t.Fatalf("richTranscript returned %d frames, want 3", len(frames))
+	}
+	for _, f := range frames {
+		if f.Kind != proto.EventKindMCPStatus {
+			t.Fatalf("frame kind = %q, want %q", f.Kind, proto.EventKindMCPStatus)
+		}
+	}
+	if frames[0].MCPServer != "github" || frames[0].Status != string(copilot.MCPServerStatusConnected) {
+		t.Fatalf("loaded frame 0 = %+v", frames[0])
+	}
+	if frames[1].MCPServer != "broken" || frames[1].Status != string(copilot.MCPServerStatusFailed) || frames[1].Error != "boom" {
+		t.Fatalf("loaded frame 1 = %+v", frames[1])
+	}
+	if frames[2].MCPServer != "github" || frames[2].Status != string(copilot.MCPServerStatusNeedsAuth) {
+		t.Fatalf("status-changed frame = %+v", frames[2])
+	}
+}
+
 func TestSDKPromptEmitsUserInputFrame(t *testing.T) {
 	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", nil, nil)
 	defer s.close()

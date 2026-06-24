@@ -352,6 +352,7 @@ const (
 	EventKindTitle             = "title"
 	EventKindIdle              = "idle"
 	EventKindError             = "error"
+	EventKindMCPStatus         = "mcp.status" // per-server MCP connection status (MCPServer, Status, Error)
 )
 
 // Decision values for MethodRespondPermission (v12).
