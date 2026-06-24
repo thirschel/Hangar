@@ -207,7 +207,18 @@ type WorkspaceInfo struct {
 	// RepoPath. Drives the sidebar worktree icon and archive safety. Defaults to
 	// true for workspaces persisted before v10 (they all had worktrees).
 	HasWorktree bool `json:"hasWorktree"`
+	// Kind is the session backend: "terminal" (ConPTY/tmux, the default) or "rich"
+	// (the opt-in Copilot SDK structured view). Additive, optional response field —
+	// does not affect the version handshake, so Version is intentionally not bumped
+	// for it. Empty/absent means "terminal".
+	Kind string `json:"kind,omitempty"`
 }
+
+// Workspace session backends (WorkspaceInfo.Kind).
+const (
+	WorkspaceKindTerminal = "terminal" // ConPTY (Windows) / tmux (Unix); the default
+	WorkspaceKindRich     = "rich"     // the opt-in Copilot SDK "rich agent view"
+)
 
 // FileDiffInfo is a per-file change summary in a WorkspaceDiff response.
 type FileDiffInfo struct {

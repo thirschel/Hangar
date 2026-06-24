@@ -48,6 +48,7 @@ type workspace struct {
 	Shell          string `json:"shell,omitempty"`         // "cmd", "powershell", "pwsh"; empty = config default
 	CopilotResume  bool   `json:"copilotResume,omitempty"` // agent is copilot or a detected copilot wrapper (e.g. "cpa") -> resumable
 	NoWorktree     bool   `json:"noWorktree,omitempty"`    // in-place session: opened directly against RepoPath, no managed worktree
+	Kind           string `json:"kind,omitempty"`          // "" / "terminal" = ConPTY backend; "rich" = Copilot SDK backend
 }
 
 type workspaceManager struct {
@@ -472,6 +473,15 @@ func inPlaceGitInfo(dir string) (repoPath, branch, baseSHA string) {
 	return repoPath, branch, baseSHA
 }
 
+// kindOrTerminal returns the workspace's session backend, defaulting to terminal
+// for records persisted before the rich (Copilot SDK) backend existed.
+func (w *workspace) kindOrTerminal() string {
+	if w.Kind == proto.WorkspaceKindRich {
+		return proto.WorkspaceKindRich
+	}
+	return proto.WorkspaceKindTerminal
+}
+
 func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 	alive := false
 	busy, waiting := false, false
@@ -498,6 +508,7 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		Busy: busy, Waiting: waiting,
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 		HasWorktree: !w.NoWorktree,
+		Kind:        w.kindOrTerminal(),
 	}
 }
 
