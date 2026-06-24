@@ -21,9 +21,14 @@ export function CreateWorkspaceModal({
   const [shell, setShell] = useState('');
   const [baseBranch, setBaseBranch] = useState('');
   const [worktree, setWorktree] = useState(true);
+  const [rich, setRich] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const modalRef = useRef<ModalHandle>(null);
+
+  // The rich (Copilot SDK) agent view is Copilot-only, so only offer the toggle
+  // for a Copilot agent. The daemon also gates it server-side (richBackend).
+  const isCopilot = (program.trim() || defaultProgram).toLowerCase().includes('copilot');
 
   // Pre-fill the agent with the daemon's default so the field is never silently
   // blank (a blank agent falls back to the config default, which can be stale).
@@ -64,6 +69,7 @@ export function CreateWorkspaceModal({
         baseBranch: worktree ? baseBranch.trim() || undefined : undefined,
         shell: shell || undefined,
         noWorktree: worktree ? undefined : true,
+        rich: isCopilot && rich ? true : undefined,
       });
       modalRef.current?.close();
     } catch (e) {
@@ -138,6 +144,13 @@ export function CreateWorkspaceModal({
             <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
           </select>
         </label>
+        {isCopilot && (
+          <label className="create-form__check">
+            <input type="checkbox" checked={rich} onChange={(e) => setRich(e.target.checked)} />
+            Rich agent view{' '}
+            <span className="hint">(experimental — structured chat UI instead of the terminal)</span>
+          </label>
+        )}
         <label className="create-form__check">
           <input
             type="checkbox"

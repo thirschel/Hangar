@@ -93,6 +93,8 @@ export type CreateWorkspaceArgs = {
   shell?: string;
   // When true, open the session in-place against repoPath without a git worktree.
   noWorktree?: boolean;
+  // When true (Copilot only), use the experimental rich Copilot SDK agent view.
+  rich?: boolean;
 };
 
 export type RunOutput = {
@@ -136,6 +138,7 @@ const api = {
       autoYes: args.autoYes,
       shell: args.shell,
       noWorktree: args.noWorktree,
+      rich: args.rich,
     });
     if (!r.ok || !r.workspace) throw new Error(r.error || 'CreateWorkspace failed');
     return r.workspace;

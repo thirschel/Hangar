@@ -162,6 +162,7 @@ export interface Request {
   // CreateWorkspace (v10): when true, open the session in-place against repoPath
   // without creating a git worktree.
   noWorktree?: boolean;
+  rich?: boolean;
   // Run methods (v3)
   command?: string;
   sinceOffset?: number;
