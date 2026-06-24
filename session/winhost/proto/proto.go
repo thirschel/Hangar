@@ -39,7 +39,7 @@ import (
 // the flag and create a worktree in the selected folder's repo anyway.
 // v11 adds the rich agent view: a structured event stream (OpenRichStream) plus
 // SendMessage/AbortTurn/GetTranscript control for Copilot SDK-backed sessions.
-const Version = 11
+const Version = 12
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -99,6 +99,12 @@ const (
 	MethodSendMessage    = "SendMessage"    // send a user message to a rich session
 	MethodAbortTurn      = "AbortTurn"      // interrupt the current turn
 	MethodGetTranscript  = "GetTranscript"  // fetch the persisted transcript (for repaint)
+
+	// Permission / user-input answering (v12): inbound control responses for the
+	// rich event stream. A permission resolves out-of-band by RequestID; a user-input
+	// answer unblocks the SDK handler that is waiting on RequestID.
+	MethodRespondPermission = "RespondPermission" // approve/reject a pending permission.requested
+	MethodRespondUserInput  = "RespondUserInput"  // answer a pending user_input.requested
 )
 
 // Capture modes for MethodCapturePane.
@@ -182,6 +188,15 @@ type Request struct {
 	// only frames with Seq > Since are returned/streamed. Message (above) carries the
 	// SendMessage text.
 	Since uint64 `json:"since,omitempty"`
+
+	// Permission / user-input answering (v12). RequestID correlates with an
+	// EventFrame.RequestID (permission.requested / user_input.requested). Decision is
+	// DecisionApprove or DecisionReject for RespondPermission. Answer + Freeform carry
+	// the RespondUserInput reply (Freeform = the answer was typed, not a listed choice).
+	RequestID string `json:"requestId,omitempty"`
+	Decision  string `json:"decision,omitempty"`
+	Answer    string `json:"answer,omitempty"`
+	Freeform  bool   `json:"freeform,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -337,6 +352,12 @@ const (
 	EventKindTitle             = "title"
 	EventKindIdle              = "idle"
 	EventKindError             = "error"
+)
+
+// Decision values for MethodRespondPermission (v12).
+const (
+	DecisionApprove = "approve"
+	DecisionReject  = "reject"
 )
 
 // CopilotSessionInfo describes a discovered local Copilot CLI session.

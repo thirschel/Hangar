@@ -6,12 +6,6 @@ import (
 	"testing"
 )
 
-func TestVersionV11(t *testing.T) {
-	if Version != 11 {
-		t.Fatalf("Version = %d, want 11", Version)
-	}
-}
-
 func TestEventFrameRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	frame := EventFrame{
