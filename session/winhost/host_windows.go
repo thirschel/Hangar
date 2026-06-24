@@ -382,6 +382,26 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 	return nil
 }
 
+// startSDKSession creates, starts and registers a Copilot SDK-backed "rich"
+// session (the opt-in structured backend, parallel to startManagedSessionWithShell).
+// sessionID seeds the SDK session id so a later resume continues the same
+// conversation; baseDir overrides COPILOT_HOME ("" = default).
+func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, exists := h.sessions[name]; exists {
+		return fmt.Errorf("session already exists: %s", name)
+	}
+	s := newSDKSession(name, program, workDir, baseDir, autoYes, sessionID, nil, h.logger)
+	if err := s.start(); err != nil {
+		return fmt.Errorf("start sdk session: %w", err)
+	}
+	h.sessions[name] = s
+	h.lastActive = time.Now()
+	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q", name, filepath.Base(program), workDir)
+	return nil
+}
+
 func safeProgramSummary(program, shell string) (programName string, argCount int) {
 	switch agentcmd.ParseShellKind(shell) {
 	case agentcmd.ShellPowerShell, agentcmd.ShellPwsh:

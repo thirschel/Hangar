@@ -1312,6 +1312,22 @@ func classifyProbeExit(err error) (found, isCopilot bool) {
 	return false, false
 }
 
+// richBackend reports whether a new workspace should use the Copilot SDK "rich"
+// backend: the client request or the server config opted in AND the agent is
+// Copilot. Off by default (both gates false), so terminal remains the default.
+func richBackend(reqRich, cfgEnabled, copilotAgent bool) bool {
+	return (reqRich || cfgEnabled) && copilotAgent
+}
+
+// startWorkspaceSession starts a workspace's agent session using the rich (Copilot
+// SDK) backend when rich is set, or the default ConPTY terminal backend otherwise.
+func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string) error {
+	if rich {
+		return m.host.startSDKSession(sessionName, program, worktree, "", autoYes, agentSessionID)
+	}
+	return m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, cols, rows, autoYes)
+}
+
 func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	if req.RepoPath == "" {
 		return proto.Errorf(req.ID, "repoPath required")
@@ -1387,6 +1403,14 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
 
+	// Route to the opt-in Copilot SDK "rich" backend when enabled (off by default);
+	// otherwise use the default ConPTY terminal backend.
+	rich := richBackend(req.Rich, cfg.CopilotRichView, copilotResume)
+	kind := ""
+	if rich {
+		kind = proto.WorkspaceKindRich
+	}
+
 	var (
 		repoPath, worktreePath, branch, baseSHA string
 		existingBranch                          bool
@@ -1409,7 +1433,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 			repoPath = dir
 		}
 		phase("resolve-folder")
-		if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktreePath, shell, cols, rows, req.AutoYes); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, worktreePath, shell, cols, rows, req.AutoYes, agentSessionID); err != nil {
 			return proto.Errorf(req.ID, "start agent: %v", err)
 		}
 		phase("start-agent")
@@ -1433,7 +1457,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		}
 		phase("setup-worktree")
 
-		if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, wt.GetWorktreePath(), shell, cols, rows, req.AutoYes, agentSessionID); err != nil {
 			// Roll back the worktree so a failed create leaves no orphan.
 			_ = wt.Remove()
 			_ = wt.Prune()
@@ -1450,6 +1474,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: existingBranch,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID, Shell: shell,
 		CopilotResume: copilotResume, NoWorktree: req.NoWorktree,
+		Kind: kind,
 	}
 	m.mu.Lock()
 	m.wss[id] = w

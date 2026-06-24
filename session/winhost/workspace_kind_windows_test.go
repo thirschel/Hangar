@@ -24,3 +24,22 @@ func TestWorkspaceKindOrTerminal(t *testing.T) {
 		}
 	}
 }
+
+func TestRichBackend(t *testing.T) {
+	cases := []struct {
+		name                         string
+		reqRich, cfgEnabled, copilot bool
+		want                         bool
+	}{
+		{"default off", false, false, true, false},
+		{"client opt-in", true, false, true, true},
+		{"server config opt-in", false, true, true, true},
+		{"not copilot never rich (req)", true, false, false, false},
+		{"not copilot never rich (cfg)", false, true, false, false},
+	}
+	for _, c := range cases {
+		if got := richBackend(c.reqRich, c.cfgEnabled, c.copilot); got != c.want {
+			t.Errorf("%s: richBackend(%v,%v,%v) = %v, want %v", c.name, c.reqRich, c.cfgEnabled, c.copilot, got, c.want)
+		}
+	}
+}

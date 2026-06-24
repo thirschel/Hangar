@@ -152,6 +152,11 @@ type Request struct {
 	// work when the folder is a repo; a non-repo folder opens with them disabled.
 	NoWorktree bool `json:"noWorktree,omitempty"`
 
+	// Rich (CreateWorkspace) requests the opt-in Copilot SDK "rich agent view"
+	// backend for a Copilot agent. Server-gated by config copilot_rich_view; the
+	// terminal backend is used unless both this/the config and a Copilot agent agree.
+	Rich bool `json:"rich,omitempty"`
+
 	// Shell selects the shell used to launch the agent: "cmd", "powershell", "pwsh".
 	// Empty falls back to the config default_shell, which itself defaults to "cmd".
 	Shell string `json:"shell,omitempty"`

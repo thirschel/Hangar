@@ -37,7 +37,7 @@ type sdkSession struct {
 // newSDKSession builds a rich SDK-backed session. workDir is the git worktree;
 // baseDir overrides COPILOT_HOME (empty = default). onEvent (optional) receives
 // the structured event stream for the eventual rich-view pipe.
-func newSDKSession(name, program, workDir, baseDir string, autoYes bool, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
+func newSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &sdkSession{
 		name:    name,
@@ -47,11 +47,12 @@ func newSDKSession(name, program, workDir, baseDir string, autoYes bool, onEvent
 		subs:    make(map[*subscriber]struct{}),
 	}
 	s.sess = copilotsdk.New(copilotsdk.Config{
-		WorkDir: workDir,
-		BaseDir: baseDir,
-		AutoYes: autoYes,
-		OnEvent: onEvent,
-		Logger:  logger,
+		WorkDir:   workDir,
+		BaseDir:   baseDir,
+		SessionID: sessionID,
+		AutoYes:   autoYes,
+		OnEvent:   onEvent,
+		Logger:    logger,
 	})
 	return s
 }

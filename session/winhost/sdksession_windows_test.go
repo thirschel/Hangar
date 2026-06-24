@@ -7,7 +7,7 @@ import "testing"
 // TestSDKSessionAdapter exercises the managedSession mapping that does not need a
 // live Copilot runtime (start() is covered by the package's e2e tests).
 func TestSDKSessionAdapter(t *testing.T) {
-	s := newSDKSession("ws1", "copilot", t.TempDir(), "", true, nil, nil)
+	s := newSDKSession("ws1", "copilot", t.TempDir(), "", true, "", nil, nil)
 
 	var ms managedSession = s // also enforced by the package-level assertion
 	if ms == nil {
