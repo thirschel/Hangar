@@ -1216,6 +1216,198 @@ body.is-row-resizing .center-terminal__resizer::after {
   font-weight: 600;
 }
 
+.transcript-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: #171719;
+  overflow: hidden;
+}
+
+.transcript-view__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.transcript-view__header h2 {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+}
+
+.transcript-view__eyebrow,
+.transcript-entry__label,
+.transcript-entry__meta,
+.transcript-tool__server,
+.transcript-tool__detail {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
+.transcript-view__live {
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-glow);
+  color: var(--text-info);
+  font-size: var(--fs-xs);
+}
+
+.transcript-view__scroll {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-5);
+  overflow: auto;
+}
+
+.transcript-view__empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.transcript-entry,
+.transcript-tool {
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.transcript-entry {
+  padding: var(--space-4);
+}
+
+.transcript-entry--assistant {
+  border-color: var(--border-strong);
+}
+
+.transcript-entry__text {
+  margin-top: var(--space-2);
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.transcript-entry__cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--accent);
+}
+
+.transcript-entry--reasoning summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.transcript-entry--permission {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-color: rgba(224, 175, 104, 0.35);
+}
+
+.transcript-entry--usage {
+  padding: var(--space-2) var(--space-3);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+.transcript-entry--error {
+  border-color: rgba(241, 76, 76, 0.45);
+  background: rgba(241, 76, 76, 0.08);
+  color: #ffb4b4;
+}
+
+.transcript-tool {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+
+.transcript-tool__state {
+  min-width: 52px;
+  color: var(--text-info);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+}
+
+.transcript-tool--done .transcript-tool__state {
+  color: var(--success-text);
+}
+
+.transcript-tool__name {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.transcript-composer {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.transcript-composer textarea {
+  flex: 1;
+  resize: vertical;
+  min-height: 60px;
+  max-height: 160px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-control);
+  color: var(--text);
+}
+
+.transcript-composer textarea:focus {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.transcript-composer__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.transcript-composer button {
+  min-width: 72px;
+  padding: 7px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--accent-gradient);
+  color: var(--accent-contrast);
+  cursor: pointer;
+}
+
+.transcript-composer button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.transcript-composer__stop {
+  background: var(--bg-control) !important;
+  color: var(--text-secondary) !important;
+}
+
 .create-form button:disabled {
   opacity: 0.5;
   cursor: default;

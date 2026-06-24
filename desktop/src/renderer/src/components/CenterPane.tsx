@@ -2,6 +2,7 @@ import type { JSX } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
 import { CenterTerminal } from './CenterTerminal';
+import { TranscriptView } from './TranscriptView';
 
 type CenterPaneProps = {
   workspace: WorkspaceInfo | null;
@@ -18,9 +19,8 @@ const regenPhaseCopy: Record<string, string> = {
   seeding: 'Seeding the new agent with the handoff…',
 };
 
-// CenterPane shows the agent terminal (always visible) over a collapsible,
-// drag-resizable shell dock (CenterTerminal). Files and Changes live in the
-// RightPanel so they're visible at the same time as the agent.
+// CenterPane shows either the terminal agent view or the rich transcript view.
+// Terminal workspaces also keep the collapsible shell dock below the agent.
 export function CenterPane({
   workspace,
   onToggleAutoYes,
@@ -73,15 +73,19 @@ export function CenterPane({
                 )}
               </div>
             )}
-            <TermView
-              key={workspace?.sessionName ?? 'none'}
-              sessionName={workspace?.sessionName ?? null}
-            />
+            {workspace?.kind === 'rich' ? (
+              <TranscriptView key={workspace.sessionName} sessionName={workspace.sessionName} />
+            ) : (
+              <TermView
+                key={workspace?.sessionName ?? 'none'}
+                sessionName={workspace?.sessionName ?? null}
+              />
+            )}
           </div>
         </div>
       </div>
 
-      <CenterTerminal workspace={workspace} />
+      {workspace?.kind !== 'rich' && <CenterTerminal workspace={workspace} />}
     </section>
   );
 }
