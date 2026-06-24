@@ -15,6 +15,10 @@ type richSub struct {
 }
 
 func (s *sdkSession) onSDKEvent(ev copilot.SessionEvent) {
+	s.translateAndEmit(ev)
+}
+
+func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 	// MCP status events fan out to one frame per server, so they are handled here
 	// rather than in sdkEventFrame (which maps one event to a single frame).
 	switch data := ev.Data.(type) {

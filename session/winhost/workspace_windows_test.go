@@ -328,6 +328,66 @@ func TestCopilotWorkspaceLaunchCommands(t *testing.T) {
 	}
 }
 
+func TestRevivePlanRoutesRichAndTerminal(t *testing.T) {
+	const validID = "123e4567-e89b-12d3-a456-426614174000"
+
+	cases := []struct {
+		name          string
+		w             *workspace
+		wantRich      bool
+		wantResume    bool
+		wantProgram   string
+		wantAgentID   string
+		wantInvalidID bool
+		wantMissingID bool
+	}{
+		{
+			name:        "rich valid resumes via sdk",
+			w:           &workspace{Kind: proto.WorkspaceKindRich, Program: "copilot", AgentSessionID: validID},
+			wantRich:    true,
+			wantResume:  true,
+			wantProgram: "copilot",
+			wantAgentID: validID,
+		},
+		{
+			name:          "rich invalid launches fresh",
+			w:             &workspace{Kind: proto.WorkspaceKindRich, Program: "copilot", AgentSessionID: "bad;id"},
+			wantRich:      true,
+			wantProgram:   "copilot",
+			wantInvalidID: true,
+		},
+		{
+			name:          "rich missing launches fresh",
+			w:             &workspace{Kind: proto.WorkspaceKindRich, Program: "copilot"},
+			wantRich:      true,
+			wantProgram:   "copilot",
+			wantMissingID: true,
+		},
+		{
+			name:        "terminal copilot resumes via command flag",
+			w:           &workspace{Program: "cpa", CopilotResume: true, AgentSessionID: validID},
+			wantProgram: "cpa --resume=" + validID,
+		},
+		{
+			name:          "terminal invalid launches fresh",
+			w:             &workspace{Program: "copilot", AgentSessionID: "bad;id"},
+			wantProgram:   "copilot",
+			wantInvalidID: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := revivePlanForWorkspace(tc.w)
+			if got.rich != tc.wantRich || got.resume != tc.wantResume ||
+				got.program != tc.wantProgram || got.agentSessionID != tc.wantAgentID ||
+				got.invalidSessionID != tc.wantInvalidID || got.missingSessionID != tc.wantMissingID {
+				t.Fatalf("revivePlanForWorkspace() = %+v", got)
+			}
+		})
+	}
+}
+
 // runCopilotProbe runs copilotProbeScript with funcDef prepended (defining the
 // agent named by HANGAR_PROBE_NAME) under -NoProfile, so the create-time
 // detection heuristic is exercised hermetically. Returns the probe exit code

@@ -395,23 +395,30 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 	return nil
 }
 
-// startSDKSession creates, starts and registers a Copilot SDK-backed "rich"
-// session (the opt-in structured backend, parallel to startManagedSessionWithShell).
-// sessionID seeds the SDK session id so a later resume continues the same
-// conversation; baseDir overrides COPILOT_HOME ("" = default).
-func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string) error {
+// startSDKSession creates, starts/resumes and registers a Copilot SDK-backed
+// "rich" session (the opt-in structured backend, parallel to
+// startManagedSessionWithShell). sessionID seeds or resumes the SDK session id so
+// a later resume continues the same conversation; baseDir overrides COPILOT_HOME
+// ("" = default).
+func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string, resume bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.sessions[name]; exists {
 		return fmt.Errorf("session already exists: %s", name)
 	}
 	s := newSDKSession(name, program, workDir, baseDir, autoYes, sessionID, nil, h.logger)
-	if err := s.start(); err != nil {
+	var err error
+	if resume {
+		err = s.startResumed()
+	} else {
+		err = s.start()
+	}
+	if err != nil {
 		return fmt.Errorf("start sdk session: %w", err)
 	}
 	h.sessions[name] = s
 	h.lastActive = time.Now()
-	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q", name, filepath.Base(program), workDir)
+	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", name, filepath.Base(program), workDir, resume)
 	return nil
 }
 
@@ -524,6 +531,14 @@ func (h *host) richSession(req *proto.Request) (*sdkSession, *proto.Response) {
 }
 
 func (h *host) openRichStream(req *proto.Request) *proto.Response {
+	revived, rerr := h.workspaces.reviveBySession(req.Session, req.Cols, req.Rows)
+	if rerr != nil {
+		h.logger.Printf("rich stream revive failed session=%q err=%v", req.Session, rerr)
+		return proto.Errorf(req.ID, "revive workspace session: %v", rerr)
+	}
+	if revived {
+		h.logger.Printf("rich stream revived workspace session=%q", req.Session)
+	}
 	sess, errResp := h.richSession(req)
 	if errResp != nil {
 		return errResp

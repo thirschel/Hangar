@@ -4,6 +4,7 @@ package winhost
 
 import (
 	"context"
+	"fmt"
 	stdlog "log"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ type sdkSession struct {
 	name    string
 	program string
 	sess    *copilotsdk.Session
+	logger  *stdlog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -45,6 +47,7 @@ func newSDKSession(name, program, workDir, baseDir string, autoYes bool, session
 	s := &sdkSession{
 		name:     name,
 		program:  program,
+		logger:   logger,
 		ctx:      ctx,
 		cancel:   cancel,
 		subs:     make(map[*subscriber]struct{}),
@@ -68,6 +71,31 @@ func newSDKSession(name, program, workDir, baseDir string, autoYes bool, session
 }
 
 func (s *sdkSession) start() error { return s.sess.Start(s.ctx) }
+
+func (s *sdkSession) startResumed() error {
+	if err := s.sess.Resume(s.ctx); err != nil {
+		s.logf("SDK resume failed for session %q: %v; starting fresh", s.name, err)
+		if startErr := s.sess.Start(s.ctx); startErr != nil {
+			return fmt.Errorf("resume sdk session: %v; fresh start: %w", err, startErr)
+		}
+		return nil
+	}
+	evs, err := s.sess.Transcript(s.ctx)
+	if err != nil {
+		s.logf("SDK transcript replay failed for session %q: %v", s.name, err)
+		return nil
+	}
+	for _, ev := range evs {
+		s.translateAndEmit(ev)
+	}
+	return nil
+}
+
+func (s *sdkSession) logf(format string, args ...any) {
+	if s.logger != nil {
+		s.logger.Printf(format, args...)
+	}
+}
 
 // capture renders nothing for the byte path; rich sessions render from the
 // structured event stream (Phase 3). Returning "" keeps any terminal-shaped

@@ -482,6 +482,41 @@ func (w *workspace) kindOrTerminal() string {
 	return proto.WorkspaceKindTerminal
 }
 
+type workspaceRevivePlan struct {
+	rich             bool
+	resume           bool
+	program          string
+	agentSessionID   string
+	invalidSessionID bool
+	missingSessionID bool
+}
+
+func revivePlanForWorkspace(w *workspace) workspaceRevivePlan {
+	if w.kindOrTerminal() == proto.WorkspaceKindRich {
+		plan := workspaceRevivePlan{rich: true, program: w.Program}
+		switch {
+		case w.AgentSessionID == "":
+			plan.missingSessionID = true
+		case agentcmd.ValidSessionID(w.AgentSessionID):
+			plan.resume = true
+			plan.agentSessionID = w.AgentSessionID
+		default:
+			plan.invalidSessionID = true
+		}
+		return plan
+	}
+
+	plan := workspaceRevivePlan{program: w.Program}
+	if w.copilotResumable() && w.AgentSessionID != "" {
+		if agentcmd.ValidSessionID(w.AgentSessionID) {
+			plan.program = agentcmd.ResumeFlagCommand(w.Program, w.AgentSessionID)
+		} else {
+			plan.invalidSessionID = true
+		}
+	}
+	return plan
+}
+
 func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 	alive := false
 	busy, waiting := false, false
@@ -658,15 +693,20 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 	// tampered workspaces.json could otherwise smuggle a poisoned id back into
 	// the launch path (F-01); if it no longer passes the trust-boundary gate we
 	// launch fresh (no resume) rather than trusting stored state.
-	program := w.Program
-	if w.copilotResumable() && w.AgentSessionID != "" {
-		if agentcmd.ValidSessionID(w.AgentSessionID) {
-			program = agentcmd.ResumeFlagCommand(w.Program, w.AgentSessionID)
-		} else {
-			m.host.logger.Printf("workspace %s: rejecting invalid persisted AgentSessionID %q; launching without resume", w.ID, w.AgentSessionID)
-		}
+	plan := revivePlanForWorkspace(w)
+	if plan.invalidSessionID {
+		m.host.logger.Printf("workspace %s: rejecting invalid persisted AgentSessionID %q; launching without resume", w.ID, w.AgentSessionID)
 	}
-	if err := m.host.startManagedSessionWithShell(w.SessionName, program, w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
+	if plan.missingSessionID {
+		m.host.logger.Printf("workspace %s: missing persisted AgentSessionID; launching without resume", w.ID)
+	}
+	if plan.rich {
+		if err := m.host.startSDKSession(w.SessionName, plan.program, w.WorktreePath, "", w.AutoYes, plan.agentSessionID, plan.resume); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := m.host.startManagedSessionWithShell(w.SessionName, plan.program, w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1321,9 +1361,9 @@ func richBackend(reqRich, cfgEnabled, copilotAgent bool) bool {
 
 // startWorkspaceSession starts a workspace's agent session using the rich (Copilot
 // SDK) backend when rich is set, or the default ConPTY terminal backend otherwise.
-func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string) error {
+func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string, resume bool) error {
 	if rich {
-		return m.host.startSDKSession(sessionName, program, worktree, "", autoYes, agentSessionID)
+		return m.host.startSDKSession(sessionName, program, worktree, "", autoYes, agentSessionID, resume)
 	}
 	return m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, cols, rows, autoYes)
 }
@@ -1433,7 +1473,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 			repoPath = dir
 		}
 		phase("resolve-folder")
-		if err := m.startWorkspaceSession(rich, sessionName, program, worktreePath, shell, cols, rows, req.AutoYes, agentSessionID); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, worktreePath, shell, cols, rows, req.AutoYes, agentSessionID, false); err != nil {
 			return proto.Errorf(req.ID, "start agent: %v", err)
 		}
 		phase("start-agent")
@@ -1457,7 +1497,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		}
 		phase("setup-worktree")
 
-		if err := m.startWorkspaceSession(rich, sessionName, program, wt.GetWorktreePath(), shell, cols, rows, req.AutoYes, agentSessionID); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, wt.GetWorktreePath(), shell, cols, rows, req.AutoYes, agentSessionID, false); err != nil {
 			// Roll back the worktree so a failed create leaves no orphan.
 			_ = wt.Remove()
 			_ = wt.Prune()
