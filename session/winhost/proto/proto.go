@@ -37,7 +37,9 @@ import (
 // WorkspaceInfo.HasWorktree). Bumping the version guarantees a new client cannot
 // silently request a no-worktree session against an old host that would ignore
 // the flag and create a worktree in the selected folder's repo anyway.
-const Version = 10
+// v11 adds the rich agent view: a structured event stream (OpenRichStream) plus
+// SendMessage/AbortTurn/GetTranscript control for Copilot SDK-backed sessions.
+const Version = 11
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -90,6 +92,13 @@ const (
 	// Copilot session browser (v6): discover and resume local Copilot CLI sessions.
 	MethodListCopilotSessions  = "ListCopilotSessions"
 	MethodResumeCopilotSession = "ResumeCopilotSession"
+
+	// Rich agent view (v11): structured event stream + control for SDK-backed
+	// "rich" Copilot sessions (sibling to the byte-oriented terminal methods).
+	MethodOpenRichStream = "OpenRichStream" // open the per-session structured event stream
+	MethodSendMessage    = "SendMessage"    // send a user message to a rich session
+	MethodAbortTurn      = "AbortTurn"      // interrupt the current turn
+	MethodGetTranscript  = "GetTranscript"  // fetch the persisted transcript (for repaint)
 )
 
 // Capture modes for MethodCapturePane.
@@ -168,6 +177,11 @@ type Request struct {
 	// the host returned NeedsConfirm. The host refuses to create a worktree in a
 	// repo other than its own working directory unless this is true (F-03).
 	Confirmed bool `json:"confirmed,omitempty"`
+
+	// Rich agent view (v11). Since selects an event-stream/transcript replay point:
+	// only frames with Seq > Since are returned/streamed. Message (above) carries the
+	// SendMessage text.
+	Since uint64 `json:"since,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -286,7 +300,44 @@ type Response struct {
 	// client re-issues ResumeCopilotSession with Confirmed=true to proceed (F-03).
 	NeedsConfirm bool   `json:"needsConfirm,omitempty"`
 	AbsPath      string `json:"absPath,omitempty"`
+
+	// Rich agent view (v11): GetTranscript / OpenRichStream replay frames.
+	Frames []EventFrame `json:"frames,omitempty"`
 }
+
+// EventFrame is one structured event on a rich session's event stream (v11). It is
+// serialized as length-prefixed JSON exactly like every other frame (WriteFrame /
+// ReadFrameBytes). Seq is monotonic per session so clients can dedupe and replay.
+// Fields are interpreted per Kind; unused fields are omitted.
+type EventFrame struct {
+	Seq       uint64   `json:"seq"`
+	Kind      string   `json:"kind"`
+	Text      string   `json:"text,omitempty"`      // assistant.message / assistant.delta / assistant.reasoning text
+	ToolName  string   `json:"toolName,omitempty"`  // tool.start / tool.complete
+	MCPServer string   `json:"mcpServer,omitempty"` // tool.* : MCP server name, when the tool is an MCP tool
+	RequestID string   `json:"requestId,omitempty"` // permission.requested / user_input.requested id
+	Question  string   `json:"question,omitempty"`  // user_input.requested prompt
+	Choices   []string `json:"choices,omitempty"`   // user_input.requested choices
+	Title     string   `json:"title,omitempty"`     // title : the new session title
+	Status    string   `json:"status,omitempty"`    // mcp/status changes
+	Aborted   bool     `json:"aborted,omitempty"`   // idle : the preceding turn was aborted
+	Error     string   `json:"error,omitempty"`     // error : message
+}
+
+// EventFrame.Kind values for the rich event stream (v11).
+const (
+	EventKindAssistantMessage  = "assistant.message"
+	EventKindAssistantDelta    = "assistant.delta"
+	EventKindReasoning         = "assistant.reasoning"
+	EventKindToolStart         = "tool.start"
+	EventKindToolComplete      = "tool.complete"
+	EventKindPermissionRequest = "permission.requested"
+	EventKindUserInputRequest  = "user_input.requested"
+	EventKindUsage             = "usage"
+	EventKindTitle             = "title"
+	EventKindIdle              = "idle"
+	EventKindError             = "error"
+)
 
 // CopilotSessionInfo describes a discovered local Copilot CLI session.
 type CopilotSessionInfo struct {
