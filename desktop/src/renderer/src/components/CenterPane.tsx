@@ -74,7 +74,11 @@ export function CenterPane({
               </div>
             )}
             {workspace?.kind === 'rich' ? (
-              <TranscriptView key={workspace.sessionName} sessionName={workspace.sessionName} />
+              <TranscriptView
+                key={workspace.sessionName}
+                sessionName={workspace.sessionName}
+                autoYes={workspace.autoYes}
+              />
             ) : (
               <TermView
                 key={workspace?.sessionName ?? 'none'}

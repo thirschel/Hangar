@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventFrame } from '../../../main/host-client';
 import { TranscriptView } from '../components/TranscriptView';
@@ -20,6 +20,8 @@ describe('TranscriptView', () => {
       return () => {};
     });
     window.cs.onRichError = vi.fn().mockReturnValue(() => {});
+    window.cs.respondPermission = vi.fn().mockResolvedValue(undefined);
+    window.cs.respondUserInput = vi.fn().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -70,5 +72,55 @@ describe('TranscriptView', () => {
     });
 
     expect(screen.queryByText('Nope')).not.toBeInTheDocument();
+  });
+
+  it('answers a permission request and disables its controls', async () => {
+    render(<TranscriptView sessionName="rich-session" autoYes={false} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'perm-1',
+          question: 'Allow shell command?',
+          choices: ['approve', 'reject'],
+        },
+      });
+    });
+
+    const approve = screen.getByRole('button', { name: 'Approve' });
+    const reject = screen.getByRole('button', { name: 'Reject' });
+
+    fireEvent.click(approve);
+
+    expect(window.cs.respondPermission).toHaveBeenCalledWith('rich-session', 'perm-1', 'approve');
+    expect(approve).toBeDisabled();
+    expect(reject).toBeDisabled();
+    expect(screen.getByText('approved')).toBeInTheDocument();
+  });
+
+  it('answers a user input request with a choice', async () => {
+    render(<TranscriptView sessionName="rich-session" />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'user_input.requested',
+          requestId: 'input-1',
+          question: 'Pick an option',
+          choices: ['Alpha', 'Beta'],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Beta' }));
+
+    expect(window.cs.respondUserInput).toHaveBeenCalledWith('rich-session', 'input-1', 'Beta', false);
   });
 });

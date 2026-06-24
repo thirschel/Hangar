@@ -285,6 +285,19 @@ const api = {
     ipcRenderer.invoke('rich:send-message', { session, message }),
   abortTurn: (session: string): Promise<void> =>
     ipcRenderer.invoke('rich:abort-turn', session),
+  respondPermission: (
+    session: string,
+    requestId: string,
+    decision: 'approve' | 'reject',
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:respond-permission', { session, requestId, decision }),
+  respondUserInput: (
+    session: string,
+    requestId: string,
+    answer: string,
+    wasFreeform: boolean,
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:respond-user-input', { session, requestId, answer, wasFreeform }),
   getTranscript: (session: string, since = 0): Promise<EventFrame[]> =>
     ipcRenderer.invoke('rich:get-transcript', { session, since }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),

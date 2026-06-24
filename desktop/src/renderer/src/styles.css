@@ -1318,6 +1318,59 @@ body.is-row-resizing .center-terminal__resizer::after {
   border-color: rgba(224, 175, 104, 0.35);
 }
 
+.transcript-request__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.transcript-request__button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--accent-gradient);
+  color: var(--accent-contrast);
+  cursor: pointer;
+}
+
+.transcript-request__button--secondary {
+  background: var(--bg-control);
+  color: var(--text-secondary);
+}
+
+.transcript-request__button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.transcript-request__state {
+  color: var(--success-text);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+}
+
+.transcript-request__freeform {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.transcript-request__freeform input {
+  flex: 1;
+  min-width: 180px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 6px 10px;
+  background: var(--bg-control);
+  color: var(--text);
+}
+
+.transcript-request__freeform input:focus {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .transcript-entry--usage {
   padding: var(--space-2) var(--space-3);
   border-color: transparent;

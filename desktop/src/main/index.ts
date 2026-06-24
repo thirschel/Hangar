@@ -604,6 +604,28 @@ ipcMain.handle('rich:abort-turn', async (_event, session: string): Promise<void>
   await client.abortTurn(session);
 });
 
+ipcMain.handle(
+  'rich:respond-permission',
+  async (
+    _event,
+    args: { session: string; requestId: string; decision: 'approve' | 'reject' },
+  ): Promise<void> => {
+    const client = await getControlClient();
+    await client.respondPermission(args.session, args.requestId, args.decision);
+  },
+);
+
+ipcMain.handle(
+  'rich:respond-user-input',
+  async (
+    _event,
+    args: { session: string; requestId: string; answer: string; wasFreeform: boolean },
+  ): Promise<void> => {
+    const client = await getControlClient();
+    await client.respondUserInput(args.session, args.requestId, args.answer, args.wasFreeform);
+  },
+);
+
 ipcMain.handle('rich:get-transcript', async (_event, args: { session: string; since?: number }): Promise<EventFrame[]> => {
   const client = await getControlClient();
   return client.getTranscript(args.session, args.since ?? 0);

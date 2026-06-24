@@ -4,6 +4,7 @@ import type { EventFrame } from '../../../main/host-client';
 
 type TranscriptViewProps = {
   sessionName: string;
+  autoYes?: boolean;
 };
 
 type TranscriptEntry =
@@ -17,8 +18,8 @@ type TranscriptEntry =
       status: 'running' | 'done';
       detail?: string;
     }
-  | { id: string; kind: 'permission'; question: string; choices: string[] }
-  | { id: string; kind: 'input'; question: string; choices: string[] }
+  | { id: string; kind: 'permission'; requestId?: string; question: string; choices: string[] }
+  | { id: string; kind: 'input'; requestId?: string; question: string; choices: string[] }
   | { id: string; kind: 'usage'; text: string }
   | { id: string; kind: 'idle'; aborted: boolean }
   | { id: string; kind: 'error'; text: string };
@@ -123,8 +124,9 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
       case 'permission.requested':
         turnInProgress = true;
         entries.push({
-          id: `permission-${frame.seq}`,
+          id: `permission-${frame.requestId ?? frame.seq}`,
           kind: 'permission',
+          requestId: frame.requestId,
           question: frame.question ?? frame.text ?? 'Permission requested',
           choices: frame.choices ?? [],
         });
@@ -132,8 +134,9 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
       case 'user_input.requested':
         turnInProgress = true;
         entries.push({
-          id: `input-${frame.seq}`,
+          id: `input-${frame.requestId ?? frame.seq}`,
           kind: 'input',
+          requestId: frame.requestId,
           question: frame.question ?? frame.text ?? 'Input requested',
           choices: frame.choices ?? [],
         });
@@ -169,11 +172,13 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   return { entries, title, turnInProgress };
 }
 
-export function TranscriptView({ sessionName }: TranscriptViewProps): JSX.Element {
+export function TranscriptView({ sessionName, autoYes = false }: TranscriptViewProps): JSX.Element {
   const [framesBySeq, setFramesBySeq] = useState<Map<number, EventFrame>>(() => new Map());
   const [composerText, setComposerText] = useState('');
   const [streamError, setStreamError] = useState<string | null>(null);
   const [optimisticTurn, setOptimisticTurn] = useState(false);
+  const [answeredRequests, setAnsweredRequests] = useState<Set<string>>(() => new Set());
+  const [answerLabels, setAnswerLabels] = useState<Map<string, string>>(() => new Map());
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottom = useRef(true);
 
@@ -188,6 +193,8 @@ export function TranscriptView({ sessionName }: TranscriptViewProps): JSX.Elemen
     setFramesBySeq(new Map());
     setStreamError(null);
     setOptimisticTurn(false);
+    setAnsweredRequests(new Set());
+    setAnswerLabels(new Map());
     shouldStickToBottom.current = true;
 
     const addFrame = (frame: EventFrame): void => {
@@ -255,6 +262,59 @@ export function TranscriptView({ sessionName }: TranscriptViewProps): JSX.Elemen
     }
   };
 
+  const markAnswered = (requestId: string, label: string): void => {
+    setAnsweredRequests((current) => {
+      const next = new Set(current);
+      next.add(requestId);
+      return next;
+    });
+    setAnswerLabels((current) => {
+      const next = new Map(current);
+      next.set(requestId, label);
+      return next;
+    });
+  };
+
+  const unmarkAnswered = (requestId: string): void => {
+    setAnsweredRequests((current) => {
+      const next = new Set(current);
+      next.delete(requestId);
+      return next;
+    });
+    setAnswerLabels((current) => {
+      const next = new Map(current);
+      next.delete(requestId);
+      return next;
+    });
+  };
+
+  const respondPermission = async (
+    requestId: string,
+    decision: 'approve' | 'reject',
+  ): Promise<void> => {
+    markAnswered(requestId, decision === 'approve' ? 'approved' : 'rejected');
+    try {
+      await window.cs.respondPermission(sessionName, requestId, decision);
+    } catch (error) {
+      unmarkAnswered(requestId);
+      setStreamError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const respondUserInput = async (
+    requestId: string,
+    answer: string,
+    wasFreeform: boolean,
+  ): Promise<void> => {
+    markAnswered(requestId, 'answered');
+    try {
+      await window.cs.respondUserInput(sessionName, requestId, answer, wasFreeform);
+    } catch (error) {
+      unmarkAnswered(requestId);
+      setStreamError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <div className="transcript-view">
       <div className="transcript-view__header">
@@ -270,7 +330,15 @@ export function TranscriptView({ sessionName }: TranscriptViewProps): JSX.Elemen
           <div className="transcript-view__empty">Waiting for Copilot transcript events…</div>
         )}
         {transcript.entries.map((entry) => (
-          <TranscriptEntryView key={entry.id} entry={entry} />
+          <TranscriptEntryView
+            key={entry.id}
+            entry={entry}
+            autoYes={autoYes}
+            answeredRequests={answeredRequests}
+            answerLabels={answerLabels}
+            onRespondPermission={respondPermission}
+            onRespondUserInput={respondUserInput}
+          />
         ))}
         {streamError && (
           <div className="transcript-entry transcript-entry--error" role="alert">
@@ -306,7 +374,21 @@ export function TranscriptView({ sessionName }: TranscriptViewProps): JSX.Elemen
   );
 }
 
-function TranscriptEntryView({ entry }: { entry: TranscriptEntry }): JSX.Element {
+function TranscriptEntryView({
+  entry,
+  autoYes,
+  answeredRequests,
+  answerLabels,
+  onRespondPermission,
+  onRespondUserInput,
+}: {
+  entry: TranscriptEntry;
+  autoYes: boolean;
+  answeredRequests: Set<string>;
+  answerLabels: Map<string, string>;
+  onRespondPermission: (requestId: string, decision: 'approve' | 'reject') => Promise<void>;
+  onRespondUserInput: (requestId: string, answer: string, wasFreeform: boolean) => Promise<void>;
+}): JSX.Element {
   switch (entry.kind) {
     case 'assistant':
       return (
@@ -334,18 +416,22 @@ function TranscriptEntryView({ entry }: { entry: TranscriptEntry }): JSX.Element
       );
     case 'permission':
       return (
-        <div className="transcript-entry transcript-entry--permission">
-          <strong>Permission requested</strong>
-          <span>{entry.question}</span>
-          {entry.choices.length > 0 && <span className="transcript-entry__meta">{entry.choices.join(' / ')}</span>}
-        </div>
+        <PermissionRequestEntry
+          entry={entry}
+          autoYes={autoYes}
+          answered={entry.requestId ? answeredRequests.has(entry.requestId) : false}
+          answerLabel={entry.requestId ? answerLabels.get(entry.requestId) : undefined}
+          onRespond={onRespondPermission}
+        />
       );
     case 'input':
       return (
-        <div className="transcript-entry transcript-entry--permission">
-          <strong>Input requested</strong>
-          <span>{entry.question}</span>
-        </div>
+        <UserInputRequestEntry
+          entry={entry}
+          answered={entry.requestId ? answeredRequests.has(entry.requestId) : false}
+          answerLabel={entry.requestId ? answerLabels.get(entry.requestId) : undefined}
+          onRespond={onRespondUserInput}
+        />
       );
     case 'usage':
       return <div className="transcript-entry transcript-entry--usage">{entry.text || 'Usage updated'}</div>;
@@ -362,4 +448,110 @@ function TranscriptEntryView({ entry }: { entry: TranscriptEntry }): JSX.Element
         </div>
       );
   }
+}
+
+function PermissionRequestEntry({
+  entry,
+  autoYes,
+  answered,
+  answerLabel,
+  onRespond,
+}: {
+  entry: Extract<TranscriptEntry, { kind: 'permission' }>;
+  autoYes: boolean;
+  answered: boolean;
+  answerLabel?: string;
+  onRespond: (requestId: string, decision: 'approve' | 'reject') => Promise<void>;
+}): JSX.Element {
+  const disabled = answered || !entry.requestId;
+
+  return (
+    <div className="transcript-entry transcript-entry--permission">
+      <strong>Permission requested</strong>
+      <span>{entry.question}</span>
+      {entry.choices.length > 0 && <span className="transcript-entry__meta">{entry.choices.join(' / ')}</span>}
+      {autoYes ? (
+        <span className="transcript-entry__meta">AutoYes is enabled; permission will be handled by the daemon.</span>
+      ) : (
+        <div className="transcript-request__actions">
+          <button
+            type="button"
+            className="transcript-request__button"
+            disabled={disabled}
+            onClick={() => entry.requestId && void onRespond(entry.requestId, 'approve')}
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            className="transcript-request__button transcript-request__button--secondary"
+            disabled={disabled}
+            onClick={() => entry.requestId && void onRespond(entry.requestId, 'reject')}
+          >
+            Reject
+          </button>
+          {answered && answerLabel && <span className="transcript-request__state">{answerLabel}</span>}
+          {!entry.requestId && <span className="transcript-entry__meta">Missing request id.</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserInputRequestEntry({
+  entry,
+  answered,
+  answerLabel,
+  onRespond,
+}: {
+  entry: Extract<TranscriptEntry, { kind: 'input' }>;
+  answered: boolean;
+  answerLabel?: string;
+  onRespond: (requestId: string, answer: string, wasFreeform: boolean) => Promise<void>;
+}): JSX.Element {
+  const [freeformText, setFreeformText] = useState('');
+  const disabled = answered || !entry.requestId;
+  const canSendFreeform = freeformText.trim().length > 0 && !disabled;
+
+  const submitFreeform = (event: FormEvent): void => {
+    event.preventDefault();
+    const answer = freeformText.trim();
+    if (!entry.requestId || !answer || answered) return;
+    setFreeformText('');
+    void onRespond(entry.requestId, answer, true);
+  };
+
+  return (
+    <div className="transcript-entry transcript-entry--permission">
+      <strong>Input requested</strong>
+      <span>{entry.question}</span>
+      <div className="transcript-request__actions">
+        {entry.choices.map((choice) => (
+          <button
+            type="button"
+            key={choice}
+            className="transcript-request__button"
+            disabled={disabled}
+            onClick={() => entry.requestId && void onRespond(entry.requestId, choice, false)}
+          >
+            {choice}
+          </button>
+        ))}
+        {answered && answerLabel && <span className="transcript-request__state">{answerLabel}</span>}
+        {!entry.requestId && <span className="transcript-entry__meta">Missing request id.</span>}
+      </div>
+      <form className="transcript-request__freeform" onSubmit={submitFreeform}>
+        <input
+          type="text"
+          value={freeformText}
+          placeholder="Type a response…"
+          disabled={disabled}
+          onChange={(event) => setFreeformText(event.target.value)}
+        />
+        <button type="submit" className="transcript-request__button" disabled={!canSendFreeform}>
+          Send
+        </button>
+      </form>
+    </div>
+  );
 }

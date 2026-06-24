@@ -129,6 +129,8 @@ export interface Request {
     | 'SendMessage'
     | 'AbortTurn'
     | 'GetTranscript'
+    | 'RespondPermission'
+    | 'RespondUserInput'
     | string;
   session?: string;
   program?: string;
@@ -138,6 +140,10 @@ export interface Request {
   autoYes?: boolean;
   enabled?: boolean;
   message?: string;
+  requestId?: string;
+  decision?: 'approve' | 'reject';
+  answer?: string;
+  freeform?: boolean;
   data?: string;
   mode?: string;
   withANSI?: boolean;
@@ -420,6 +426,35 @@ export class ControlClient {
     const response = await this.call({ method: 'AbortTurn', session });
     if (!response.ok) {
       throw new Error(response.error || 'AbortTurn failed');
+    }
+  }
+
+  public async respondPermission(
+    session: string,
+    requestId: string,
+    decision: 'approve' | 'reject',
+  ): Promise<void> {
+    const response = await this.call({ method: 'RespondPermission', session, requestId, decision });
+    if (!response.ok) {
+      throw new Error(response.error || 'RespondPermission failed');
+    }
+  }
+
+  public async respondUserInput(
+    session: string,
+    requestId: string,
+    answer: string,
+    wasFreeform: boolean,
+  ): Promise<void> {
+    const response = await this.call({
+      method: 'RespondUserInput',
+      session,
+      requestId,
+      answer,
+      freeform: wasFreeform,
+    });
+    if (!response.ok) {
+      throw new Error(response.error || 'RespondUserInput failed');
     }
   }
 

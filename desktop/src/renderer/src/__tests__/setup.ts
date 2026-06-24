@@ -33,6 +33,8 @@ const mockCs = {
   closeRichStream: asyncNoop,
   sendMessage: asyncNoop,
   abortTurn: asyncNoop,
+  respondPermission: asyncNoop,
+  respondUserInput: asyncNoop,
   getTranscript: async () => [],
   detectShells: async () => [],
   pickFolder: async () => null,
