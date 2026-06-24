@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -301,6 +302,14 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodAttach:
 		return h.attachSession(req)
+	case proto.MethodOpenRichStream:
+		return h.openRichStream(req)
+	case proto.MethodSendMessage:
+		return h.sendRichMessage(req)
+	case proto.MethodAbortTurn:
+		return h.abortRichTurn(req)
+	case proto.MethodGetTranscript:
+		return h.getRichTranscript(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodListWorkspaces:
@@ -496,6 +505,185 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 	h.logger.Printf("attach pipe created session=%q seq=%d pipe=%q alive=%v", req.Session, seq, pipe, alive)
 	go h.runAttach(sess, ln, token, req.Cols, req.Rows)
 	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token, Alive: alive, ExitCode: info.ExitCode}
+}
+
+func (h *host) richSession(req *proto.Request) (*sdkSession, *proto.Response) {
+	sess, ok := h.getSession(req.Session)
+	if !ok {
+		return nil, proto.Errorf(req.ID, "no such session: %s", req.Session)
+	}
+	rich, ok := sess.(*sdkSession)
+	if !ok {
+		return nil, proto.Errorf(req.ID, "session %q is not a rich session", req.Session)
+	}
+	return rich, nil
+}
+
+func (h *host) openRichStream(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	sid, err := currentUserSID()
+	if err != nil {
+		h.logger.Printf("rich stream current user sid failed session=%q err=%v", req.Session, err)
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	sddl, err := currentUserSDDL()
+	if err != nil {
+		h.logger.Printf("rich stream current user sddl failed session=%q err=%v", req.Session, err)
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	seq := h.attachSeq.Add(1)
+	pipe := fmt.Sprintf(`\\.\pipe\hangar-rich-%s-%s-%d`, sid, req.Session, seq)
+	ln, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
+	if err != nil {
+		h.logger.Printf("rich stream listen failed session=%q seq=%d err=%v", req.Session, seq, err)
+		return proto.Errorf(req.ID, "rich stream listen: %v", err)
+	}
+	token, err := randomNonceHex(16)
+	if err != nil {
+		_ = ln.Close()
+		h.logger.Printf("rich stream token failed session=%q seq=%d err=%v", req.Session, seq, err)
+		return proto.Errorf(req.ID, "rich stream token: %v", err)
+	}
+	alive := sess.alive()
+	info := sess.info()
+	h.logger.Printf("rich stream pipe created session=%q seq=%d pipe=%q alive=%v", req.Session, seq, pipe, alive)
+	go h.runRichStream(sess, ln, token, req.Since)
+	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token, Alive: alive, ExitCode: info.ExitCode}
+}
+
+func (h *host) sendRichMessage(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	go func() {
+		defer recoverGoroutine("host.sendRichMessage")
+		if err := sess.richSend(context.Background(), req.Message); err != nil {
+			h.logger.Printf("rich send failed session=%q err=%v", req.Session, err)
+		}
+	}()
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) abortRichTurn(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richAbort(context.Background()); err != nil {
+		return proto.Errorf(req.ID, "abort rich turn: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) getRichTranscript(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	return &proto.Response{ID: req.ID, OK: true, Frames: sess.richTranscript(req.Since)}
+}
+
+func (h *host) runRichStream(sess *sdkSession, ln net.Listener, token string, since uint64) {
+	defer ln.Close()
+	defer recoverGoroutine("host.runRichStream")
+	info := sess.info()
+	sessionName := info.Name
+	reason := "completed"
+	defer func() {
+		h.logger.Printf("rich stream teardown session=%q reason=%s", sessionName, reason)
+	}()
+
+	connected := make(chan struct{})
+	go func() {
+		select {
+		case <-connected:
+		case <-time.After(10 * time.Second):
+			h.logger.Printf("rich stream watchdog teardown session=%q reason=no-client-timeout", sessionName)
+			_ = ln.Close()
+		case <-h.shutdownCh:
+			h.logger.Printf("rich stream watchdog teardown session=%q reason=host-shutdown", sessionName)
+			_ = ln.Close()
+		}
+	}()
+
+	conn, err := ln.Accept()
+	close(connected)
+	if err != nil {
+		reason = fmt.Sprintf("accept failed: %v", err)
+		h.logger.Printf("rich stream accept failed session=%q err=%v", sessionName, err)
+		return
+	}
+	h.logger.Printf("rich stream client connected session=%q remote=%q", sessionName, conn.RemoteAddr())
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	tok, err := proto.ReadFrameBytes(conn)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		reason = fmt.Sprintf("token read failed: %v", err)
+		h.logger.Printf("rich stream token read failed session=%q err=%v", sessionName, err)
+		return
+	}
+	if string(tok) != token {
+		reason = "token mismatch"
+		h.logger.Printf("rich stream token mismatch session=%q tokenBytes=%d", sessionName, len(tok))
+		return
+	}
+
+	snapshot, sub := sess.richSubscribe(since)
+	defer sess.richUnsubscribe(sub)
+
+	for _, frame := range snapshot {
+		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		err := proto.WriteFrame(conn, frame)
+		_ = conn.SetWriteDeadline(time.Time{})
+		if err != nil {
+			reason = fmt.Sprintf("snapshot write failed: %v", err)
+			h.logger.Printf("rich stream snapshot write failed session=%q seq=%d err=%v", sessionName, frame.Seq, err)
+			return
+		}
+	}
+	h.logger.Printf("rich stream snapshot written session=%q frames=%d", sessionName, len(snapshot))
+
+	clientGone := make(chan struct{})
+	go func() {
+		defer recoverGoroutine("host.runRichStream.disconnect")
+		var one [1]byte
+		for {
+			if _, err := conn.Read(one[:]); err != nil {
+				close(clientGone)
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case b, ok := <-sub.ch:
+			if !ok {
+				reason = "session-unsubscribed"
+				return
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			err := proto.WriteRawFrame(conn, b)
+			_ = conn.SetWriteDeadline(time.Time{})
+			if err != nil {
+				reason = fmt.Sprintf("stream write failed: %v", err)
+				h.logger.Printf("rich stream output ended session=%q err=%v", sessionName, err)
+				return
+			}
+		case <-clientGone:
+			reason = "client detached"
+			return
+		case <-h.shutdownCh:
+			reason = "host shutdown"
+			return
+		}
+	}
 }
 
 func (h *host) runAttach(sess managedSession, ln net.Listener, token string, cols, rows int) {

@@ -29,6 +29,9 @@ type sdkSession struct {
 
 	mu       sync.Mutex
 	subs     map[*subscriber]struct{}
+	richLog  []proto.EventFrame
+	richSeq  uint64
+	richSubs map[*richSub]struct{}
 	lastSeen int64 // lastOutputUnixMs observed at the previous hasUpdated() call
 	exitCode int
 	closed   bool
@@ -40,19 +43,25 @@ type sdkSession struct {
 func newSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &sdkSession{
-		name:    name,
-		program: program,
-		ctx:     ctx,
-		cancel:  cancel,
-		subs:    make(map[*subscriber]struct{}),
+		name:     name,
+		program:  program,
+		ctx:      ctx,
+		cancel:   cancel,
+		subs:     make(map[*subscriber]struct{}),
+		richSubs: make(map[*richSub]struct{}),
 	}
 	s.sess = copilotsdk.New(copilotsdk.Config{
 		WorkDir:   workDir,
 		BaseDir:   baseDir,
 		SessionID: sessionID,
 		AutoYes:   autoYes,
-		OnEvent:   onEvent,
-		Logger:    logger,
+		OnEvent: func(ev copilot.SessionEvent) {
+			s.onSDKEvent(ev)
+			if onEvent != nil {
+				onEvent(ev)
+			}
+		},
+		Logger: logger,
 	})
 	return s
 }
@@ -129,9 +138,14 @@ func (s *sdkSession) close() error {
 	s.closed = true
 	subs := s.subs
 	s.subs = make(map[*subscriber]struct{})
+	richSubs := s.richSubs
+	s.richSubs = make(map[*richSub]struct{})
 	s.mu.Unlock()
 	s.cancel()
 	for sub := range subs {
+		close(sub.ch)
+	}
+	for sub := range richSubs {
 		close(sub.ch)
 	}
 	return s.sess.Close()
