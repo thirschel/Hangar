@@ -2,7 +2,11 @@
 
 package winhost
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 // TestSDKSessionAdapter exercises the managedSession mapping that does not need a
 // live Copilot runtime (start() is covered by the package's e2e tests).
@@ -51,6 +55,12 @@ func TestSDKSessionAdapter(t *testing.T) {
 
 	s.setAutoYes(false)
 	s.setAutoYes(true)
+	if err := s.richRespondPermission(context.Background(), "perm-1", true); err == nil || !strings.Contains(err.Error(), "session not started") {
+		t.Fatalf("richRespondPermission error = %v, want not-started error", err)
+	}
+	if err := s.richRespondUserInput("ui-1", "answer", true); err == nil || !strings.Contains(err.Error(), "no pending user input") {
+		t.Fatalf("richRespondUserInput error = %v, want no-pending error", err)
+	}
 
 	if err := s.close(); err != nil {
 		t.Errorf("close returned err: %v", err)

@@ -61,7 +61,8 @@ func newSDKSession(name, program, workDir, baseDir string, autoYes bool, session
 				onEvent(ev)
 			}
 		},
-		Logger: logger,
+		OnPrompt: s.onSDKPrompt,
+		Logger:   logger,
 	})
 	return s
 }
@@ -109,6 +110,18 @@ func (s *sdkSession) bracketedPasteEnabled() bool { return false }
 func (s *sdkSession) lastOutputUnixMs() int64 { return s.sess.LastOutputUnixMs() }
 
 func (s *sdkSession) setAutoYes(enabled bool) { s.sess.SetAutoYes(enabled) }
+
+func (s *sdkSession) onSDKPrompt(prompt copilotsdk.Prompt) {
+	if prompt.Kind != "user_input" && prompt.Kind != "elicitation" {
+		return
+	}
+	s.emitFrame(proto.EventFrame{
+		Kind:      proto.EventKindUserInputRequest,
+		RequestID: prompt.RequestID,
+		Question:  prompt.Question,
+		Choices:   append([]string(nil), prompt.Choices...),
+	})
+}
 
 // Trust prompts are a terminal concept; the SDK gates tools structurally.
 func (s *sdkSession) armTrustApproval(reason string, expiresAt time.Time) {}

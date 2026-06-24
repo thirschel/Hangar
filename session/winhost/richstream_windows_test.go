@@ -8,6 +8,7 @@ import (
 	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
+	"hangar/session/copilotsdk"
 	"hangar/session/winhost/proto"
 )
 
@@ -33,6 +34,7 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 		{Data: &copilot.SessionTitleChangedData{Title: "New title"}},
 		{Data: &copilot.SessionIdleData{Aborted: &aborted}},
 	}
+
 	for _, ev := range events {
 		s.onSDKEvent(ev)
 	}
@@ -94,5 +96,42 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live rich frame")
+	}
+}
+
+func TestSDKPromptEmitsUserInputFrame(t *testing.T) {
+	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", nil, nil)
+	defer s.close()
+
+	_, sub := s.richSubscribe(0)
+	defer s.richUnsubscribe(sub)
+	s.onSDKPrompt(copilotsdk.Prompt{
+		Kind:      "user_input",
+		RequestID: "ui-1",
+		Question:  "Pick one",
+		Choices:   []string{"A", "B"},
+	})
+
+	frames := s.richTranscript(0)
+	if len(frames) != 1 {
+		t.Fatalf("richTranscript returned %d frames, want 1", len(frames))
+	}
+	if frames[0].Seq != 1 || frames[0].Kind != proto.EventKindUserInputRequest ||
+		frames[0].RequestID != "ui-1" || frames[0].Question != "Pick one" ||
+		len(frames[0].Choices) != 2 || frames[0].Choices[1] != "B" {
+		t.Fatalf("prompt frame = %+v", frames[0])
+	}
+
+	select {
+	case raw := <-sub.ch:
+		var live proto.EventFrame
+		if err := json.Unmarshal(raw, &live); err != nil {
+			t.Fatalf("live frame unmarshal: %v", err)
+		}
+		if live.Kind != proto.EventKindUserInputRequest || live.RequestID != "ui-1" {
+			t.Fatalf("live frame = %+v", live)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live prompt frame")
 	}
 }

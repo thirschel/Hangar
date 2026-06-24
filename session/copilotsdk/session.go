@@ -11,6 +11,8 @@ package copilotsdk
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -52,6 +54,16 @@ func (s Status) String() string {
 // detached model. (approve=false, pend=false) rejects.
 type PermissionDecider func(req copilot.PermissionRequest) (approve, pend bool)
 
+// Prompt is a daemon-synthesized interactive prompt that must be surfaced to a
+// client and correlated back with RespondUserInput.
+type Prompt struct {
+	Kind          string
+	RequestID     string
+	Question      string
+	Choices       []string
+	AllowFreeform bool
+}
+
 // Config configures a Session. Handlers are optional; safe non-blocking defaults
 // are used so the daemon never hangs when no interactive client is attached.
 type Config struct {
@@ -71,6 +83,9 @@ type Config struct {
 	// OnEvent receives every SDK event (after internal status tracking). A nil
 	// sink is tolerated (events are dropped) but yields no UI.
 	OnEvent func(copilot.SessionEvent)
+	// OnPrompt receives SDK handler prompts that are not emitted as SDK events
+	// (ask_user / elicitation). The handler then blocks until RespondUserInput.
+	OnPrompt func(Prompt)
 	// Decide overrides the permission policy. When nil, AutoYes governs: approve
 	// when AutoYes is set, otherwise leave the request pending.
 	Decide PermissionDecider
@@ -90,6 +105,16 @@ type Session struct {
 	started    bool
 	autoYes    atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
 	lastOutput atomic.Int64 // unix-ms of the last output-changing event
+
+	promptMu sync.Mutex
+	prompts  map[string]chan userInputReply
+	closing  bool
+}
+
+type userInputReply struct {
+	answer   string
+	freeform bool
+	ok       bool
 }
 
 // New builds a Session from cfg. Call Start (fresh) or Resume (existing id).
@@ -97,7 +122,7 @@ func New(cfg Config) *Session {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stderr, "[copilotsdk] ", log.LstdFlags)
 	}
-	s := &Session{cfg: cfg, status: StatusLoading}
+	s := &Session{cfg: cfg, status: StatusLoading, prompts: make(map[string]chan userInputReply)}
 	s.autoYes.Store(cfg.AutoYes)
 	return s
 }
@@ -190,6 +215,9 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 	s.mu.Lock()
 	s.client, s.sess, s.unsub, s.started, s.status = client, sess, unsub, true, StatusReady
 	s.mu.Unlock()
+	s.promptMu.Lock()
+	s.closing = false
+	s.promptMu.Unlock()
 	s.touch()
 	return nil
 }
@@ -217,6 +245,29 @@ func (s *Session) Abort(ctx context.Context) error {
 	return sess.Abort(ctx)
 }
 
+// RespondPermission resolves a pending permission request out-of-band by the
+// SDK requestID emitted on permission.requested events.
+func (s *Session) RespondPermission(ctx context.Context, requestID string, approve bool) error {
+	sess := s.session()
+	if sess == nil {
+		return fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Permissions == nil {
+		return fmt.Errorf("session permissions RPC is unavailable")
+	}
+	var decision csrpc.PermissionDecision
+	if approve {
+		decision = &csrpc.PermissionDecisionApproveOnce{}
+	} else {
+		decision = &csrpc.PermissionDecisionReject{}
+	}
+	_, err := sess.RPC.Permissions.HandlePendingPermissionRequest(ctx, &csrpc.PermissionDecisionRequest{
+		RequestID: requestID,
+		Result:    decision,
+	})
+	return err
+}
+
 // Transcript returns the persisted event history, used to repaint a (re)attaching
 // client without re-running the model. Survives compaction and daemon restarts.
 func (s *Session) Transcript(ctx context.Context) ([]copilot.SessionEvent, error) {
@@ -233,6 +284,7 @@ func (s *Session) Close() error {
 	unsub, sess, client := s.unsub, s.sess, s.client
 	s.sess, s.client, s.unsub, s.started = nil, nil, nil, false
 	s.mu.Unlock()
+	s.closePrompts()
 	if unsub != nil {
 		unsub()
 	}
@@ -312,12 +364,107 @@ func (s *Session) decide(req copilot.PermissionRequest) (approve, pend bool) {
 	return false, true // default: leave pending for an interactive client
 }
 
-// onUserInput must answer synchronously (ask_user has no "pending" form). Until an
-// interactive client is wired, decline so the daemon never hangs.
-func (s *Session) onUserInput(_ copilot.UserInputRequest, _ copilot.UserInputInvocation) (copilot.UserInputResponse, error) {
-	return copilot.UserInputResponse{}, fmt.Errorf("no interactive client available to answer ask_user")
+// onUserInput must answer synchronously (ask_user has no requestID-keyed
+// out-of-band resolve). The SDK invokes it on its own goroutine, so it is safe to
+// block until the host answers through RespondUserInput.
+func (s *Session) onUserInput(req copilot.UserInputRequest, _ copilot.UserInputInvocation) (copilot.UserInputResponse, error) {
+	allowFreeform := false
+	if req.AllowFreeform != nil {
+		allowFreeform = *req.AllowFreeform
+	}
+	reply, err := s.promptAndWait(Prompt{
+		Kind:          "user_input",
+		Question:      req.Question,
+		Choices:       append([]string(nil), req.Choices...),
+		AllowFreeform: allowFreeform,
+	})
+	if err != nil {
+		return copilot.UserInputResponse{}, err
+	}
+	return copilot.UserInputResponse{Answer: reply.answer, WasFreeform: reply.freeform}, nil
 }
 
-func (s *Session) onElicitation(_ copilot.ElicitationContext) (copilot.ElicitationResult, error) {
-	return copilot.ElicitationResult{}, fmt.Errorf("no interactive client available to answer elicitation")
+func (s *Session) onElicitation(req copilot.ElicitationContext) (copilot.ElicitationResult, error) {
+	reply, err := s.promptAndWait(Prompt{
+		Kind:          "elicitation",
+		Question:      req.Message,
+		AllowFreeform: true,
+	})
+	if err != nil {
+		return copilot.ElicitationResult{Action: copilot.ElicitationActionDecline}, err
+	}
+	field := "answer"
+	if req.RequestedSchema != nil {
+		for name := range req.RequestedSchema.Properties {
+			field = name
+			break
+		}
+	}
+	return copilot.ElicitationResult{
+		Action:  copilot.ElicitationActionAccept,
+		Content: map[string]copilot.ElicitationFieldValue{field: reply.answer},
+	}, nil
+}
+
+func (s *Session) promptAndWait(prompt Prompt) (userInputReply, error) {
+	if s.cfg.OnPrompt == nil {
+		return userInputReply{}, fmt.Errorf("no interactive client available to answer %s", prompt.Kind)
+	}
+	id, err := newPromptRequestID()
+	if err != nil {
+		return userInputReply{}, err
+	}
+	prompt.RequestID = id
+	ch := make(chan userInputReply, 1)
+
+	s.promptMu.Lock()
+	if s.closing {
+		s.promptMu.Unlock()
+		return userInputReply{}, fmt.Errorf("session is closing")
+	}
+	s.prompts[id] = ch
+	s.promptMu.Unlock()
+
+	s.setStatus(StatusWaiting)
+	s.touch()
+	s.cfg.OnPrompt(prompt)
+	reply := <-ch
+	if !reply.ok {
+		return userInputReply{}, fmt.Errorf("session closed before %s was answered", prompt.Kind)
+	}
+	return reply, nil
+}
+
+// RespondUserInput answers a pending ask_user or elicitation prompt generated by
+// this Session.
+func (s *Session) RespondUserInput(requestID, answer string, freeform bool) error {
+	s.promptMu.Lock()
+	ch, ok := s.prompts[requestID]
+	if ok {
+		delete(s.prompts, requestID)
+		ch <- userInputReply{answer: answer, freeform: freeform, ok: true}
+	}
+	s.promptMu.Unlock()
+	if !ok {
+		return fmt.Errorf("no pending user input request: %s", requestID)
+	}
+	return nil
+}
+
+func (s *Session) closePrompts() {
+	s.promptMu.Lock()
+	s.closing = true
+	for id, ch := range s.prompts {
+		delete(s.prompts, id)
+		ch <- userInputReply{ok: false}
+	}
+	s.promptMu.Unlock()
+}
+
+func newPromptRequestID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate prompt request id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }

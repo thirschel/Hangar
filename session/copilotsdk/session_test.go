@@ -1,9 +1,12 @@
 package copilotsdk
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
 )
@@ -106,5 +109,91 @@ func TestDecideDefaults(t *testing.T) {
 	custom := New(Config{AutoYes: true, Decide: func(copilot.PermissionRequest) (bool, bool) { return false, false }})
 	if approve, pend := custom.decide(nil); approve || pend {
 		t.Errorf("Decide override should reject, got approve=%v pend=%v", approve, pend)
+	}
+}
+
+func TestRespondPermissionNotStarted(t *testing.T) {
+	s := New(Config{})
+	err := s.RespondPermission(context.Background(), "perm-1", true)
+	if err == nil || !strings.Contains(err.Error(), "session not started") {
+		t.Fatalf("RespondPermission error = %v, want not-started error", err)
+	}
+}
+
+func TestUserInputPromptFlow(t *testing.T) {
+	prompts := make(chan Prompt, 1)
+	s := New(Config{OnPrompt: func(p Prompt) { prompts <- p }})
+	allowFreeform := true
+	done := make(chan struct {
+		resp copilot.UserInputResponse
+		err  error
+	}, 1)
+
+	go func() {
+		resp, err := s.onUserInput(copilot.UserInputRequest{
+			Question:      "Pick one",
+			Choices:       []string{"A", "B"},
+			AllowFreeform: &allowFreeform,
+		}, copilot.UserInputInvocation{})
+		done <- struct {
+			resp copilot.UserInputResponse
+			err  error
+		}{resp: resp, err: err}
+	}()
+
+	var prompt Prompt
+	select {
+	case prompt = <-prompts:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for prompt")
+	}
+	if prompt.Kind != "user_input" || prompt.RequestID == "" || prompt.Question != "Pick one" || !prompt.AllowFreeform {
+		t.Fatalf("prompt = %+v", prompt)
+	}
+	if len(prompt.Choices) != 2 || prompt.Choices[0] != "A" || prompt.Choices[1] != "B" {
+		t.Fatalf("prompt choices = %v", prompt.Choices)
+	}
+	if err := s.RespondUserInput(prompt.RequestID, "B", false); err != nil {
+		t.Fatalf("RespondUserInput: %v", err)
+	}
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("onUserInput returned error: %v", got.err)
+		}
+		if got.resp.Answer != "B" || got.resp.WasFreeform {
+			t.Fatalf("response = %+v", got.resp)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for onUserInput response")
+	}
+}
+
+func TestCloseUnblocksPendingUserInput(t *testing.T) {
+	prompts := make(chan Prompt, 1)
+	s := New(Config{OnPrompt: func(p Prompt) { prompts <- p }})
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := s.onUserInput(copilot.UserInputRequest{Question: "Continue?"}, copilot.UserInputInvocation{})
+		done <- err
+	}()
+
+	select {
+	case <-prompts:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for prompt")
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "session closed") {
+			t.Fatalf("onUserInput error = %v, want session closed error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock onUserInput")
 	}
 }

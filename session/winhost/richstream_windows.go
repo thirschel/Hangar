@@ -19,7 +19,10 @@ func (s *sdkSession) onSDKEvent(ev copilot.SessionEvent) {
 	if !ok {
 		return
 	}
+	s.emitFrame(frame)
+}
 
+func (s *sdkSession) emitFrame(frame proto.EventFrame) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -95,6 +98,14 @@ func (s *sdkSession) richSend(ctx context.Context, text string) error {
 
 func (s *sdkSession) richAbort(ctx context.Context) error {
 	return s.sess.Abort(ctx)
+}
+
+func (s *sdkSession) richRespondPermission(ctx context.Context, requestID string, approve bool) error {
+	return s.sess.RespondPermission(ctx, requestID, approve)
+}
+
+func (s *sdkSession) richRespondUserInput(requestID, answer string, freeform bool) error {
+	return s.sess.RespondUserInput(requestID, answer, freeform)
 }
 
 func (s *sdkSession) richTranscript(since uint64) []proto.EventFrame {

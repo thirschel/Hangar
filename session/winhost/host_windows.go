@@ -310,6 +310,10 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.abortRichTurn(req)
 	case proto.MethodGetTranscript:
 		return h.getRichTranscript(req)
+	case proto.MethodRespondPermission:
+		return h.respondRichPermission(req)
+	case proto.MethodRespondUserInput:
+		return h.respondRichUserInput(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodListWorkspaces:
@@ -585,6 +589,28 @@ func (h *host) getRichTranscript(req *proto.Request) *proto.Response {
 		return errResp
 	}
 	return &proto.Response{ID: req.ID, OK: true, Frames: sess.richTranscript(req.Since)}
+}
+
+func (h *host) respondRichPermission(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richRespondPermission(context.Background(), req.RequestID, req.Decision == proto.DecisionApprove); err != nil {
+		return proto.Errorf(req.ID, "respond permission: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) respondRichUserInput(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richRespondUserInput(req.RequestID, req.Answer, req.Freeform); err != nil {
+		return proto.Errorf(req.ID, "respond user input: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
 }
 
 func (h *host) runRichStream(sess *sdkSession, ln net.Listener, token string, since uint64) {
