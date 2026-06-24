@@ -80,6 +80,38 @@ func TestLoadMCPServers_BadJSON(t *testing.T) {
 	}
 }
 
+func TestMCPServerNamesAccessor(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "mcp-config.json")
+	content := `{"mcpServers":{
+		"zeta":{"type":"http","url":"https://example.com/z","headers":{"Authorization":"Bearer secret"}},
+		"alpha":{"type":"http","url":"https://example.com/a"}
+	}}`
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{MCPConfigPath: p})
+	cfg := s.sessionConfig()
+	if len(cfg.MCPServers) != 2 {
+		t.Fatalf("sessionConfig MCPServers len = %d, want 2", len(cfg.MCPServers))
+	}
+	names := s.MCPServerNames()
+	if len(names) != 2 || names[0] != "alpha" || names[1] != "zeta" {
+		t.Fatalf("MCPServerNames = %v, want [alpha zeta]", names)
+	}
+	names[0] = "mutated"
+	if got := s.MCPServerNames(); got[0] != "alpha" {
+		t.Fatalf("MCPServerNames returned an alias: %v", got)
+	}
+
+	disabled := New(Config{MCPConfigPath: p, DisableMCP: true})
+	disabled.sessionConfig()
+	if got := disabled.MCPServerNames(); got != nil {
+		t.Fatalf("disabled MCPServerNames = %v, want nil", got)
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	cases := map[Status]string{
 		StatusLoading: "loading",

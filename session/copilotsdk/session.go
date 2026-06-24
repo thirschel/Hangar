@@ -107,6 +107,7 @@ type Session struct {
 	mu         sync.RWMutex
 	status     Status
 	started    bool
+	mcpServers []string
 	autoYes    atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
 	lastOutput atomic.Int64 // unix-ms of the last output-changing event
 
@@ -151,6 +152,7 @@ func (s *Session) clientOptions() *copilot.ClientOptions {
 func (s *Session) sessionConfig() *copilot.SessionConfig {
 	sc := &copilot.SessionConfig{
 		Streaming:            copilot.Bool(true),
+		OnEvent:              s.handleEvent,
 		OnPermissionRequest:  s.onPermission,
 		OnUserInputRequest:   s.onUserInput,   // always register, else ask_user blocks
 		OnElicitationRequest: s.onElicitation, // always register, else elicitation blocks
@@ -162,11 +164,11 @@ func (s *Session) sessionConfig() *copilot.SessionConfig {
 		sc.SessionID = s.cfg.SessionID
 	}
 	if !s.cfg.DisableMCP {
-		if servers, err := loadMCPServers(s.mcpConfigPath()); err != nil {
-			s.cfg.Logger.Printf("mcp forward: %v (continuing without forwarded servers)", err)
-		} else if len(servers) > 0 {
+		if servers := s.forwardedMCPServers(); len(servers) > 0 {
 			sc.MCPServers = servers
 		}
+	} else {
+		s.setMCPServerNames(nil)
 	}
 	return sc
 }
@@ -201,12 +203,21 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 		err  error
 	)
 	if resume {
-		sess, err = client.ResumeSession(ctx, s.cfg.SessionID, &copilot.ResumeSessionConfig{
+		resumeConfig := &copilot.ResumeSessionConfig{
+			OnEvent:              s.handleEvent,
 			OnPermissionRequest:  s.onPermission,
 			OnUserInputRequest:   s.onUserInput,
 			OnElicitationRequest: s.onElicitation,
 			Streaming:            copilot.Bool(true),
-		})
+		}
+		if !s.cfg.DisableMCP {
+			if servers := s.forwardedMCPServers(); len(servers) > 0 {
+				resumeConfig.MCPServers = servers
+			}
+		} else {
+			s.setMCPServerNames(nil)
+		}
+		sess, err = client.ResumeSession(ctx, s.cfg.SessionID, resumeConfig)
 	} else {
 		sess, err = client.CreateSession(ctx, s.sessionConfig())
 	}
@@ -214,10 +225,8 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 		_ = client.Stop()
 		return fmt.Errorf("create/resume session: %w", err)
 	}
-	unsub := sess.On(s.handleEvent)
-
 	s.mu.Lock()
-	s.client, s.sess, s.unsub, s.started, s.status = client, sess, unsub, true, StatusReady
+	s.client, s.sess, s.unsub, s.started, s.status = client, sess, nil, true, StatusReady
 	s.mu.Unlock()
 	s.promptMu.Lock()
 	s.closing = false
@@ -317,10 +326,44 @@ func (s *Session) Status() Status {
 // LastOutputUnixMs is the unix-ms time of the last output-changing event (0 if none).
 func (s *Session) LastOutputUnixMs() int64 { return s.lastOutput.Load() }
 
+// MCPServerNames returns the names of MCP servers forwarded into the SDK session.
+// It intentionally exposes names only, never URLs, headers, tokens, or commands.
+func (s *Session) MCPServerNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.mcpServers) == 0 {
+		return nil
+	}
+	out := make([]string, len(s.mcpServers))
+	copy(out, s.mcpServers)
+	return out
+}
+
 func (s *Session) session() *copilot.Session {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.sess
+}
+
+func (s *Session) forwardedMCPServers() map[string]copilot.MCPServerConfig {
+	servers, err := loadMCPServers(s.mcpConfigPath())
+	if err != nil {
+		s.cfg.Logger.Printf("mcp forward: %v (continuing without forwarded servers)", err)
+		s.setMCPServerNames(nil)
+		return nil
+	}
+	s.setMCPServerNames(sortedMCPServerNames(servers))
+	return servers
+}
+
+func (s *Session) setMCPServerNames(names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(names) == 0 {
+		s.mcpServers = nil
+		return
+	}
+	s.mcpServers = append([]string(nil), names...)
 }
 
 func (s *Session) setStatus(st Status) {

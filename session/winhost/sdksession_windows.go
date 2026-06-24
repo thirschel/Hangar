@@ -34,6 +34,8 @@ type sdkSession struct {
 	richLog     []proto.EventFrame
 	richSeq     uint64
 	richSubs    map[*richSub]struct{}
+	bufferMCP   bool
+	bufferedMCP []copilot.SessionEvent
 	lastSeen    int64 // lastOutputUnixMs observed at the previous hasUpdated() call
 	exitCode    int
 	closed      bool
@@ -71,25 +73,107 @@ func newSDKSession(name, program, workDir, baseDir string, autoYes bool, session
 	return s
 }
 
-func (s *sdkSession) start() error { return s.sess.Start(s.ctx) }
+func (s *sdkSession) start() error {
+	s.beginMCPStartupBuffer()
+	if err := s.sess.Start(s.ctx); err != nil {
+		s.cancelMCPStartupBuffer()
+		return err
+	}
+	s.emitConfiguredMCPServersPending()
+	s.flushMCPStartupBuffer()
+	return nil
+}
 
 func (s *sdkSession) startResumed() error {
+	s.beginMCPStartupBuffer()
 	if err := s.sess.Resume(s.ctx); err != nil {
+		s.cancelMCPStartupBuffer()
 		s.logf("SDK resume failed for session %q: %v; starting fresh", s.name, err)
+		s.beginMCPStartupBuffer()
 		if startErr := s.sess.Start(s.ctx); startErr != nil {
+			s.cancelMCPStartupBuffer()
 			return fmt.Errorf("resume sdk session: %v; fresh start: %w", err, startErr)
 		}
+		s.emitConfiguredMCPServersPending()
+		s.flushMCPStartupBuffer()
 		return nil
 	}
+	s.emitConfiguredMCPServersPending()
+	s.flushMCPStartupBuffer()
 	evs, err := s.sess.Transcript(s.ctx)
 	if err != nil {
 		s.logf("SDK transcript replay failed for session %q: %v", s.name, err)
 		return nil
 	}
 	for _, ev := range evs {
+		if isMCPStatusEvent(ev) {
+			continue
+		}
 		s.translateAndEmit(ev)
 	}
 	return nil
+}
+
+func (s *sdkSession) beginMCPStartupBuffer() {
+	s.mu.Lock()
+	s.bufferMCP = true
+	s.bufferedMCP = nil
+	s.mu.Unlock()
+}
+
+func (s *sdkSession) bufferMCPStartupEvent(ev copilot.SessionEvent) bool {
+	if !isMCPStatusEvent(ev) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.bufferMCP {
+		return false
+	}
+	s.bufferedMCP = append(s.bufferedMCP, ev)
+	return true
+}
+
+func (s *sdkSession) flushMCPStartupBuffer() {
+	for {
+		s.mu.Lock()
+		if len(s.bufferedMCP) == 0 {
+			s.bufferMCP = false
+			s.mu.Unlock()
+			return
+		}
+		buffered := append([]copilot.SessionEvent(nil), s.bufferedMCP...)
+		s.bufferedMCP = nil
+		s.mu.Unlock()
+
+		for _, ev := range buffered {
+			s.translateAndEmit(ev)
+		}
+	}
+}
+
+func (s *sdkSession) cancelMCPStartupBuffer() {
+	s.mu.Lock()
+	s.bufferedMCP = nil
+	s.bufferMCP = false
+	s.mu.Unlock()
+}
+
+func (s *sdkSession) emitConfiguredMCPServersPending() {
+	s.emitMCPServerPendingFrames(s.sess.MCPServerNames())
+}
+
+func (s *sdkSession) emitMCPServerPendingFrames(names []string) {
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		s.emitFrame(proto.EventFrame{
+			Kind:      proto.EventKindMCPStatus,
+			MCPServer: name,
+			Status:    "pending",
+		})
+	}
 }
 
 func (s *sdkSession) logf(format string, args ...any) {

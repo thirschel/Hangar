@@ -130,6 +130,28 @@ func TestOnSDKEventMCPStatusFrames(t *testing.T) {
 	}
 }
 
+func TestPermissionFrameIncludesQuestionAndTool(t *testing.T) {
+	frame, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.PermissionRequestedData{
+		RequestID: "perm-shell",
+		PromptRequest: &copilot.PermissionPromptRequestCommands{
+			FullCommandText: "echo PERMTEST_1773",
+			Intention:       "print the test marker",
+		},
+	}})
+	if !ok {
+		t.Fatal("sdkEventFrame did not map permission request")
+	}
+	if frame.Kind != proto.EventKindPermissionRequest || frame.RequestID != "perm-shell" {
+		t.Fatalf("permission frame basics = %+v", frame)
+	}
+	if frame.Question != "Run shell command: echo PERMTEST_1773" {
+		t.Fatalf("permission Question = %q", frame.Question)
+	}
+	if frame.ToolName != "shell" {
+		t.Fatalf("permission ToolName = %q, want shell", frame.ToolName)
+	}
+}
+
 func TestSDKPromptEmitsUserInputFrame(t *testing.T) {
 	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", nil, nil)
 	defer s.close()

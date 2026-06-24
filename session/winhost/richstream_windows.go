@@ -15,6 +15,9 @@ type richSub struct {
 }
 
 func (s *sdkSession) onSDKEvent(ev copilot.SessionEvent) {
+	if s.bufferMCPStartupEvent(ev) {
+		return
+	}
 	s.translateAndEmit(ev)
 }
 
@@ -46,6 +49,15 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 		return
 	}
 	s.emitFrame(frame)
+}
+
+func isMCPStatusEvent(ev copilot.SessionEvent) bool {
+	switch ev.Data.(type) {
+	case *copilot.SessionMCPServersLoadedData, *copilot.SessionMCPServerStatusChangedData:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *sdkSession) emitFrame(frame proto.EventFrame) {
@@ -82,7 +94,12 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 	case *copilot.ToolExecutionCompleteData:
 		return proto.EventFrame{Kind: proto.EventKindToolComplete, ToolName: toolCompleteName(data)}, true
 	case *copilot.PermissionRequestedData:
-		return proto.EventFrame{Kind: proto.EventKindPermissionRequest, RequestID: data.RequestID}, true
+		return proto.EventFrame{
+			Kind:      proto.EventKindPermissionRequest,
+			RequestID: data.RequestID,
+			Question:  permissionSummary(data),
+			ToolName:  permissionToolName(data),
+		}, true
 	case *copilot.SessionTitleChangedData:
 		return proto.EventFrame{Kind: proto.EventKindTitle, Title: data.Title}, true
 	case *copilot.SessionIdleData:

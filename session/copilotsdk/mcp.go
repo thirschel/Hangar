@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	copilot "github.com/github/copilot-sdk/go"
 )
@@ -76,4 +77,16 @@ func loadMCPServers(path string) (map[string]copilot.MCPServerConfig, error) {
 		}
 	}
 	return out, nil
+}
+
+func sortedMCPServerNames(servers map[string]copilot.MCPServerConfig) []string {
+	if len(servers) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
