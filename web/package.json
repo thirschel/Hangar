@@ -15,7 +15,7 @@
     "next": "15.5.18"
   },
   "devDependencies": {
-    "typescript": "^5",
+    "typescript": "^6",
     "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
