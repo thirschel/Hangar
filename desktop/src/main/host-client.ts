@@ -19,6 +19,7 @@ export interface SessionInfo {
 
 export interface WorkspaceInfo {
   id: string;
+  kind?: string;
   title: string;
   program: string;
   repoPath: string;
@@ -62,6 +63,21 @@ export interface FileDiffInfo {
   path: string;
   added: number;
   removed: number;
+}
+
+export interface EventFrame {
+  seq: number;
+  kind: string;
+  text?: string;
+  toolName?: string;
+  mcpServer?: string;
+  requestId?: string;
+  question?: string;
+  choices?: string[];
+  title?: string;
+  status?: string;
+  aborted?: boolean;
+  error?: string;
 }
 
 export interface HostInfo {
@@ -109,6 +125,10 @@ export interface Request {
     | 'RegenerateAgent'
     | 'ForceRegenerate'
     | 'CaptureHistory'
+    | 'OpenRichStream'
+    | 'SendMessage'
+    | 'AbortTurn'
+    | 'GetTranscript'
     | string;
   session?: string;
   program?: string;
@@ -139,6 +159,7 @@ export interface Request {
   // Run methods (v3)
   command?: string;
   sinceOffset?: number;
+  since?: number;
   // Regenerate (v5)
   handoff?: boolean;
   // Shell selection
@@ -183,6 +204,8 @@ export interface Response {
   // Cross-repo resume confirmation (v8)
   needsConfirm?: boolean;
   absPath?: string;
+  // Rich agent event stream (v11)
+  frames?: EventFrame[];
 }
 
 type PendingCall = {
@@ -376,6 +399,36 @@ export class ControlClient {
 
   public isClosed(): boolean {
     return this.closed;
+  }
+
+  public async openRichStream(session: string, since = 0): Promise<{ attachPipe: string; attachToken: string }> {
+    const response = await this.call({ method: 'OpenRichStream', session, since });
+    if (!response.ok || !response.attachPipe || !response.attachToken) {
+      throw new Error(response.error || 'OpenRichStream failed');
+    }
+    return { attachPipe: response.attachPipe, attachToken: response.attachToken };
+  }
+
+  public async sendMessage(session: string, message: string): Promise<void> {
+    const response = await this.call({ method: 'SendMessage', session, message });
+    if (!response.ok) {
+      throw new Error(response.error || 'SendMessage failed');
+    }
+  }
+
+  public async abortTurn(session: string): Promise<void> {
+    const response = await this.call({ method: 'AbortTurn', session });
+    if (!response.ok) {
+      throw new Error(response.error || 'AbortTurn failed');
+    }
+  }
+
+  public async getTranscript(session: string, since = 0): Promise<EventFrame[]> {
+    const response = await this.call({ method: 'GetTranscript', session, since });
+    if (!response.ok) {
+      throw new Error(response.error || 'GetTranscript failed');
+    }
+    return response.frames ?? [];
   }
 
   private rejectAll(error: Error): void {
@@ -686,6 +739,66 @@ export async function connectAttachStream(
     return socket;
   } catch (error) {
     log.error('connectAttachStream failed', {
+      pipeName: attachPipe,
+      elapsedMs: Date.now() - start,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+export async function connectEventStream(
+  attachPipe: string,
+  attachToken: string | undefined,
+  onFrame: (frame: EventFrame) => void,
+  onClose?: () => void,
+): Promise<net.Socket> {
+  const start = Date.now();
+  log.info('connectEventStream start', { pipeName: attachPipe });
+  try {
+    const socket = await connectPipe(attachPipe);
+    if (attachToken !== undefined) {
+      socket.write(frame(Buffer.from(attachToken, 'utf8')));
+    }
+
+    let done = false;
+    const finish = (): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      socket.removeAllListeners('data');
+      onClose?.();
+    };
+    const decoder = new FrameDecoder((payload) => {
+      const parsed = JSON.parse(payload.toString('utf8')) as EventFrame;
+      onFrame(parsed);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      try {
+        decoder.push(chunk);
+      } catch (error) {
+        log.error('connectEventStream frame error', {
+          pipeName: attachPipe,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        socket.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    socket.once('error', (error) => {
+      log.error('connectEventStream socket error', { pipeName: attachPipe, error: error.message });
+      finish();
+    });
+    socket.once('close', () => {
+      log.info('connectEventStream closed', { pipeName: attachPipe });
+      finish();
+    });
+
+    log.info('connectEventStream connected', { pipeName: attachPipe, elapsedMs: Date.now() - start });
+    return socket;
+  } catch (error) {
+    log.error('connectEventStream failed', {
       pipeName: attachPipe,
       elapsedMs: Date.now() - start,
       error: error instanceof Error ? error.message : String(error),

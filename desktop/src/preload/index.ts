@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   CopilotSessionInfo,
   DirEntry,
+  EventFrame,
   FileContents,
   FileDiffInfo,
   Request,
@@ -44,6 +45,24 @@ export type TermClosed = {
 };
 
 export type TermError = {
+  session: string;
+  message: string;
+};
+
+export type RichFrame = {
+  session: string;
+  frame: EventFrame;
+};
+
+export type RichReady = {
+  session: string;
+};
+
+export type RichClosed = {
+  session: string;
+};
+
+export type RichError = {
   session: string;
   message: string;
 };
@@ -255,6 +274,19 @@ const api = {
     ipcRenderer.invoke('cs:ensure-shell', { workspaceId, worktreePath, ...opts }),
   closeShell: (workspaceId: string): Promise<void> =>
     ipcRenderer.invoke('cs:close-shell', workspaceId),
+  openRichStream: (
+    session: string,
+    since = 0,
+  ): Promise<{ attachPipe: string; attachToken: string }> =>
+    ipcRenderer.invoke('rich:open-stream', { session, since }),
+  closeRichStream: (session: string): Promise<void> =>
+    ipcRenderer.invoke('rich:close-stream', session),
+  sendMessage: (session: string, message: string): Promise<void> =>
+    ipcRenderer.invoke('rich:send-message', { session, message }),
+  abortTurn: (session: string): Promise<void> =>
+    ipcRenderer.invoke('rich:abort-turn', session),
+  getTranscript: (session: string, since = 0): Promise<EventFrame[]> =>
+    ipcRenderer.invoke('rich:get-transcript', { session, since }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
@@ -295,6 +327,10 @@ const api = {
   onHostReady: (callback: (info: HostReadyInfo) => void): Unsubscribe => on('cs:ready', callback),
   onClosed: (callback: (info: TermClosed) => void): Unsubscribe => on('term:closed', callback),
   onError: (callback: (info: TermError) => void): Unsubscribe => on('term:error', callback),
+  onRichFrame: (callback: (data: RichFrame) => void): Unsubscribe => on('rich:frame', callback),
+  onRichReady: (callback: (info: RichReady) => void): Unsubscribe => on('rich:ready', callback),
+  onRichClosed: (callback: (info: RichClosed) => void): Unsubscribe => on('rich:closed', callback),
+  onRichError: (callback: (info: RichError) => void): Unsubscribe => on('rich:error', callback),
   onUpdateStatus: (callback: (status: UpdateStatus) => void): Unsubscribe =>
     on('cs:update-status', callback),
   onFirstRun: (callback: () => void): Unsubscribe => on('cs:first-run', callback),

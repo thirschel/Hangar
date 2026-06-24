@@ -10,6 +10,7 @@ import {
   Request,
   Response,
   connectAttachStream,
+  connectEventStream,
   connectPipe,
   ensureHost,
   killHostProcess,
@@ -17,6 +18,7 @@ import {
   requestHostShutdown,
   verifyAuthenticatedHello,
   type DirEntry,
+  type EventFrame,
   type FileContents,
 } from './host-client';
 import {
@@ -240,6 +242,7 @@ let authenticatedHello: Response | null = null;
 // shell terminal can stream concurrently. Bounded in practice to the selected
 // workspace's agent (+ its shell), which are swapped when the selection changes.
 const attachments = new Map<string, net.Socket>();
+const eventStreams = new Map<string, net.Socket>();
 // Per-workspace shell program (sh_<workspaceId> -> program string), so an explicit
 // shell switch can detect a changed program and respawn while a reattached,
 // daemon-persisted shell is left intact.
@@ -407,9 +410,51 @@ function detachSession(sessionName: string): void {
   }
 }
 
+async function openRichStream(
+  sessionName: string,
+  since = 0,
+): Promise<{ attachPipe: string; attachToken: string }> {
+  const client = await getControlClient();
+  const existing = eventStreams.get(sessionName);
+  if (existing) {
+    existing.destroy();
+    eventStreams.delete(sessionName);
+  }
+
+  const stream = await client.openRichStream(sessionName, since);
+  const socket = await connectEventStream(
+    stream.attachPipe,
+    stream.attachToken,
+    (frame: EventFrame) => sendToRenderer('rich:frame', { session: sessionName, frame }),
+    () => {
+      const current = eventStreams.get(sessionName);
+      if (current === socket) {
+        eventStreams.delete(sessionName);
+      }
+      sendToRenderer('rich:closed', { session: sessionName });
+    },
+  );
+  socket.once('error', (error) => {
+    sendToRenderer('rich:error', { session: sessionName, message: error.message });
+  });
+  eventStreams.set(sessionName, socket);
+  sendToRenderer('rich:ready', { session: sessionName });
+  return stream;
+}
+
+function closeRichStream(sessionName: string): void {
+  const socket = eventStreams.get(sessionName);
+  if (socket) {
+    socket.destroy();
+    eventStreams.delete(sessionName);
+  }
+}
+
 function detachAll(): void {
   for (const socket of attachments.values()) socket.destroy();
   attachments.clear();
+  for (const socket of eventStreams.values()) socket.destroy();
+  eventStreams.clear();
 }
 
 function quoteProgramPart(part: string): string {
@@ -536,6 +581,32 @@ ipcMain.handle(
 
 ipcMain.handle('cs:detach-session', async (_event, sessionName: string) => {
   detachSession(sessionName);
+});
+
+ipcMain.handle(
+  'rich:open-stream',
+  async (_event, args: { session: string; since?: number }): Promise<{ attachPipe: string; attachToken: string }> => {
+    return openRichStream(args.session, args.since ?? 0);
+  },
+);
+
+ipcMain.handle('rich:close-stream', async (_event, session: string): Promise<void> => {
+  closeRichStream(session);
+});
+
+ipcMain.handle('rich:send-message', async (_event, args: { session: string; message: string }): Promise<void> => {
+  const client = await getControlClient();
+  await client.sendMessage(args.session, args.message);
+});
+
+ipcMain.handle('rich:abort-turn', async (_event, session: string): Promise<void> => {
+  const client = await getControlClient();
+  await client.abortTurn(session);
+});
+
+ipcMain.handle('rich:get-transcript', async (_event, args: { session: string; since?: number }): Promise<EventFrame[]> => {
+  const client = await getControlClient();
+  return client.getTranscript(args.session, args.since ?? 0);
 });
 
 ipcMain.handle(
