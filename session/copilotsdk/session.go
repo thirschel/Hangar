@@ -88,6 +88,7 @@ type Session struct {
 	mu         sync.RWMutex
 	status     Status
 	started    bool
+	autoYes    atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
 	lastOutput atomic.Int64 // unix-ms of the last output-changing event
 }
 
@@ -96,8 +97,13 @@ func New(cfg Config) *Session {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stderr, "[copilotsdk] ", log.LstdFlags)
 	}
-	return &Session{cfg: cfg, status: StatusLoading}
+	s := &Session{cfg: cfg, status: StatusLoading}
+	s.autoYes.Store(cfg.AutoYes)
+	return s
 }
+
+// SetAutoYes toggles auto-approval at runtime (e.g. from the host's SetAutoYes RPC).
+func (s *Session) SetAutoYes(v bool) { s.autoYes.Store(v) }
 
 func (s *Session) clientOptions() *copilot.ClientOptions {
 	opts := &copilot.ClientOptions{
@@ -300,7 +306,7 @@ func (s *Session) decide(req copilot.PermissionRequest) (approve, pend bool) {
 	if s.cfg.Decide != nil {
 		return s.cfg.Decide(req)
 	}
-	if s.cfg.AutoYes {
+	if s.autoYes.Load() {
 		return true, false
 	}
 	return false, true // default: leave pending for an interactive client
