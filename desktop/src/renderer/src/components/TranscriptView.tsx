@@ -18,7 +18,7 @@ type TranscriptEntry =
       status: 'running' | 'done';
       detail?: string;
     }
-  | { id: string; kind: 'permission'; requestId?: string; question: string; choices: string[] }
+  | { id: string; kind: 'permission'; requestId?: string; question: string; toolName?: string; choices: string[] }
   | { id: string; kind: 'input'; requestId?: string; question: string; choices: string[] }
   | { id: string; kind: 'usage'; text: string }
   | { id: string; kind: 'idle'; aborted: boolean }
@@ -137,7 +137,8 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           id: `permission-${frame.requestId ?? frame.seq}`,
           kind: 'permission',
           requestId: frame.requestId,
-          question: frame.question ?? frame.text ?? 'Permission requested',
+          question: frame.question ?? frame.text ?? '',
+          toolName: frame.toolName,
           choices: frame.choices ?? [],
         });
         break;
@@ -147,7 +148,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           id: `input-${frame.requestId ?? frame.seq}`,
           kind: 'input',
           requestId: frame.requestId,
-          question: frame.question ?? frame.text ?? 'Input requested',
+          question: frame.question ?? frame.text ?? '',
           choices: frame.choices ?? [],
         });
         break;
@@ -189,6 +190,13 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
 
 function mcpStatusMeta(status: string): { label: string; className: string } {
   return MCP_STATUS_META[status] ?? { label: status || 'Unknown', className: 'muted' };
+}
+
+function requestDetail(question: string, genericLabel: string, toolName?: string): string {
+  const trimmedQuestion = question.trim();
+  const nonGenericQuestion =
+    trimmedQuestion.toLocaleLowerCase() === genericLabel.toLocaleLowerCase() ? '' : trimmedQuestion;
+  return [toolName?.trim(), nonGenericQuestion].filter(Boolean).join(': ');
 }
 
 export function TranscriptView({ sessionName, autoYes = false }: TranscriptViewProps): JSX.Element {
@@ -502,11 +510,12 @@ function PermissionRequestEntry({
   onRespond: (requestId: string, decision: 'approve' | 'reject') => Promise<void>;
 }): JSX.Element {
   const disabled = answered || !entry.requestId;
+  const detail = requestDetail(entry.question, 'Permission requested', entry.toolName);
 
   return (
     <div className="transcript-entry transcript-entry--permission">
       <strong>Permission requested</strong>
-      <span>{entry.question}</span>
+      {detail && <span>{detail}</span>}
       {entry.choices.length > 0 && <span className="transcript-entry__meta">{entry.choices.join(' / ')}</span>}
       {autoYes ? (
         <span className="transcript-entry__meta">AutoYes is enabled; permission will be handled by the daemon.</span>
@@ -550,6 +559,7 @@ function UserInputRequestEntry({
   const [freeformText, setFreeformText] = useState('');
   const disabled = answered || !entry.requestId;
   const canSendFreeform = freeformText.trim().length > 0 && !disabled;
+  const detail = requestDetail(entry.question, 'Input requested');
 
   const submitFreeform = (event: FormEvent): void => {
     event.preventDefault();
@@ -562,7 +572,7 @@ function UserInputRequestEntry({
   return (
     <div className="transcript-entry transcript-entry--permission">
       <strong>Input requested</strong>
-      <span>{entry.question}</span>
+      {detail && <span>{detail}</span>}
       <div className="transcript-request__actions">
         {entry.choices.map((choice) => (
           <button

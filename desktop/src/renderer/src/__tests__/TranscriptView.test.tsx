@@ -81,30 +81,76 @@ describe('TranscriptView', () => {
     await act(async () => {
       richFrameCallback?.({
         session: 'rich-session',
-        frame: { seq: 1, kind: 'mcp.status', mcpServer: 'github', status: 'connected' },
+        frame: { seq: 1, kind: 'mcp.status', mcpServer: 'github', status: 'pending' },
       });
       richFrameCallback?.({
         session: 'rich-session',
         frame: { seq: 2, kind: 'mcp.status', mcpServer: 'broken', status: 'failed', error: 'No token' },
       });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 3, kind: 'mcp.status', mcpServer: 'unknown', status: '' },
+      });
     });
 
     expect(screen.getByLabelText('MCP server status')).toBeInTheDocument();
     expect(screen.getByText('github')).toBeInTheDocument();
-    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('Pending')).toBeInTheDocument();
     expect(screen.getByText('broken')).toBeInTheDocument();
     expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByText('unknown')).toBeInTheDocument();
+    expect(screen.getByText('Unknown')).toBeInTheDocument();
 
     await act(async () => {
       richFrameCallback?.({
         session: 'rich-session',
-        frame: { seq: 3, kind: 'mcp.status', mcpServer: 'github', status: 'needs-auth' },
+        frame: { seq: 4, kind: 'mcp.status', mcpServer: 'github', status: 'connected' },
       });
     });
 
     expect(screen.getAllByText('github')).toHaveLength(1);
-    expect(screen.getByText('Needs auth')).toBeInTheDocument();
-    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.queryByText('Pending')).not.toBeInTheDocument();
+  });
+
+  it('renders permission request detail without repeating the generic label', async () => {
+    render(<TranscriptView sessionName="rich-session" autoYes={false} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'perm-1',
+          question: 'Run shell command: echo X',
+          choices: ['approve', 'reject'],
+        },
+      });
+    });
+
+    expect(screen.getByText('Run shell command: echo X')).toBeInTheDocument();
+    expect(screen.getAllByText('Permission requested')).toHaveLength(1);
+  });
+
+  it('renders a permission request without detail as header only', async () => {
+    render(<TranscriptView sessionName="rich-session" autoYes={false} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'perm-1',
+          choices: ['approve', 'reject'],
+        },
+      });
+    });
+
+    expect(screen.getAllByText('Permission requested')).toHaveLength(1);
   });
 
   it('answers a permission request and disables its controls', async () => {
