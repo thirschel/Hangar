@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,7 @@ const (
 	StatusReady                 // idle, awaiting user input
 	StatusRunning               // mid-turn (the agent is producing output)
 	StatusWaiting               // blocked on a permission/user-input decision
+	StatusExited                // the CLI child process exited/crashed (terminal)
 )
 
 func (s Status) String() string {
@@ -43,6 +45,8 @@ func (s Status) String() string {
 		return "running"
 	case StatusWaiting:
 		return "waiting"
+	case StatusExited:
+		return "exited"
 	default:
 		return "loading"
 	}
@@ -232,7 +236,7 @@ func (s *Session) Send(ctx context.Context, prompt string) error {
 	}
 	s.setStatus(StatusRunning)
 	_, err := sess.Send(ctx, copilot.MessageOptions{Prompt: prompt})
-	return err
+	return s.noteErr(err)
 }
 
 // Abort interrupts the current turn. Callers must let the session settle back to
@@ -247,7 +251,7 @@ func (s *Session) Abort(ctx context.Context) error {
 	// SDK handler goroutine returns promptly (declined) instead of waiting for an
 	// answer or session close — the turn it belonged to is gone.
 	s.abortPrompts()
-	return err
+	return s.noteErr(err)
 }
 
 // RespondPermission resolves a pending permission request out-of-band by the
@@ -270,7 +274,7 @@ func (s *Session) RespondPermission(ctx context.Context, requestID string, appro
 		RequestID: requestID,
 		Result:    decision,
 	})
-	return err
+	return s.noteErr(err)
 }
 
 // Transcript returns the persisted event history, used to repaint a (re)attaching
@@ -280,7 +284,8 @@ func (s *Session) Transcript(ctx context.Context) ([]copilot.SessionEvent, error
 	if sess == nil {
 		return nil, fmt.Errorf("session not started")
 	}
-	return sess.GetEvents(ctx)
+	evs, err := sess.GetEvents(ctx)
+	return evs, s.noteErr(err)
 }
 
 // Close disconnects the session and stops the runtime.
@@ -320,8 +325,32 @@ func (s *Session) session() *copilot.Session {
 
 func (s *Session) setStatus(st Status) {
 	s.mu.Lock()
-	s.status = st
+	if s.status != StatusExited { // StatusExited is terminal/sticky
+		s.status = st
+	}
 	s.mu.Unlock()
+}
+
+// Exited reports whether the CLI child process has exited/crashed. A crashed
+// child emits NO SDK event (verified by spike), so this is detected reactively
+// when an operation returns a "process exited" error. The host marks the session
+// not-alive so the next OpenRichStream revives (resumes) it.
+func (s *Session) Exited() bool { return s.Status() == StatusExited }
+
+// noteErr flags the session as exited when err indicates the CLI child process
+// died, so Exited()/alive() reflect the crash. Returns err unchanged.
+func (s *Session) noteErr(err error) error {
+	if isProcessExited(err) {
+		s.setStatus(StatusExited)
+	}
+	return err
+}
+
+// isProcessExited matches the SDK's child-process-death errors ("CLI process
+// exited", "CLI process exited unexpectedly", "process exited unexpectedly").
+// "client stopped" (our own Close) is deliberately excluded.
+func isProcessExited(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "process exited")
 }
 
 func (s *Session) touch() { s.lastOutput.Store(time.Now().UnixMilli()) }

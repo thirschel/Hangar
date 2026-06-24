@@ -29,14 +29,15 @@ type sdkSession struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu       sync.Mutex
-	subs     map[*subscriber]struct{}
-	richLog  []proto.EventFrame
-	richSeq  uint64
-	richSubs map[*richSub]struct{}
-	lastSeen int64 // lastOutputUnixMs observed at the previous hasUpdated() call
-	exitCode int
-	closed   bool
+	mu          sync.Mutex
+	subs        map[*subscriber]struct{}
+	richLog     []proto.EventFrame
+	richSeq     uint64
+	richSubs    map[*richSub]struct{}
+	lastSeen    int64 // lastOutputUnixMs observed at the previous hasUpdated() call
+	exitCode    int
+	closed      bool
+	exitedNoted bool // true once the agent-process-exit error frame has been emitted
 }
 
 // newSDKSession builds a rich SDK-backed session. workDir is the git worktree;
@@ -165,6 +166,9 @@ func (s *sdkSession) info() proto.SessionInfo {
 }
 
 func (s *sdkSession) alive() bool {
+	if s.sess.Exited() { // CLI child crashed: not alive, so revive recreates it
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return !s.closed

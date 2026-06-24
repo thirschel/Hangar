@@ -119,11 +119,32 @@ func (s *sdkSession) richUnsubscribe(sub *richSub) {
 }
 
 func (s *sdkSession) richSend(ctx context.Context, text string) error {
-	return s.sess.Send(ctx, text)
+	err := s.sess.Send(ctx, text)
+	s.noteExitFrame()
+	return err
 }
 
 func (s *sdkSession) richAbort(ctx context.Context) error {
-	return s.sess.Abort(ctx)
+	err := s.sess.Abort(ctx)
+	s.noteExitFrame()
+	return err
+}
+
+// noteExitFrame emits a single error frame the first time the underlying agent
+// process is detected to have exited, so a watching client sees the failure.
+// Reopening the stream (OpenRichStream) revives/resumes the session.
+func (s *sdkSession) noteExitFrame() {
+	if !s.sess.Exited() {
+		return
+	}
+	s.mu.Lock()
+	if s.exitedNoted || s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.exitedNoted = true
+	s.mu.Unlock()
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindError, Error: "agent process exited; reopen to resume"})
 }
 
 func (s *sdkSession) richRespondPermission(ctx context.Context, requestID string, approve bool) error {

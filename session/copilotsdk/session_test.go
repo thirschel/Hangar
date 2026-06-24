@@ -2,6 +2,7 @@ package copilotsdk
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -226,5 +227,42 @@ func TestAbortUnblocksPendingUserInput(t *testing.T) {
 	}
 	if s.closing {
 		t.Fatal("abortPrompts must not mark the session closing")
+	}
+}
+
+func TestIsProcessExited(t *testing.T) {
+	cases := map[string]bool{
+		"failed to send message: CLI process exited: exit status 1": true,
+		"CLI process exited unexpectedly":                           true,
+		"process exited unexpectedly":                               true,
+		"client stopped":                                            false,
+		"context deadline exceeded":                                 false,
+	}
+	for msg, want := range cases {
+		if got := isProcessExited(errors.New(msg)); got != want {
+			t.Fatalf("isProcessExited(%q) = %v, want %v", msg, got, want)
+		}
+	}
+	if isProcessExited(nil) {
+		t.Fatal("isProcessExited(nil) must be false")
+	}
+}
+
+func TestNoteErrMarksExitedSticky(t *testing.T) {
+	s := New(Config{})
+	if s.noteErr(nil); s.Exited() {
+		t.Fatal("nil error must not mark the session exited")
+	}
+	if s.noteErr(errors.New("transient blip")); s.Exited() {
+		t.Fatal("non-process error must not mark exited")
+	}
+	s.noteErr(errors.New("failed to send message: CLI process exited: exit status 1"))
+	if !s.Exited() {
+		t.Fatal("a process-exited error must mark the session exited")
+	}
+	// StatusExited is terminal/sticky: a later status update must not clear it.
+	s.setStatus(StatusRunning)
+	if !s.Exited() || s.Status() != StatusExited {
+		t.Fatalf("StatusExited must be sticky, got %v", s.Status())
 	}
 }
