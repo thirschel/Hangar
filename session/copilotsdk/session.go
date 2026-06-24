@@ -242,7 +242,12 @@ func (s *Session) Abort(ctx context.Context) error {
 	if sess == nil {
 		return fmt.Errorf("session not started")
 	}
-	return sess.Abort(ctx)
+	err := sess.Abort(ctx)
+	// Unblock any ask_user/elicitation handler parked on the aborted turn so the
+	// SDK handler goroutine returns promptly (declined) instead of waiting for an
+	// answer or session close — the turn it belonged to is gone.
+	s.abortPrompts()
+	return err
 }
 
 // RespondPermission resolves a pending permission request out-of-band by the
@@ -454,6 +459,18 @@ func (s *Session) RespondUserInput(requestID, answer string, freeform bool) erro
 func (s *Session) closePrompts() {
 	s.promptMu.Lock()
 	s.closing = true
+	for id, ch := range s.prompts {
+		delete(s.prompts, id)
+		ch <- userInputReply{ok: false}
+	}
+	s.promptMu.Unlock()
+}
+
+// abortPrompts unblocks pending user-input/elicitation prompts (declining them)
+// WITHOUT closing the session, so a mid-turn Abort does not leave handler
+// goroutines parked until the session ends. The session stays reusable.
+func (s *Session) abortPrompts() {
+	s.promptMu.Lock()
 	for id, ch := range s.prompts {
 		delete(s.prompts, id)
 		ch <- userInputReply{ok: false}

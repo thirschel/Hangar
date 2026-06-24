@@ -197,3 +197,34 @@ func TestCloseUnblocksPendingUserInput(t *testing.T) {
 		t.Fatal("Close did not unblock onUserInput")
 	}
 }
+
+func TestAbortUnblocksPendingUserInput(t *testing.T) {
+	prompts := make(chan Prompt, 1)
+	s := New(Config{OnPrompt: func(p Prompt) { prompts <- p }})
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := s.onUserInput(copilot.UserInputRequest{Question: "Continue?"}, copilot.UserInputInvocation{})
+		done <- err
+	}()
+
+	select {
+	case <-prompts:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for prompt")
+	}
+	// A mid-turn Abort must unblock the parked ask_user handler WITHOUT closing the
+	// session (the session stays reusable for the next turn).
+	s.abortPrompts()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("onUserInput should return an error when its turn is aborted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("abortPrompts did not unblock onUserInput")
+	}
+	if s.closing {
+		t.Fatal("abortPrompts must not mark the session closing")
+	}
+}
