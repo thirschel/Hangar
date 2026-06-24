@@ -26,11 +26,20 @@ type TranscriptEntry =
 
 type TranscriptModel = {
   entries: TranscriptEntry[];
+  servers: Map<string, { status: string; error?: string }>;
   title: string;
   turnInProgress: boolean;
 };
 
 const SCROLL_SLOP = 48;
+const MCP_STATUS_META: Record<string, { label: string; className: string }> = {
+  connected: { label: 'Connected', className: 'ok' },
+  failed: { label: 'Failed', className: 'error' },
+  'needs-auth': { label: 'Needs auth', className: 'warn' },
+  pending: { label: 'Pending', className: 'warn' },
+  disabled: { label: 'Disabled', className: 'muted' },
+  not_configured: { label: 'Not configured', className: 'muted' },
+};
 
 function frameText(frame: EventFrame): string {
   return frame.text ?? frame.error ?? frame.status ?? '';
@@ -42,6 +51,7 @@ function toolKey(frame: EventFrame): string {
 
 function buildTranscript(frames: EventFrame[]): TranscriptModel {
   const entries: TranscriptEntry[] = [];
+  const servers = new Map<string, { status: string; error?: string }>();
   const toolEntries = new Map<string, number>();
   let pendingAssistantIndex: number | null = null;
   let pendingAssistantText = '';
@@ -164,12 +174,21 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         turnInProgress = false;
         entries.push({ id: `error-${frame.seq}`, kind: 'error', text: frameText(frame) || 'Error' });
         break;
+      case 'mcp.status':
+        if (frame.mcpServer) {
+          servers.set(frame.mcpServer, { status: frame.status ?? 'pending', error: frame.error });
+        }
+        break;
       default:
         break;
     }
   }
 
-  return { entries, title, turnInProgress };
+  return { entries, servers, title, turnInProgress };
+}
+
+function mcpStatusMeta(status: string): { label: string; className: string } {
+  return MCP_STATUS_META[status] ?? { label: status || 'Unknown', className: 'muted' };
 }
 
 export function TranscriptView({ sessionName, autoYes = false }: TranscriptViewProps): JSX.Element {
@@ -324,6 +343,25 @@ export function TranscriptView({ sessionName, autoYes = false }: TranscriptViewP
         </div>
         {turnInProgress && <span className="transcript-view__live">Streaming…</span>}
       </div>
+
+      {transcript.servers.size > 0 && (
+        <div className="transcript-view__mcp" aria-label="MCP server status">
+          <span className="transcript-view__mcp-title">MCP</span>
+          <div className="transcript-view__mcp-list">
+            {Array.from(transcript.servers.entries()).map(([server, info]) => {
+              const meta = mcpStatusMeta(info.status);
+              return (
+                <span key={server} className="transcript-view__mcp-pill" title={info.error}>
+                  <span className="transcript-view__mcp-server">{server}</span>
+                  <span className={`transcript-view__mcp-status transcript-view__mcp-status--${meta.className}`}>
+                    {meta.label}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div ref={scrollRef} className="transcript-view__scroll" onScroll={onScroll}>
         {transcript.entries.length === 0 && !streamError && (

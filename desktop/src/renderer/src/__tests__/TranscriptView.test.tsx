@@ -74,6 +74,39 @@ describe('TranscriptView', () => {
     expect(screen.queryByText('Nope')).not.toBeInTheDocument();
   });
 
+  it('renders MCP server statuses and applies the latest status per server', async () => {
+    render(<TranscriptView sessionName="rich-session" />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'mcp.status', mcpServer: 'github', status: 'connected' },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'mcp.status', mcpServer: 'broken', status: 'failed', error: 'No token' },
+      });
+    });
+
+    expect(screen.getByLabelText('MCP server status')).toBeInTheDocument();
+    expect(screen.getByText('github')).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('broken')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 3, kind: 'mcp.status', mcpServer: 'github', status: 'needs-auth' },
+      });
+    });
+
+    expect(screen.getAllByText('github')).toHaveLength(1);
+    expect(screen.getByText('Needs auth')).toBeInTheDocument();
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+  });
+
   it('answers a permission request and disables its controls', async () => {
     render(<TranscriptView sessionName="rich-session" autoYes={false} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());

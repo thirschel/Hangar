@@ -1260,6 +1260,71 @@ body.is-row-resizing .center-terminal__resizer::after {
   font-size: var(--fs-xs);
 }
 
+.transcript-view__mcp {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: rgba(36, 36, 39, 0.72);
+}
+
+.transcript-view__mcp-title {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.transcript-view__mcp-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.transcript-view__mcp-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 220px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-control);
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.transcript-view__mcp-server {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.transcript-view__mcp-status {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.transcript-view__mcp-status--ok {
+  color: var(--success-text);
+}
+
+.transcript-view__mcp-status--error {
+  color: var(--danger);
+}
+
+.transcript-view__mcp-status--warn {
+  color: var(--warning);
+}
+
+.transcript-view__mcp-status--muted {
+  color: var(--text-faint);
+}
+
 .transcript-view__scroll {
   flex: 1;
   min-height: 0;
