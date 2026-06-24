@@ -1,7 +1,8 @@
 import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { readFileSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { open as openFile, stat as statFile } from 'node:fs/promises';
 import type net from 'node:net';
 import {
@@ -19,6 +20,14 @@ import {
   type DirEntry,
   type FileContents,
 } from './host-client';
+import { getSettings, applySettings, isFirstRun, markSetupComplete, type Settings } from './settings';
+import {
+  assertAuthorizedWorktree,
+  classifyWindowOpen,
+  isAllowedNavigationUrl,
+  resolveWithinWorktree,
+  resolveWorktreeBase,
+} from './security';
 import {
   getSettings,
   applySettings,
@@ -441,7 +450,7 @@ function createWindow(): void {
       preload: path.join(__dirname, '..\\preload\\index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       // Let the renderer play the notification chime without a prior user
       // gesture, and keep it responsive while hidden/minimized to the tray so
       // the sound fires even when the window isn't focused.
@@ -449,6 +458,34 @@ function createWindow(): void {
       backgroundThrottling: false,
     },
   });
+
+  // The renderer must never open Electron child windows or navigate the main
+  // window off its own origin (F-16). Deny all window.open targets — routing real
+  // web links to the OS browser — and block any cross-origin top-level navigation.
+  const appUrl = process.env.ELECTRON_RENDERER_URL
+    ? process.env.ELECTRON_RENDERER_URL
+    : pathToFileURL(path.join(__dirname, '..\\renderer\\index.html')).toString();
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (classifyWindowOpen(url) === 'external') {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+
+  // Block any navigation that leaves the app origin. will-navigate covers
+  // renderer-initiated navigations; will-redirect covers server-side 3xx redirects
+  // (e.g. a compromised dev server redirecting to file:/javascript:).
+  const guardNavigation = (event: { preventDefault: () => void }, url: string): void => {
+    if (!isAllowedNavigationUrl(appUrl, url)) {
+      event.preventDefault();
+      if (classifyWindowOpen(url) === 'external') {
+        void shell.openExternal(url);
+      }
+    }
+  };
+  mainWindow.webContents.on('will-navigate', guardNavigation);
+  mainWindow.webContents.on('will-redirect', guardNavigation);
 
   // Closing the window minimizes to the tray (keeping workspaces + daemon live)
   // unless the user is really quitting or has disabled the behavior.
@@ -580,6 +617,7 @@ ipcMain.handle(
     _event,
     args: { workspaceId: string; worktreePath: string; cols?: number; rows?: number; program?: string },
   ): Promise<string> => {
+    assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath, realpath);
     const session = `sh_${args.workspaceId}`;
     const program = args.program?.trim() || defaultShellProgram();
     const programName = programNameOnly(program);
@@ -642,18 +680,21 @@ ipcMain.handle('cs:close-shell', async (_event, workspaceId: string): Promise<vo
   }
 });
 
-// Files tab: resolve a path strictly inside the worktree (reject traversal).
-function resolveInWorktree(worktreePath: string, rel: string): string {
-  const root = path.resolve(worktreePath);
-  const target = path.resolve(root, rel || '.');
-  if (target !== root && !target.startsWith(root + path.sep)) {
-    throw new Error('path is outside the worktree');
-  }
-  return target;
+// realpath canonicaliser used to collapse symlinks/junctions before containment
+// checks. Bound so the injected helpers in security.ts can call it directly.
+function realpath(p: string): string {
+  return realpathSync.native(p);
+}
+
+// The directory every managed worktree must live under (configured worktree_dir,
+// else ~/.hangar/worktrees) — the allowlist root for renderer-supplied paths.
+function authorizedWorktreeBase(): string {
+  return resolveWorktreeBase(os.homedir(), getSettings().workspaceDir);
 }
 
 ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir: string }): Promise<DirEntry[]> => {
-  const dir = resolveInWorktree(args.worktreePath, args.relDir);
+  const root = assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath, realpath);
+  const dir = resolveWithinWorktree(root, args.relDir, realpath);
   const entries = readdirSync(dir, { withFileTypes: true });
   return entries
     .filter((e) => e.name !== '.git')
@@ -663,7 +704,8 @@ ipcMain.handle('cs:fs-list', async (_event, args: { worktreePath: string; relDir
 
 ipcMain.handle('cs:fs-read', async (_event, args: { worktreePath: string; relFile: string }): Promise<FileContents> => {
   try {
-    const file = resolveInWorktree(args.worktreePath, args.relFile);
+    const root = assertAuthorizedWorktree(authorizedWorktreeBase(), args.worktreePath, realpath);
+    const file = resolveWithinWorktree(root, args.relFile, realpath);
     const st = statSync(file);
     if (st.size > 1_000_000) return { kind: 'tooLarge', size: st.size };
     const buf = readFileSync(file);
