@@ -170,16 +170,31 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
     const copySelection = (): boolean => {
       const sel = term.getSelection();
       if (!sel) return false;
-      void navigator.clipboard.writeText(sel);
+      void window.cs.clipboardWrite(sel).catch((error) => {
+        diag(
+          'TermView clipboard write failed',
+          { session, message: error instanceof Error ? error.message : String(error) },
+          'error',
+        );
+      });
       return true;
     };
     const paste = (): void => {
-      void navigator.clipboard.readText().then((text) => {
-        // Route through xterm so the text is wrapped for bracketed-paste mode
-        // when the app enables it (and so right-click and Ctrl+Shift+V behave
-        // identically). term.paste fires onData, which forwards to sendInput.
-        if (text) term.paste(text);
-      });
+      void window.cs
+        .clipboardRead()
+        .then((text) => {
+          // Route through xterm so the text is wrapped for bracketed-paste mode
+          // when the app enables it (and so right-click and Ctrl+Shift+V behave
+          // identically). term.paste fires onData, which forwards to sendInput.
+          if (text) term.paste(text);
+        })
+        .catch((error) => {
+          diag(
+            'TermView clipboard read failed',
+            { session, message: error instanceof Error ? error.message : String(error) },
+            'error',
+          );
+        });
     };
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== 'keydown') return true;
@@ -203,6 +218,37 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
           return false;
         }
       }
+      return true;
+    });
+
+    // OSC 52 clipboard write. TUIs like the copilot agent copy to the system
+    // clipboard by emitting ESC ] 52 ; <selection> ; <base64> ST and showing their
+    // own "copied to clipboard" confirmation. ConPTY passes the sequence through
+    // verbatim (verified), but xterm ignores OSC 52 by default, so the agent's copy
+    // never reached the OS clipboard. Decode the payload and route it through the
+    // main-process clipboard bridge. Read requests (payload '?') are not serviced.
+    const osc52Disposable = term.parser.registerOscHandler(52, (data) => {
+      const sep = data.indexOf(';');
+      if (sep === -1) return false;
+      const payload = data.slice(sep + 1);
+      if (!payload || payload === '?') return false;
+      let text: string;
+      try {
+        const binary = atob(payload);
+        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+        text = new TextDecoder().decode(bytes);
+      } catch {
+        diag('TermView osc52 decode failed', { session }, 'error');
+        return false;
+      }
+      void window.cs.clipboardWrite(text).catch((error) => {
+        diag(
+          'TermView osc52 clipboard write failed',
+          { session, message: error instanceof Error ? error.message : String(error) },
+          'error',
+        );
+      });
+      diag('TermView osc52 clipboard write', { session, bytes: text.length });
       return true;
     });
 
@@ -495,6 +541,7 @@ export const TermView = forwardRef<TermViewHandle, TermViewProps>(function TermV
       el.removeEventListener('wheel', onWheelCapture, { capture: true });
       observer.disconnect();
       inputDisposable.dispose();
+      osc52Disposable.dispose();
       unsubData();
       unsubClosed();
       unsubError();
