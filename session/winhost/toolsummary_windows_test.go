@@ -154,7 +154,7 @@ func TestSDKEventFrameToolSummaries(t *testing.T) {
 		t.Fatal("sdkEventFrame did not map tool start")
 	}
 	if startFrame.Kind != proto.EventKindToolStart || startFrame.ToolName != "Read" ||
-		startFrame.ToolArgs != "README.md" || startFrame.MCPServer != "github" {
+		startFrame.ToolCallID != "tc1" || startFrame.ToolArgs != "README.md" || startFrame.MCPServer != "github" {
 		t.Fatalf("tool start frame = %+v", startFrame)
 	}
 
@@ -168,7 +168,7 @@ func TestSDKEventFrameToolSummaries(t *testing.T) {
 		t.Fatal("sdkEventFrame did not map tool complete")
 	}
 	if completeFrame.Kind != proto.EventKindToolComplete || completeFrame.ToolName != "Read" ||
-		completeFrame.ToolResult != "150 lines read" {
+		completeFrame.ToolCallID != "tc1" || completeFrame.ToolResult != "150 lines read" {
 		t.Fatalf("tool complete frame = %+v", completeFrame)
 	}
 }

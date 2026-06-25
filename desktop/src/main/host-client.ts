@@ -94,6 +94,7 @@ export interface EventFrame {
   text?: string;
   toolName?: string;
   mcpServer?: string;
+  toolCallId?: string;
   requestId?: string;
   question?: string;
   choices?: string[];

@@ -261,23 +261,26 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 		return proto.EventFrame{Kind: proto.EventKindReasoning, Text: data.Content}, true
 	case *copilot.ToolExecutionStartData:
 		return proto.EventFrame{
-			Kind:      proto.EventKindToolStart,
-			ToolName:  toolStartName(data),
-			ToolArgs:  summarizeToolArgs(data.Arguments),
-			MCPServer: stringPtrValue(data.MCPServerName),
+			Kind:       proto.EventKindToolStart,
+			ToolCallID: data.ToolCallID,
+			ToolName:   toolStartName(data),
+			ToolArgs:   summarizeToolArgs(data.Arguments),
+			MCPServer:  stringPtrValue(data.MCPServerName),
 		}, true
 	case *copilot.ToolExecutionCompleteData:
 		return proto.EventFrame{
 			Kind:       proto.EventKindToolComplete,
+			ToolCallID: data.ToolCallID,
 			ToolName:   toolCompleteName(data),
 			ToolResult: summarizeToolResult(data),
 		}, true
 	case *copilot.PermissionRequestedData:
 		return proto.EventFrame{
-			Kind:      proto.EventKindPermissionRequest,
-			RequestID: data.RequestID,
-			Question:  permissionSummary(data),
-			ToolName:  permissionToolName(data),
+			Kind:       proto.EventKindPermissionRequest,
+			RequestID:  data.RequestID,
+			Question:   permissionSummary(data),
+			ToolCallID: permissionToolCallID(data),
+			ToolName:   permissionToolName(data),
 		}, true
 	case *copilot.PermissionCompletedData:
 		// The SDK emits this after a permission is answered (live: post-RespondPermission;

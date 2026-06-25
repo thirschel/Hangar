@@ -32,6 +32,17 @@ func permissionToolName(d *copilot.PermissionRequestedData) string {
 	return permissionRequestToolName(d.PermissionRequest)
 }
 
+// permissionToolCallID returns the SDK tool-call id gated by a permission request.
+func permissionToolCallID(d *copilot.PermissionRequestedData) string {
+	if d == nil {
+		return ""
+	}
+	if id := permissionPromptToolCallID(d.PromptRequest); id != "" {
+		return id
+	}
+	return permissionRequestToolCallID(d.PermissionRequest)
+}
+
 func permissionPromptSummary(req copilot.PermissionPromptRequest) string {
 	switch r := req.(type) {
 	case *copilot.PermissionPromptRequestCommands:
@@ -134,6 +145,46 @@ func permissionRequestToolName(req copilot.PermissionRequest) string {
 		return "url"
 	case *copilot.PermissionRequestWrite:
 		return "write"
+	}
+	return ""
+}
+
+func permissionPromptToolCallID(req copilot.PermissionPromptRequest) string {
+	switch r := req.(type) {
+	case *copilot.PermissionPromptRequestCommands:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionPromptRequestCustomTool:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionPromptRequestHook:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionPromptRequestMCP:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionPromptRequestRead:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionPromptRequestURL:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionPromptRequestWrite:
+		return stringPtrValue(r.ToolCallID)
+	}
+	return ""
+}
+
+func permissionRequestToolCallID(req copilot.PermissionRequest) string {
+	switch r := req.(type) {
+	case *copilot.PermissionRequestShell:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionRequestCustomTool:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionRequestHook:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionRequestMCP:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionRequestRead:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionRequestURL:
+		return stringPtrValue(r.ToolCallID)
+	case *copilot.PermissionRequestWrite:
+		return stringPtrValue(r.ToolCallID)
 	}
 	return ""
 }

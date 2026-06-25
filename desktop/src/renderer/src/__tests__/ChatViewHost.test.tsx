@@ -164,6 +164,62 @@ describe('ChatViewHost', () => {
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
   });
 
+  it('shows an AutoYes linked permission as a shield popover on the gated tool', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace({ autoYes: true })} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'p1',
+          toolCallId: 'call-1',
+          question: 'Run shell command: git status',
+          toolName: 'shell',
+        },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'tool.start', toolName: 'bash', toolCallId: 'call-1' },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 3, kind: 'tool.complete', toolCallId: 'call-1' },
+      });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 4, kind: 'idle' } });
+    });
+
+    const shield = container.querySelector('.chat-tool__perm');
+    expect(shield).not.toBeNull();
+    expect(within(shield as HTMLElement).getByText('Run shell command: git status')).toBeInTheDocument();
+    expect(within(shield as HTMLElement).getByText('shell')).toBeInTheDocument();
+    expect(container.querySelector('.chat-entry--permission')).toBeNull();
+  });
+
+  it('keeps AutoYes-off permissions as functional Approve and Reject bubbles', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'p1',
+          question: 'Run shell command: git status',
+          toolName: 'shell',
+        },
+      });
+    });
+
+    expect(container.querySelector('.chat-entry--permission')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
+  });
+
   it('renders reasoning as faded text inside an expanded <details> (no bubble)', async () => {
     const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());

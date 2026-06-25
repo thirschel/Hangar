@@ -66,7 +66,9 @@ type TranscriptEntry =
       kind: 'tool';
       toolName: string;
       mcpServer?: string;
+      toolCallId?: string;
       status: 'running' | 'done' | 'error';
+      permission?: { toolName?: string; question: string; requestId?: string };
       // Concise CLI-style detail: args captured on tool.start, result merged in
       // on tool.complete (the daemon puts the error message in result on failure).
       args?: string;
@@ -76,9 +78,11 @@ type TranscriptEntry =
       id: string;
       kind: 'permission';
       requestId?: string;
+      toolCallId?: string;
       question: string;
       toolName?: string;
       choices: string[];
+      linkedToTool?: boolean;
       // Answered-state derived in the reducer from a replayed 'permission.resolved'
       // frame, so it survives a fresh mount even when the optimistic local
       // answeredRequests set is empty. answerLabel is "approved" / "rejected".
@@ -168,7 +172,7 @@ function composeUserBubble(message: string, attachments: string[]): string {
 }
 
 function toolKey(frame: EventFrame): string {
-  return frame.requestId ?? `${frame.toolName ?? 'tool'}:${frame.mcpServer ?? ''}`;
+  return frame.toolCallId ?? frame.requestId ?? `${frame.toolName ?? 'tool'}:${frame.mcpServer ?? ''}`;
 }
 
 function mcpStatusMeta(status: string): { label: string; className: string } {
@@ -194,6 +198,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   const entries: TranscriptEntry[] = [];
   const servers = new Map<string, { status: string; error?: string }>();
   const toolEntries = new Map<string, number>();
+  const pendingPermissionByToolCallId = new Map<string, number>();
   let pendingAssistantIndex: number | null = null;
   let pendingAssistantText = '';
   // Seq of the assistant turn's first delta. Reused as the entry id across both
@@ -338,9 +343,22 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           kind: 'tool',
           toolName: frame.toolName ?? 'Tool',
           mcpServer: frame.mcpServer,
+          toolCallId: frame.toolCallId,
           status: 'running',
           args: frame.toolArgs,
         };
+        if (frame.toolCallId) {
+          const permissionIndex = pendingPermissionByToolCallId.get(frame.toolCallId);
+          const permissionEntry = permissionIndex !== undefined ? entries[permissionIndex] : undefined;
+          if (permissionIndex !== undefined && permissionEntry?.kind === 'permission') {
+            entry.permission = {
+              toolName: permissionEntry.toolName,
+              question: permissionEntry.question,
+              requestId: permissionEntry.requestId,
+            };
+            entries[permissionIndex] = { ...permissionEntry, linkedToTool: true };
+          }
+        }
         toolEntries.set(toolKey(frame), entries.length);
         entries.push(entry);
         break;
@@ -357,7 +375,9 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           kind: 'tool',
           toolName: frame.toolName ?? (prev?.kind === 'tool' ? prev.toolName : undefined) ?? 'Tool',
           mcpServer: frame.mcpServer ?? (prev?.kind === 'tool' ? prev.mcpServer : undefined),
+          toolCallId: prev?.kind === 'tool' ? prev.toolCallId : frame.toolCallId,
           status: frame.error ? 'error' : 'done',
+          permission: prev?.kind === 'tool' ? prev.permission : undefined,
           args: prev?.kind === 'tool' ? prev.args : undefined,
           result: frame.toolResult ?? frame.error,
         };
@@ -365,17 +385,21 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         else entries[index] = next;
         break;
       }
-      case 'permission.requested':
+      case 'permission.requested': {
         turnInProgress = true;
-        entries.push({
+        const entry: TranscriptEntry = {
           id: `permission-${frame.requestId ?? frame.seq}`,
           kind: 'permission',
           requestId: frame.requestId,
+          toolCallId: frame.toolCallId,
           question: frame.question ?? frame.text ?? '',
           toolName: frame.toolName,
           choices: frame.choices ?? [],
-        });
+        };
+        if (frame.toolCallId) pendingPermissionByToolCallId.set(frame.toolCallId, entries.length);
+        entries.push(entry);
         break;
+      }
       case 'permission.resolved':
         // A permission was answered (approve/reject). Record the decision label so
         // the matching permission entry replays as answered after a remount; the
@@ -1197,7 +1221,7 @@ function ChatEntryView({
   answerLabels: Map<string, string>;
   onRespondPermission: (requestId: string, decision: 'approve' | 'reject') => Promise<void>;
   onRespondUserInput: (requestId: string, answer: string, wasFreeform: boolean) => Promise<void>;
-}): JSX.Element {
+}): JSX.Element | null {
   switch (entry.kind) {
     case 'user':
       return (
@@ -1219,6 +1243,33 @@ function ChatEntryView({
       // then faded args and a faded result. No box, no Running/Done badge.
       return (
         <div className="chat-tool">
+          {autoYes && entry.permission && (
+            <span className="chat-tool__perm" tabIndex={0} role="button" aria-label="Auto-approved permission">
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+                <path
+                  d="M8 1.75 3 3.6v3.55c0 3.15 2.05 5.75 5 7.1 2.95-1.35 5-3.95 5-7.1V3.6L8 1.75Z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="m5.7 7.9 1.45 1.45 3.2-3.35"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span className="chat-tool__perm-popover" role="tooltip">
+                {entry.permission.toolName && (
+                  <span className="chat-tool__perm-title">{entry.permission.toolName}</span>
+                )}
+                <span>{entry.permission.question}</span>
+              </span>
+            </span>
+          )}
           <span className={`chat-tool__dot chat-tool__dot--${entry.status}`} aria-hidden="true" />
           <span className="chat-tool__name">{entry.toolName}</span>
           {entry.mcpServer && <span className="chat-tool__server">{entry.mcpServer}</span>}
@@ -1231,6 +1282,7 @@ function ChatEntryView({
       // mount/replay) OR the optimistic local click marked it (instant feedback).
       const localAnswered = entry.requestId ? answeredRequests.has(entry.requestId) : false;
       const localLabel = entry.requestId ? answerLabels.get(entry.requestId) : undefined;
+      if (autoYes && entry.linkedToTool) return null;
       return (
         <ChatPermissionEntry
           entry={entry}
@@ -1288,8 +1340,11 @@ function ChatPermissionEntry({
 
   return (
     <div className="chat-entry chat-entry--permission">
-      <strong>Permission requested</strong>
-      {detail && <span>{detail}</span>}
+      <div className="chat-request__header">
+        <strong>Permission requested</strong>
+        {answered && answerLabel && <span className="chat-request__state">{answerLabel}</span>}
+      </div>
+      {detail && <span className="chat-request__detail">{detail}</span>}
       {entry.choices.length > 0 && <span className="chat-entry__meta">{entry.choices.join(' / ')}</span>}
       {autoYes ? (
         <span className="chat-entry__meta">
@@ -1313,7 +1368,6 @@ function ChatPermissionEntry({
           >
             Reject
           </button>
-          {answered && answerLabel && <span className="chat-request__state">{answerLabel}</span>}
           {!entry.requestId && <span className="chat-entry__meta">Missing request id.</span>}
         </div>
       )}

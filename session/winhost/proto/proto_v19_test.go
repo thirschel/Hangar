@@ -6,8 +6,8 @@ import (
 )
 
 func TestVersionV19(t *testing.T) {
-	if Version != 19 {
-		t.Fatalf("Version = %d, want 19", Version)
+	if Version < 19 {
+		t.Fatalf("Version = %d, want >= 19", Version)
 	}
 }
 

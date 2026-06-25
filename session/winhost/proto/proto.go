@@ -82,7 +82,12 @@ import (
 // chunk in the existing Text field, and the existing assistant.reasoning frame still
 // delivers the complete block as the finalizer. Additive: a host that never emits the
 // delta Kind serializes exactly as it did under v18.
-const Version = 19
+// v20 correlates a permission request with the tool call it gates so the desktop can
+// attach an AutoYes permission badge to the exact tool line. EventFrame gains
+// ToolCallID — the SDK tool-call id, set on tool.start / tool.complete (from the
+// ToolExecution*Data) and on permission.requested (the gated call's id, when the SDK
+// provides one). Additive: omitempty drops it for frames/permissions without a call id.
+const Version = 20
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -391,18 +396,22 @@ type Response struct {
 // ReadFrameBytes). Seq is monotonic per session so clients can dedupe and replay.
 // Fields are interpreted per Kind; unused fields are omitted.
 type EventFrame struct {
-	Seq       uint64   `json:"seq"`
-	Kind      string   `json:"kind"`
-	Text      string   `json:"text,omitempty"`      // assistant.message / assistant.delta / assistant.reasoning(.delta) text
-	ToolName  string   `json:"toolName,omitempty"`  // tool.start / tool.complete
-	MCPServer string   `json:"mcpServer,omitempty"` // tool.* : MCP server name, when the tool is an MCP tool
-	RequestID string   `json:"requestId,omitempty"` // permission.requested / user_input.requested id
-	Question  string   `json:"question,omitempty"`  // user_input.requested prompt
-	Choices   []string `json:"choices,omitempty"`   // user_input.requested choices
-	Title     string   `json:"title,omitempty"`     // title : the new session title
-	Status    string   `json:"status,omitempty"`    // mcp/status changes
-	Aborted   bool     `json:"aborted,omitempty"`   // idle : the preceding turn was aborted
-	Error     string   `json:"error,omitempty"`     // error : message
+	Seq       uint64 `json:"seq"`
+	Kind      string `json:"kind"`
+	Text      string `json:"text,omitempty"`      // assistant.message / assistant.delta / assistant.reasoning(.delta) text
+	ToolName  string `json:"toolName,omitempty"`  // tool.start / tool.complete
+	MCPServer string `json:"mcpServer,omitempty"` // tool.* : MCP server name, when the tool is an MCP tool
+	// SDK tool-call id (v20). Set on tool.start / tool.complete (the executing call)
+	// and on permission.requested (the gated call's id, when the SDK provides one),
+	// so the desktop can attach an AutoYes permission badge to the exact tool line.
+	ToolCallID string   `json:"toolCallId,omitempty"`
+	RequestID  string   `json:"requestId,omitempty"` // permission.requested / user_input.requested id
+	Question   string   `json:"question,omitempty"`  // user_input.requested prompt
+	Choices    []string `json:"choices,omitempty"`   // user_input.requested choices
+	Title      string   `json:"title,omitempty"`     // title : the new session title
+	Status     string   `json:"status,omitempty"`    // mcp/status changes
+	Aborted    bool     `json:"aborted,omitempty"`   // idle : the preceding turn was aborted
+	Error      string   `json:"error,omitempty"`     // error : message
 	// Concise tool summaries (v17): populated only on the tool stream so the desktop
 	// can render CLI-style tool lines (name + args + result). Both are short,
 	// single-line, and truncated — never a full payload.

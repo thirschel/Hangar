@@ -17,6 +17,7 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 	defer s.close()
 
 	mcpServer := "github"
+	toolCallID := "tc1"
 	aborted := true
 	events := []copilot.SessionEvent{
 		{Data: &copilot.AssistantMessageData{Content: "hello", MessageID: "m1"}},
@@ -30,7 +31,12 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 				Name: "read_file",
 			},
 		}},
-		{Data: &copilot.PermissionRequestedData{RequestID: "perm1"}},
+		{Data: &copilot.PermissionRequestedData{
+			RequestID: "perm1",
+			PermissionRequest: &copilot.PermissionRequestShell{
+				ToolCallID: &toolCallID,
+			},
+		}},
 		{Data: &copilot.SessionTitleChangedData{Title: "New title"}},
 		{Data: &copilot.SessionIdleData{Aborted: &aborted}},
 	}
@@ -59,13 +65,13 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 	assertFrame(0, proto.EventKindAssistantMessage, "hello")
 	assertFrame(1, proto.EventKindAssistantDelta, " world")
 	assertFrame(2, proto.EventKindReasoning, "thinking")
-	if frames[3].Kind != proto.EventKindToolStart || frames[3].ToolName != "read_file" || frames[3].MCPServer != "github" {
+	if frames[3].Kind != proto.EventKindToolStart || frames[3].ToolCallID != "tc1" || frames[3].ToolName != "read_file" || frames[3].MCPServer != "github" {
 		t.Fatalf("tool start frame = %+v", frames[3])
 	}
-	if frames[4].Kind != proto.EventKindToolComplete || frames[4].ToolName != "read_file" {
+	if frames[4].Kind != proto.EventKindToolComplete || frames[4].ToolCallID != "tc1" || frames[4].ToolName != "read_file" {
 		t.Fatalf("tool complete frame = %+v", frames[4])
 	}
-	if frames[5].Kind != proto.EventKindPermissionRequest || frames[5].RequestID != "perm1" {
+	if frames[5].Kind != proto.EventKindPermissionRequest || frames[5].RequestID != "perm1" || frames[5].ToolCallID != "tc1" {
 		t.Fatalf("permission frame = %+v", frames[5])
 	}
 	if frames[6].Kind != proto.EventKindTitle || frames[6].Title != "New title" {
@@ -131,11 +137,13 @@ func TestOnSDKEventMCPStatusFrames(t *testing.T) {
 }
 
 func TestPermissionFrameIncludesQuestionAndTool(t *testing.T) {
+	toolCallID := "call-123"
 	frame, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.PermissionRequestedData{
 		RequestID: "perm-shell",
 		PromptRequest: &copilot.PermissionPromptRequestCommands{
 			FullCommandText: "echo PERMTEST_1773",
 			Intention:       "print the test marker",
+			ToolCallID:      &toolCallID,
 		},
 	}})
 	if !ok {
@@ -149,6 +157,9 @@ func TestPermissionFrameIncludesQuestionAndTool(t *testing.T) {
 	}
 	if frame.ToolName != "shell" {
 		t.Fatalf("permission ToolName = %q, want shell", frame.ToolName)
+	}
+	if frame.ToolCallID != toolCallID {
+		t.Fatalf("permission ToolCallID = %q, want %q", frame.ToolCallID, toolCallID)
 	}
 }
 
