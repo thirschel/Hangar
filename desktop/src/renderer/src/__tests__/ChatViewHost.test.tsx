@@ -903,4 +903,107 @@ describe('ChatViewHost', () => {
       vi.useRealTimers();
     }
   });
+
+  // --- Autoscroll + scroll-to-bottom button ------------------------------------
+  // jsdom has no real layout, so stub the scroll container's metrics and drive the
+  // onScroll / ResizeObserver paths directly.
+  function stubScrollMetrics(
+    el: HTMLElement,
+    { scrollHeight, clientHeight, scrollTop }: { scrollHeight: number; clientHeight: number; scrollTop: number },
+  ): { setTop: (v: number) => void; getTop: () => number } {
+    let top = scrollTop;
+    Object.defineProperty(el, 'scrollHeight', { value: scrollHeight, configurable: true });
+    Object.defineProperty(el, 'clientHeight', { value: clientHeight, configurable: true });
+    Object.defineProperty(el, 'scrollTop', {
+      get: () => top,
+      set: (v: number) => {
+        top = v;
+      },
+      configurable: true,
+    });
+    return { setTop: (v) => (top = v), getTop: () => top };
+  }
+
+  it('shows the scroll-to-bottom button only when scrolled up more than 2 viewport heights', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    const btn = container.querySelector('.chat-view__scroll-btn') as HTMLElement;
+    expect(btn).not.toBeNull();
+    expect(btn.className).not.toContain('--visible'); // hidden at the bottom
+
+    const scroll = container.querySelector('.chat-view__scroll') as HTMLElement;
+    const handle = stubScrollMetrics(scroll, { scrollHeight: 1000, clientHeight: 200, scrollTop: 0 });
+
+    // Scrolled to the top: distance 800 > 2*200 => the button fades in.
+    await act(async () => {
+      fireEvent.scroll(scroll);
+    });
+    expect(btn.className).toContain('--visible');
+
+    // Back near the bottom: distance 40 < 400 => hidden again.
+    handle.setTop(760);
+    await act(async () => {
+      fireEvent.scroll(scroll);
+    });
+    expect(btn.className).not.toContain('--visible');
+  });
+
+  it('smooth-scrolls to the bottom and hides the button when clicked', async () => {
+    installMatchMedia(false); // motion allowed => behavior:'smooth'
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    const scroll = container.querySelector('.chat-view__scroll') as HTMLElement;
+    stubScrollMetrics(scroll, { scrollHeight: 1000, clientHeight: 200, scrollTop: 0 });
+    const scrollTo = vi.fn();
+    scroll.scrollTo = scrollTo as unknown as typeof scroll.scrollTo;
+
+    await act(async () => {
+      fireEvent.scroll(scroll);
+    });
+    const btn = container.querySelector('.chat-view__scroll-btn') as HTMLElement;
+    expect(btn.className).toContain('--visible');
+
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    expect(scrollTo).toHaveBeenCalledWith({ top: 1000, behavior: 'smooth' });
+    expect(btn.className).not.toContain('--visible');
+  });
+
+  it('pins the view to the bottom as content grows while stuck (ResizeObserver)', async () => {
+    let roCallback: (() => void) | undefined;
+    const RealRO = (window as { ResizeObserver?: unknown }).ResizeObserver;
+    (window as unknown as { ResizeObserver: unknown }).ResizeObserver = class {
+      constructor(cb: () => void) {
+        roCallback = cb;
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    };
+    try {
+      const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+      await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+      await act(async () => {});
+
+      const scroll = container.querySelector('.chat-view__scroll') as HTMLElement;
+      // Start stuck at the bottom (distance 0 < SCROLL_SLOP).
+      const handle = stubScrollMetrics(scroll, { scrollHeight: 1000, clientHeight: 200, scrollTop: 800 });
+      await act(async () => {
+        fireEvent.scroll(scroll);
+      });
+
+      // Content grows; the observer must re-pin scrollTop to the new scrollHeight.
+      Object.defineProperty(scroll, 'scrollHeight', { value: 1600, configurable: true });
+      expect(roCallback).toBeDefined();
+      await act(async () => {
+        roCallback?.();
+      });
+      expect(handle.getTop()).toBe(1600);
+    } finally {
+      (window as unknown as { ResizeObserver: unknown }).ResizeObserver = RealRO;
+    }
+  });
 });

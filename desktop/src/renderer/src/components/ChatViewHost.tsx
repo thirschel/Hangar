@@ -540,13 +540,15 @@ export function __clearRevealStoreForTests(): void {
 }
 
 // ~40fps frame budget: fast enough to read as smooth writing, slow enough to keep
-// the per-frame Markdown re-parse cheap. Reveal speed is proportional to the
-// backlog (so an 8s burst catches up in ~0.5-1s) but clamped so we never dump the
-// whole message at once nor crawl one char at a time.
-const REVEAL_FRAME_MS = 24;
-const REVEAL_CATCHUP_DIVISOR = 22;
-const REVEAL_MIN_CHARS = 3;
-const REVEAL_MAX_CHARS = 72;
+// ~31fps frame budget: a gentle, readable cadence that lets each word's fade
+// register (rather than a burst settling at once), while keeping the per-frame
+// Markdown re-parse cheap. Reveal speed is proportional to the backlog (so an 8s
+// SDK burst still catches up in ~1.5s) but clamped so we never dump the whole
+// message at once nor crawl one char at a time.
+const REVEAL_FRAME_MS = 32;
+const REVEAL_CATCHUP_DIVISOR = 28;
+const REVEAL_MIN_CHARS = 2;
+const REVEAL_MAX_CHARS = 40;
 
 // Whether to animate at all. In the Electron renderer `matchMedia` always exists,
 // so this is just the reduced-motion preference. In jsdom (vitest) `matchMedia`
@@ -713,7 +715,15 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const modelsRef = useRef<ModelInfo[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Inner wrapper around the transcript; a ResizeObserver on it keeps the view
+  // pinned to the bottom as the reveal/markdown grows the content height (a frame
+  // change is NOT emitted while the typewriter animates, so the frame-keyed layout
+  // effect below cannot follow that growth on its own).
+  const contentRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottom = useRef(true);
+  // Show the floating "scroll to bottom" button when the user is more than ~2
+  // viewport heights above the bottom.
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const localCounter = useRef(0);
 
   // Re-seed AutoYes from the workspace whenever the selected chat changes or the
@@ -796,6 +806,7 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
     setAnswerLabels(new Map());
     localCounter.current = 0;
     shouldStickToBottom.current = true;
+    setShowScrollButton(false);
 
     const addFrame = (frame: EventFrame): void => {
       // Keep the per-session cache current (live deltas included) so a later
@@ -871,10 +882,45 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
     }
   }, [frames.length, streamError, activePage]);
 
+  // Follow the content as it grows. The typewriter reveal (and markdown reflow /
+  // image loads) grows the transcript height WITHOUT a frame change, so the
+  // frame-keyed layout effect above can't track it -- a ResizeObserver on the
+  // content wrapper re-pins to the bottom whenever we're stuck there. Guarded for
+  // jsdom, which lacks ResizeObserver. Re-runs when the page changes because the
+  // content wrapper only exists on the chat page.
+  useEffect(() => {
+    const content = contentRef.current;
+    const el = scrollRef.current;
+    if (!content || !el || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (shouldStickToBottom.current) el.scrollTop = el.scrollHeight;
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      shouldStickToBottom.current = distance < SCROLL_SLOP;
+      setShowScrollButton(el.clientHeight > 0 && distance > el.clientHeight * 2);
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [activePage]);
+
+  // A scroll detaches stick-to-bottom the moment the user moves up, and re-attaches
+  // only once they return to the bottom (within SCROLL_SLOP). The FAB appears once
+  // they are more than ~2 viewport heights above the bottom.
   const onScroll = (): void => {
     const el = scrollRef.current;
     if (!el) return;
-    shouldStickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_SLOP;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    shouldStickToBottom.current = distance < SCROLL_SLOP;
+    setShowScrollButton(el.clientHeight > 0 && distance > el.clientHeight * 2);
+  };
+
+  // Smooth-scroll back to the latest output (instant under reduced motion), re-arm
+  // stick-to-bottom and hide the FAB.
+  const scrollToBottom = (): void => {
+    const el = scrollRef.current;
+    if (!el) return;
+    shouldStickToBottom.current = true;
+    setShowScrollButton(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: revealAnimationEnabled() ? 'smooth' : 'auto' });
   };
 
   const toggleAutoYes = (next: boolean): void => {
@@ -1049,26 +1095,49 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
             </div>
           )}
 
-          <div ref={scrollRef} className="chat-view__scroll" onScroll={onScroll}>
-            {transcript.entries.length === 0 && !streamError && (
-              <div className="chat-view__empty">Waiting for the agent…</div>
-            )}
-            {transcript.entries.map((entry) => (
-              <ChatEntryView
-                key={entry.id}
-                entry={entry}
-                autoYes={autoYes}
-                answeredRequests={answeredRequests}
-                answerLabels={answerLabels}
-                onRespondPermission={respondPermission}
-                onRespondUserInput={respondUserInput}
-              />
-            ))}
-            {streamError && (
-              <div className="chat-entry chat-entry--error" role="alert">
-                {streamError}
+          <div className="chat-view__scroll-wrap">
+            <div ref={scrollRef} className="chat-view__scroll" onScroll={onScroll}>
+              <div ref={contentRef} className="chat-view__scroll-content">
+                {transcript.entries.length === 0 && !streamError && (
+                  <div className="chat-view__empty">Waiting for the agent…</div>
+                )}
+                {transcript.entries.map((entry) => (
+                  <ChatEntryView
+                    key={entry.id}
+                    entry={entry}
+                    autoYes={autoYes}
+                    answeredRequests={answeredRequests}
+                    answerLabels={answerLabels}
+                    onRespondPermission={respondPermission}
+                    onRespondUserInput={respondUserInput}
+                  />
+                ))}
+                {streamError && (
+                  <div className="chat-entry chat-entry--error" role="alert">
+                    {streamError}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
+            <button
+              type="button"
+              className={`chat-view__scroll-btn${showScrollButton ? ' chat-view__scroll-btn--visible' : ''}`}
+              aria-label="Scroll to bottom"
+              aria-hidden={!showScrollButton}
+              tabIndex={showScrollButton ? 0 : -1}
+              onClick={scrollToBottom}
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+                <path
+                  d="M4 6l4 4 4-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           </div>
 
           <div className="chat-view__composer-slot">
