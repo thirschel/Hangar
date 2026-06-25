@@ -59,10 +59,12 @@ describe('ChatViewHost', () => {
 
     await vi.waitFor(() => expect(window.cs.openRichStream).toHaveBeenCalledWith('rich-session', 0));
     expect(screen.getByRole('heading', { name: 'My Chat' })).toBeInTheDocument();
-    // Chat is the only live nav tab; the Phase B tabs are disabled.
+    // Chat, Changes and All files are live; MCP servers and Skills are disabled.
     expect(screen.getByRole('button', { name: 'Chat' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Changes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'All files' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'MCP servers' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'All files' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Skills' })).toBeDisabled();
   });
 
   it('renders assistant text as full-width plain Markdown (not a bubble)', async () => {
@@ -131,5 +133,58 @@ describe('ChatViewHost', () => {
     });
 
     expect(screen.queryByText('Nope')).not.toBeInTheDocument();
+  });
+
+  it('takes over the middle with the ReviewPanel when the Changes tab is clicked', async () => {
+    window.cs.workspaceFiles = vi.fn(async () => [{ path: 'changed.ts', added: 2, removed: 1 }]);
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+
+    // The Changes page (embedded ReviewPanel) renders and the chat composer is
+    // gone -- the page has taken over the middle.
+    expect(await screen.findByText('changed.ts')).toBeInTheDocument();
+    expect(container.querySelector('.review-panel')).not.toBeNull();
+    expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
+    expect(window.cs.workspaceFiles).toHaveBeenCalledWith('ws-1');
+  });
+
+  it('takes over the middle with the FilesPanel when the All files tab is clicked', async () => {
+    window.cs.listDir = vi.fn(async () => [{ name: 'README.md', dir: false }]);
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: 'All files' }));
+
+    expect(await screen.findByText('README.md')).toBeInTheDocument();
+    expect(container.querySelector('.files-panel')).not.toBeNull();
+    expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
+    expect(window.cs.listDir).toHaveBeenCalledWith('C:/repo', '');
+  });
+
+  it('keeps the transcript and the open stream when switching tabs and back to Chat', async () => {
+    window.cs.workspaceFiles = vi.fn(async () => [{ path: 'changed.ts', added: 2, removed: 1 }]);
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    // Seed some transcript history on the Chat page.
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.message', text: 'Hello there' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'idle' } });
+    });
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
+
+    // Switch to Changes: the transcript leaves the DOM while the page is shown.
+    fireEvent.click(screen.getByRole('button', { name: 'Changes' }));
+    expect(await screen.findByText('changed.ts')).toBeInTheDocument();
+    expect(screen.queryByText('Hello there')).not.toBeInTheDocument();
+
+    // Back to Chat: the history is rebuilt from the still-live stream and the
+    // stream was never re-opened (openRichStream stays at a single call).
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
+    expect(window.cs.openRichStream).toHaveBeenCalledTimes(1);
+    expect(window.cs.closeRichStream).not.toHaveBeenCalled();
   });
 });

@@ -3642,3 +3642,14 @@ body.is-row-resizing .center-terminal__resizer::after {
   opacity: 0.45;
   cursor: default;
 }
+
+/* ChatView section pages: the Changes and All files tabs drop the standard
+   ReviewPanel / FilesPanel straight into the chat body. The page wrapper reuses
+   the .chat-view__body flex column, so the embedded panel fills the middle and
+   owns its internal scrolling -- mirroring the right-panel embedding rule
+   (.side-panel__top .tab-pane > .review-panel / .files-panel). */
+.chat-view__page > .review-panel,
+.chat-view__page > .files-panel {
+  flex: 1;
+  min-height: 0;
+}

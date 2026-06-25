@@ -3,11 +3,15 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { EventFrame, WorkspaceInfo } from '../../../main/host-client';
 import { Markdown } from './Markdown';
 import { Composer } from './Composer';
+import { ReviewPanel } from './ReviewPanel';
+import { FilesPanel } from './FilesPanel';
 
 // ChatViewHost is the rich chat surface for the new Agent mode: a top bar (chat
-// title + AutoYes), a section nav (Chat is live; the rest land in Phase B) and
-// the streaming transcript with a composer slot. It subscribes to the same rich
-// event stream as TranscriptView but presents it as a chat -- user turns as
+// title + AutoYes), a section nav (Chat / Changes / All files are live; MCP
+// servers and Skills land later) and the streaming transcript with a composer
+// slot. The Changes and All files pages reuse the standard ReviewPanel /
+// FilesPanel embedded in the chat body. It subscribes to the same rich event
+// stream as TranscriptView but presents it as a chat -- user turns as
 // right-aligned bubbles, assistant turns as full-width Markdown-rendered text.
 //
 // The streaming pipeline below (frame reducer + permission / user-input handling)
@@ -26,14 +30,14 @@ type ChatNavTab = {
   enabled: boolean;
 };
 
-// Only "Chat" is wired in this task; the rest render as disabled "Coming soon"
-// tabs and get their pages in Phase B.
+// Chat, Changes and All files are wired; MCP servers and Skills render as
+// disabled "Coming soon" tabs and get their pages in a later task.
 const NAV_TABS: ChatNavTab[] = [
   { id: 'chat', label: 'Chat', enabled: true },
   { id: 'mcp', label: 'MCP servers', enabled: false },
   { id: 'skills', label: 'Skills', enabled: false },
-  { id: 'changes', label: 'Changes', enabled: false },
-  { id: 'files', label: 'All files', enabled: false },
+  { id: 'changes', label: 'Changes', enabled: true },
+  { id: 'files', label: 'All files', enabled: true },
 ];
 
 // --- Transcript model (isolated copy of TranscriptView's reducer) ----------
@@ -446,7 +450,7 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
         })}
       </nav>
 
-      {activePage === 'chat' ? (
+      {activePage === 'chat' && (
         <div className="chat-view__body">
           {transcript.servers.size > 0 && (
             <div className="chat-view__mcp" aria-label="MCP server status">
@@ -500,7 +504,21 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
             />
           </div>
         </div>
-      ) : (
+      )}
+
+      {activePage === 'changes' && (
+        <div className="chat-view__body chat-view__page">
+          <ReviewPanel workspace={workspace} embedded active={activePage === 'changes'} />
+        </div>
+      )}
+
+      {activePage === 'files' && (
+        <div className="chat-view__body chat-view__page">
+          <FilesPanel workspace={workspace} embedded />
+        </div>
+      )}
+
+      {(activePage === 'mcp' || activePage === 'skills') && (
         <div className="chat-view__body chat-view__stub">
           <p className="chat-view__stub-text">Coming soon</p>
         </div>
