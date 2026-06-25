@@ -66,12 +66,14 @@ type TranscriptEntry =
       kind: 'tool';
       toolName: string;
       mcpServer?: string;
-      status: 'running' | 'done';
-      detail?: string;
+      status: 'running' | 'done' | 'error';
+      // Concise CLI-style detail: args captured on tool.start, result merged in
+      // on tool.complete (the daemon puts the error message in result on failure).
+      args?: string;
+      result?: string;
     }
   | { id: string; kind: 'permission'; requestId?: string; question: string; toolName?: string; choices: string[] }
   | { id: string; kind: 'input'; requestId?: string; question: string; choices: string[] }
-  | { id: string; kind: 'usage'; text: string }
   | { id: string; kind: 'idle'; aborted: boolean }
   | { id: string; kind: 'error'; text: string };
 
@@ -220,7 +222,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           toolName: frame.toolName ?? 'Tool',
           mcpServer: frame.mcpServer,
           status: 'running',
-          detail: frame.status,
+          args: frame.toolArgs,
         };
         toolEntries.set(toolKey(frame), entries.length);
         entries.push(entry);
@@ -229,16 +231,21 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
       case 'tool.complete': {
         const key = toolKey(frame);
         const index = toolEntries.get(key);
-        const next: TranscriptEntry = {
-          id: `tool-${key}-${frame.seq}`,
+        // Merge onto the matching tool.start: keep the start's args, attach the
+        // concise result (the daemon also puts the error message in toolResult),
+        // and flip the status to done/error so the inline dot recolors.
+        const prev = index !== undefined ? entries[index] : undefined;
+        const next: Extract<TranscriptEntry, { kind: 'tool' }> = {
+          id: prev?.id ?? `tool-${key}-${frame.seq}`,
           kind: 'tool',
-          toolName: frame.toolName ?? 'Tool',
-          mcpServer: frame.mcpServer,
-          status: 'done',
-          detail: frame.error ?? frame.status,
+          toolName: frame.toolName ?? (prev?.kind === 'tool' ? prev.toolName : undefined) ?? 'Tool',
+          mcpServer: frame.mcpServer ?? (prev?.kind === 'tool' ? prev.mcpServer : undefined),
+          status: frame.error ? 'error' : 'done',
+          args: prev?.kind === 'tool' ? prev.args : undefined,
+          result: frame.toolResult ?? frame.error,
         };
         if (index === undefined) entries.push(next);
-        else entries[index] = { ...next, id: entries[index].id };
+        else entries[index] = next;
         break;
       }
       case 'permission.requested':
@@ -263,14 +270,15 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         });
         break;
       case 'usage':
-        // Capture the structured reading for the composer header AND keep the
-        // existing inline transcript entry (last-write-wins for the header).
+        // Capture the structured reading for the composer header (active model +
+        // context %). The CLI shows no inline "Usage updated" line, so we never
+        // push a transcript entry -- only the header consumes this snapshot
+        // (last-write-wins across the seq-sorted frames).
         usage = {
           model: frame.model,
           currentTokens: frame.currentTokens,
           tokenLimit: frame.tokenLimit,
         };
-        entries.push({ id: `usage-${frame.seq}`, kind: 'usage', text: frameText(frame) });
         break;
       case 'idle':
         if (pendingAssistantIndex !== null) {
@@ -756,19 +764,24 @@ function ChatEntryView({
         </div>
       );
     case 'reasoning':
+      // CLI-style: a subtle faded header over faded muted-italic text, default
+      // expanded but still collapsible. No bubble (no border/background).
       return (
-        <details className="chat-entry chat-entry--reasoning">
-          <summary>Reasoning</summary>
-          <div className="chat-entry__text">{entry.text}</div>
+        <details className="chat-entry--reasoning" open>
+          <summary className="chat-reasoning__summary">Reasoning</summary>
+          <div className="chat-reasoning__text">{entry.text}</div>
         </details>
       );
     case 'tool':
+      // CLI-style: a clean single line -- a small status dot, the tool name,
+      // then faded args and a faded result. No box, no Running/Done badge.
       return (
-        <div className={`chat-tool chat-tool--${entry.status}`}>
-          <span className="chat-tool__state">{entry.status === 'running' ? 'Running' : 'Done'}</span>
+        <div className="chat-tool">
+          <span className={`chat-tool__dot chat-tool__dot--${entry.status}`} aria-hidden="true" />
           <span className="chat-tool__name">{entry.toolName}</span>
           {entry.mcpServer && <span className="chat-tool__server">{entry.mcpServer}</span>}
-          {entry.detail && <span className="chat-tool__detail">{entry.detail}</span>}
+          {entry.args && <span className="chat-tool__args">{entry.args}</span>}
+          {entry.result && <span className="chat-tool__result">{entry.result}</span>}
         </div>
       );
     case 'permission':
@@ -790,11 +803,10 @@ function ChatEntryView({
           onRespond={onRespondUserInput}
         />
       );
-    case 'usage':
-      return <div className="chat-entry chat-entry--usage">{entry.text || 'Usage updated'}</div>;
     case 'idle':
+      // A tiny faded centered turn marker (the CLI shows no usage line at all).
       return (
-        <div className="chat-entry chat-entry--usage">
+        <div className="chat-entry--idle">
           {entry.aborted ? 'Turn aborted.' : 'Turn complete.'}
         </div>
       );

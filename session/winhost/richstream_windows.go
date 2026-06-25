@@ -237,9 +237,18 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 	case *copilot.AssistantReasoningData:
 		return proto.EventFrame{Kind: proto.EventKindReasoning, Text: data.Content}, true
 	case *copilot.ToolExecutionStartData:
-		return proto.EventFrame{Kind: proto.EventKindToolStart, ToolName: data.ToolName, MCPServer: stringPtrValue(data.MCPServerName)}, true
+		return proto.EventFrame{
+			Kind:      proto.EventKindToolStart,
+			ToolName:  toolStartName(data),
+			ToolArgs:  summarizeToolArgs(data.Arguments),
+			MCPServer: stringPtrValue(data.MCPServerName),
+		}, true
 	case *copilot.ToolExecutionCompleteData:
-		return proto.EventFrame{Kind: proto.EventKindToolComplete, ToolName: toolCompleteName(data)}, true
+		return proto.EventFrame{
+			Kind:       proto.EventKindToolComplete,
+			ToolName:   toolCompleteName(data),
+			ToolResult: summarizeToolResult(data),
+		}, true
 	case *copilot.PermissionRequestedData:
 		return proto.EventFrame{
 			Kind:      proto.EventKindPermissionRequest,
@@ -370,4 +379,17 @@ func toolCompleteName(data *copilot.ToolExecutionCompleteData) string {
 		return ""
 	}
 	return data.ToolDescription.Name
+}
+
+// toolStartName returns the friendliest available name for a starting tool call,
+// keeping it consistent with toolCompleteName: prefer the SDK ToolDescription.Name
+// (present for MCP tools), falling back to the raw ToolName for plain tools.
+func toolStartName(data *copilot.ToolExecutionStartData) string {
+	if data == nil {
+		return ""
+	}
+	if data.ToolDescription != nil && data.ToolDescription.Name != "" {
+		return data.ToolDescription.Name
+	}
+	return data.ToolName
 }

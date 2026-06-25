@@ -6,8 +6,10 @@ import (
 )
 
 func TestVersionV16(t *testing.T) {
-	if Version != 16 {
-		t.Fatalf("Version = %d, want 16", Version)
+	// v16 (per-model reasoning effort + context tier) is a floor, not the current
+	// version: once shipped, its surface must remain present in every later version.
+	if Version < 16 {
+		t.Fatalf("Version = %d, want >= 16", Version)
 	}
 }
 

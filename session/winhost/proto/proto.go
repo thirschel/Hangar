@@ -63,7 +63,13 @@ import (
 // Request.Model on a SetModel call so the host can pass them to the Copilot SDK
 // SetModelOptions. Additive: an omitted/empty Effort and ContextTier switch the
 // model exactly as before (SetModel with nil options).
-const Version = 16
+// v17 enriches the rich tool stream so the desktop can render CLI-style tool lines
+// (name + args + result). EventFrame gains ToolArgs — a concise arguments summary
+// on EventKindToolStart — and ToolResult — a concise result/error summary on
+// EventKindToolComplete. Both are short, single-line, and truncated; they never
+// carry a full payload (e.g. a file's contents). Additive: a tool.start/tool.complete
+// frame with empty summaries serializes exactly as it did under v16.
+const Version = 17
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -384,6 +390,11 @@ type EventFrame struct {
 	Status    string   `json:"status,omitempty"`    // mcp/status changes
 	Aborted   bool     `json:"aborted,omitempty"`   // idle : the preceding turn was aborted
 	Error     string   `json:"error,omitempty"`     // error : message
+	// Concise tool summaries (v17): populated only on the tool stream so the desktop
+	// can render CLI-style tool lines (name + args + result). Both are short,
+	// single-line, and truncated — never a full payload.
+	ToolArgs   string `json:"toolArgs,omitempty"`   // concise tool arguments summary (on EventKindToolStart)
+	ToolResult string `json:"toolResult,omitempty"` // concise tool result/error summary (on EventKindToolComplete)
 	// Context-usage header (v14): populated only on EventKindUsage. Model is the
 	// session's active model; CurrentTokens/TokenLimit are the context-window usage
 	// the desktop renders as context% (CurrentTokens/TokenLimit). Best-effort —

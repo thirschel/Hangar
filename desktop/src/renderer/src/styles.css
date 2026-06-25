@@ -3335,24 +3335,36 @@ body.is-row-resizing .center-terminal__resizer::after {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
-.chat-entry--reasoning summary {
-  cursor: pointer;
-  color: var(--text-secondary);
+/* Reasoning: CLI-style faded block -- a subtle header over muted-italic text,
+   no bubble (no border/background). Default expanded but still collapsible. */
+.chat-entry--reasoning {
+  margin-bottom: var(--space-4);
 }
-.chat-entry__text {
-  margin-top: var(--space-2);
+.chat-reasoning__summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.chat-reasoning__summary::-webkit-details-marker {
+  display: none;
+}
+.chat-reasoning__text {
+  margin-top: var(--space-1);
+  color: var(--text-faint);
+  font-style: italic;
   white-space: pre-wrap;
-  line-height: 1.45;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 .chat-entry__meta {
   color: var(--text-muted);
   font-size: var(--fs-xs);
 }
-.chat-entry--usage {
-  padding: var(--space-2) var(--space-3);
-  border-color: transparent;
-  background: transparent;
-  color: var(--text-muted);
+/* Turn markers (idle): a tiny faded centered line; the CLI shows no usage row. */
+.chat-entry--idle {
+  margin: var(--space-3) 0;
+  color: var(--text-faint);
   font-size: var(--fs-xs);
   text-align: center;
 }
@@ -3415,35 +3427,50 @@ body.is-row-resizing .center-terminal__resizer::after {
   box-shadow: var(--shadow-focus);
 }
 
-/* Tool card (running / done). */
+/* Tool call: CLI-style clean single line -- a small status dot, the tool name,
+   then faded args/result. No box, no Running/Done badge. */
 .chat-tool {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  margin-bottom: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
 }
-.chat-tool__state {
-  min-width: 52px;
-  color: var(--text-info);
-  font-size: var(--fs-xs);
-  text-transform: uppercase;
+.chat-tool__dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
 }
-.chat-tool--done .chat-tool__state {
-  color: var(--success-text);
+.chat-tool__dot--running {
+  background: var(--text-info);
+}
+.chat-tool__dot--done {
+  background: var(--success-text);
+}
+.chat-tool__dot--error {
+  background: var(--danger);
 }
 .chat-tool__name {
-  color: var(--text-strong);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: var(--fs-sm);
 }
 .chat-tool__server,
-.chat-tool__detail {
+.chat-tool__args,
+.chat-tool__result {
   color: var(--text-muted);
-  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.chat-tool__result {
+  color: var(--text-faint);
+}
+/* Subtle "·" separator before the result, only when args precede it. */
+.chat-tool__args ~ .chat-tool__result::before {
+  content: '· ';
+  color: var(--text-faint);
 }
 
 /* Wrapper for the Agent composer (components/Composer.tsx). The composer owns its

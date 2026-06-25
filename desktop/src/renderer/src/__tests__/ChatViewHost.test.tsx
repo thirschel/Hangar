@@ -86,18 +86,75 @@ describe('ChatViewHost', () => {
     expect(screen.getByText('Turn complete.')).toBeInTheDocument();
   });
 
-  it('renders a completed tool card with server + state', async () => {
-    render(<ChatViewHost workspace={makeWorkspace()} />);
+  it('renders a completed tool call as a clean line with a done dot (no badge)', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
 
     await act(async () => {
       richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'tool.start', toolName: 'read_file', mcpServer: 'filesystem', requestId: 't1' } });
-      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'tool.complete', toolName: 'read_file', mcpServer: 'filesystem', requestId: 't1', status: 'ok' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'tool.complete', toolName: 'read_file', mcpServer: 'filesystem', requestId: 't1' } });
     });
 
     expect(screen.getByText('read_file')).toBeInTheDocument();
     expect(screen.getByText('filesystem')).toBeInTheDocument();
-    expect(screen.getByText('Done')).toBeInTheDocument();
+    // Status is a colored dot now, not a "Running"/"Done" text badge box.
+    expect(container.querySelector('.chat-tool__dot--done')).not.toBeNull();
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+    expect(screen.queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it('merges tool.start args and tool.complete result into one clean line', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'tool.start', toolName: 'read', toolArgs: 'README.md', requestId: 't1' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'tool.complete', toolName: 'read', toolResult: '150 lines read', requestId: 't1' } });
+    });
+
+    // A single clean line: name + args (kept from the start) + result (complete).
+    const line = container.querySelector('.chat-tool') as HTMLElement | null;
+    expect(line).not.toBeNull();
+    const row = line as HTMLElement;
+    expect(within(row).getByText('read')).toBeInTheDocument();
+    expect(within(row).getByText('README.md')).toBeInTheDocument();
+    expect(within(row).getByText('150 lines read')).toBeInTheDocument();
+    // A done dot, not a "Done" badge box.
+    expect(row.querySelector('.chat-tool__dot--done')).not.toBeNull();
+    expect(screen.queryByText('Done')).not.toBeInTheDocument();
+  });
+
+  it('renders reasoning as faded text inside an expanded <details> (no bubble)', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.reasoning', text: 'Thinking about it' } });
+    });
+
+    const text = screen.getByText('Thinking about it');
+    // Faded class is present and the wrapper is a default-expanded <details>.
+    expect(text).toHaveClass('chat-reasoning__text');
+    const details = text.closest('details');
+    expect(details).not.toBeNull();
+    expect(details).toHaveAttribute('open');
+    expect(container.querySelector('.chat-entry--reasoning')).toBe(details);
+    // The boxed bubble base class (border/background) is dropped -- no bubble.
+    expect(details).not.toHaveClass('chat-entry');
+  });
+
+  it('does not render an inline "Usage updated" entry for a usage frame', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'usage', model: 'gpt-5', currentTokens: 1, tokenLimit: 100 } });
+    });
+
+    // The CLI shows no inline usage row: the snapshot only drives the header, so
+    // no transcript entry is pushed (the empty-state placeholder stays visible).
+    expect(screen.queryByText('Usage updated')).not.toBeInTheDocument();
+    expect(screen.getByText(/Waiting for the agent/)).toBeInTheDocument();
   });
 
   it('sends a message and shows it optimistically as a right-aligned user bubble', async () => {

@@ -109,6 +109,12 @@ export interface EventFrame {
   model?: string;
   currentTokens?: number;
   tokenLimit?: number;
+  // Concise tool detail for the Agent transcript's CLI-style tool line. toolArgs
+  // rides a 'tool.start' frame (e.g. a path/query); toolResult rides a
+  // 'tool.complete' frame (e.g. "150 lines read") and carries the error message
+  // when the tool failed. Both optional -- absent on non-tool frames.
+  toolArgs?: string;
+  toolResult?: string;
 }
 
 // A selectable agent model, returned by the ListModels RPC and switched live via
