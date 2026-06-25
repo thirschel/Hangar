@@ -59,8 +59,8 @@ const SCROLL_SLOP = 48;
 
 type TranscriptEntry =
   | { id: string; kind: 'user'; text: string }
-  | { id: string; kind: 'assistant'; text: string; streaming: boolean }
-  | { id: string; kind: 'reasoning'; text: string; streaming?: boolean }
+  | { id: string; kind: 'assistant'; text: string; streaming: boolean; fromDelta?: boolean }
+  | { id: string; kind: 'reasoning'; text: string; streaming?: boolean; fromDelta?: boolean }
   | {
       id: string;
       kind: 'tool';
@@ -236,6 +236,10 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
             kind: 'assistant',
             text: pendingAssistantText,
             streaming: true,
+            // Built from a delta => generated live in front of the user, so the
+            // typewriter reveal animates it. Replayed history arrives as a direct
+            // 'assistant.message' (no deltas) and stays fromDelta:false => instant.
+            fromDelta: true,
           });
         } else {
           entries[pendingAssistantIndex] = {
@@ -258,9 +262,21 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
             kind: 'assistant',
             text,
             streaming: false,
+            // This turn streamed deltas => keep it animating to completion via the
+            // reveal even though it just finalized (short replies finalize within
+            // ~6ms of their single delta burst, so the reveal -- not `streaming` --
+            // is what makes them write out).
+            fromDelta: true,
           };
         } else {
-          entries.push({ id: `assistant-${frame.seq}`, kind: 'assistant', text, streaming: false });
+          // No deltas preceded this full message => replayed history / instant.
+          entries.push({
+            id: `assistant-${frame.seq}`,
+            kind: 'assistant',
+            text,
+            streaming: false,
+            fromDelta: false,
+          });
         }
         pendingAssistantIndex = null;
         pendingAssistantText = '';
@@ -281,6 +297,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
             kind: 'reasoning',
             text: pendingReasoningText,
             streaming: true,
+            fromDelta: true,
           });
         } else {
           entries[pendingReasoningIndex] = {
@@ -302,10 +319,12 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
             id: `reasoning-${pendingReasoningSeq ?? frame.seq}`,
             kind: 'reasoning',
             text,
+            fromDelta: true,
           };
         } else {
-          // No deltas were streamed: push a finished reasoning entry as before.
-          entries.push({ id: `reasoning-${frame.seq}`, kind: 'reasoning', text });
+          // No deltas were streamed: push a finished reasoning entry as before
+          // (replayed history / a full-only reasoning => rendered instantly).
+          entries.push({ id: `reasoning-${frame.seq}`, kind: 'reasoning', text, fromDelta: false });
         }
         pendingReasoningIndex = null;
         pendingReasoningText = '';
@@ -495,6 +514,177 @@ const richFrameCache = new Map<string, Map<number, EventFrame>>();
 export function __clearRichFrameCacheForTests(): void {
   richFrameCache.clear();
 }
+
+// --- Typewriter reveal -----------------------------------------------------
+// The Copilot SDK does NOT stream smooth tokens: a measured delta-timing spike
+// showed it flushes deltas in coarse bursts (a whole short reply is a SINGLE
+// burst that finalizes ~6ms later; a long reply arrives in ~8s bursts of 15-20
+// words at the same instant). So animating off raw delta cadence can't produce a
+// "writing" effect. Instead we reveal the (already-accumulated) target text on a
+// timer, word-by-word, decoupled from how/when the bytes arrived -- exactly how
+// Claude/ChatGPT replay buffered output at a smooth rate.
+//
+// Progress is kept in a module-level store keyed by entry id so it survives a
+// ChatViewHost remount AND the ~7-15s rich-stream re-subscribe (the cache replays
+// the whole transcript on every resubscribe, which would otherwise restart the
+// reveal). Once an id is `done` it stays done; an in-flight reveal resumes from
+// its stored position.
+type RevealState = { revealed: number; done: boolean };
+const revealStore = new Map<string, RevealState>();
+
+// Test-only hook: clear the module-global reveal store so progress never leaks
+// across cases (mirrors __clearRichFrameCacheForTests).
+// eslint-disable-next-line react-refresh/only-export-components
+export function __clearRevealStoreForTests(): void {
+  revealStore.clear();
+}
+
+// ~40fps frame budget: fast enough to read as smooth writing, slow enough to keep
+// the per-frame Markdown re-parse cheap. Reveal speed is proportional to the
+// backlog (so an 8s burst catches up in ~0.5-1s) but clamped so we never dump the
+// whole message at once nor crawl one char at a time.
+const REVEAL_FRAME_MS = 24;
+const REVEAL_CATCHUP_DIVISOR = 22;
+const REVEAL_MIN_CHARS = 3;
+const REVEAL_MAX_CHARS = 72;
+
+// Whether to animate at all. In the Electron renderer `matchMedia` always exists,
+// so this is just the reduced-motion preference. In jsdom (vitest) `matchMedia`
+// is absent => treat as "no animation" so component tests see fully-revealed text
+// immediately; the dedicated reveal tests install a matchMedia stub to opt in.
+function revealAnimationEnabled(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+// Advance a character count forward to the next whitespace boundary so we only
+// ever reveal whole words (never cut a word mid-render). Terminates at end of text.
+function snapToWordEnd(text: string, count: number): number {
+  let n = Math.min(count, text.length);
+  while (n < text.length && /\S/.test(text[n])) n += 1;
+  return n;
+}
+
+// Drive the progressive reveal of `text` for the entry `id`. `streaming` defers
+// the `done` mark so a mid-stream pause (caught up to the text we have so far)
+// doesn't permanently stop the reveal. `eligible` is the reducer's `fromDelta`:
+// true only for messages generated live (built from deltas); replayed history and
+// full-only messages snap to full. Returns the visible slice + whether a reveal
+// is still in progress (drives the trailing cursor and the per-word fade).
+function useReveal(
+  id: string,
+  text: string,
+  streaming: boolean,
+  eligible: boolean,
+): { shown: string; revealing: boolean } {
+  const target = text.length;
+  const [revealed, setRevealed] = useState<number>(() => {
+    const existing = revealStore.get(id);
+    if (existing) return Math.min(existing.revealed, target);
+    // First time we see this id: animate only a live (delta-built) message when
+    // motion is allowed; everything else is revealed in full at once.
+    if (!eligible || !revealAnimationEnabled()) {
+      revealStore.set(id, { revealed: target, done: true });
+      return target;
+    }
+    revealStore.set(id, { revealed: 0, done: false });
+    return 0;
+  });
+
+  // Latest text/target/streaming for the tick loop, which is started once per id
+  // and must NOT restart on every render (and must keep ticking on its own rather
+  // than rescheduling from a re-render -- a per-render reschedule stalls because
+  // React passive effects don't reliably flush between fake-timer ticks).
+  const textRef = useRef(text);
+  textRef.current = text;
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Advance loop: one interval per entry id. The updater is pure (no store writes
+  // / no clears); persistence + finalize/stop live in the sync effect below.
+  useEffect(() => {
+    if (revealStore.get(id)?.done) return; // snapped to full: no loop needed
+    const interval = setInterval(() => {
+      setRevealed((current) => {
+        const tgt = targetRef.current;
+        if (current >= tgt) return current; // caught up; await more text
+        const remaining = tgt - current;
+        const chunk = Math.min(
+          REVEAL_MAX_CHARS,
+          Math.max(REVEAL_MIN_CHARS, Math.ceil(remaining / REVEAL_CATCHUP_DIVISOR)),
+        );
+        return snapToWordEnd(textRef.current, current + chunk);
+      });
+    }, REVEAL_FRAME_MS);
+    intervalRef.current = interval;
+    return () => {
+      clearInterval(interval);
+      intervalRef.current = null;
+    };
+  }, [id]);
+
+  // Persist progress to the module store (survives remount / re-subscribe) and
+  // finalize + stop the loop once we've caught up and the stream has ended. Also
+  // keeps a snapped (done) entry pinned to full if its text grew after the snap.
+  useEffect(() => {
+    const state = revealStore.get(id);
+    if (state?.done) {
+      if (revealed < target) setRevealed(target);
+      return;
+    }
+    if (revealed >= target && !streaming) {
+      revealStore.set(id, { revealed: target, done: true });
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    } else {
+      revealStore.set(id, { revealed, done: false });
+    }
+  }, [id, revealed, target, streaming]);
+
+  const caughtUp = revealed >= target;
+  return {
+    shown: text.slice(0, revealed),
+    // Still "revealing" (cursor + fade) while there is unshown text, or while the
+    // stream is open and we've caught up (more bursts may follow).
+    revealing: !caughtUp || streaming,
+  };
+}
+
+// Assistant response: progressively revealed Markdown with a trailing cursor while
+// it writes. The per-word `.word-fade` softens each newly-revealed word.
+function AssistantMessage({
+  entry,
+}: {
+  entry: Extract<TranscriptEntry, { kind: 'assistant' }>;
+}): JSX.Element {
+  const { shown, revealing } = useReveal(entry.id, entry.text, entry.streaming, entry.fromDelta ?? false);
+  return (
+    <div className="chat-msg chat-msg--assistant">
+      <Markdown text={shown} animate={revealing} />
+      {revealing && <span className="chat-msg__cursor" aria-label="streaming" />}
+    </div>
+  );
+}
+
+// Reasoning: same progressive reveal over the faded, collapsible plain-text block
+// so "thinking" writes out like the CLI instead of popping in.
+function ReasoningBlock({
+  entry,
+}: {
+  entry: Extract<TranscriptEntry, { kind: 'reasoning' }>;
+}): JSX.Element {
+  const { shown } = useReveal(entry.id, entry.text, entry.streaming ?? false, entry.fromDelta ?? false);
+  return (
+    <details className="chat-entry--reasoning" open>
+      <summary className="chat-reasoning__summary">Reasoning</summary>
+      <div className="chat-reasoning__text">{shown}</div>
+    </details>
+  );
+}
+
 
 export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const [framesBySeq, setFramesBySeq] = useState<Map<number, EventFrame>>(() => new Map());
@@ -947,23 +1137,14 @@ function ChatEntryView({
         </div>
       );
     case 'assistant':
-      return (
-        <div className="chat-msg chat-msg--assistant">
-          {/* Only the live streaming message fades word-by-word; finalized and
-              resumed/historical messages (streaming === false) render instantly. */}
-          <Markdown text={entry.text} animate={entry.streaming} />
-          {entry.streaming && <span className="chat-msg__cursor" aria-label="streaming" />}
-        </div>
-      );
+      // Progressive typewriter reveal (decoupled from the SDK's bursty deltas);
+      // history / resumed messages snap to full. See AssistantMessage / useReveal.
+      return <AssistantMessage entry={entry} />;
     case 'reasoning':
       // CLI-style: a subtle faded header over faded muted-italic text, default
-      // expanded but still collapsible. No bubble (no border/background).
-      return (
-        <details className="chat-entry--reasoning" open>
-          <summary className="chat-reasoning__summary">Reasoning</summary>
-          <div className="chat-reasoning__text">{entry.text}</div>
-        </details>
-      );
+      // expanded but still collapsible. No bubble (no border/background). Streamed
+      // reasoning writes out via the same reveal.
+      return <ReasoningBlock entry={entry} />;
     case 'tool':
       // CLI-style: a clean single line -- a small status dot, the tool name,
       // then faded args and a faded result. No box, no Running/Done badge.

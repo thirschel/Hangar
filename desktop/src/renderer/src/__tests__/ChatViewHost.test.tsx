@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventFrame, WorkspaceInfo } from '../../../main/host-client';
-import { ChatViewHost, __clearRichFrameCacheForTests } from '../components/ChatViewHost';
+import { ChatViewHost, __clearRichFrameCacheForTests, __clearRevealStoreForTests } from '../components/ChatViewHost';
 
 function makeWorkspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   return {
@@ -39,6 +39,9 @@ describe('ChatViewHost', () => {
     // The rich-frame cache is module-global, so clear it between cases to keep
     // each test's transcript isolated (no frames leaking across mounts/cases).
     __clearRichFrameCacheForTests();
+    // The typewriter reveal store is likewise module-global; clear it so reveal
+    // progress never leaks across cases.
+    __clearRevealStoreForTests();
     richFrameCallback = undefined;
     window.cs.openRichStream = vi
       .fn()
@@ -57,6 +60,9 @@ describe('ChatViewHost', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    // The reveal tests install a matchMedia stub; remove it so the default cases
+    // (which rely on its absence to snap reveals to full) stay isolated.
+    Reflect.deleteProperty(window, 'matchMedia');
   });
 
   it('opens the rich stream for the chat session and shows the title + nav', async () => {
@@ -770,5 +776,131 @@ describe('ChatViewHost', () => {
     fireEvent.click(modelButton);
     const menu = screen.getByRole('menu', { name: 'Select model' });
     expect(within(menu).getByText('Long context')).toBeInTheDocument();
+  });
+
+  // --- Typewriter reveal (decoupled from the SDK's bursty delta cadence) --------
+  // In jsdom matchMedia is absent, so the reveal snaps to full by default (keeps
+  // the other cases simple). These tests install a matchMedia stub to opt the
+  // reveal in (matches:false = motion allowed) or to exercise reduced motion
+  // (matches:true), and drive the word-by-word reveal with fake timers.
+  function installMatchMedia(matches: boolean): void {
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  const LONG_REPLY = 'The quick brown fox jumps over the lazy dog and then keeps on running';
+
+  it('writes a live (delta-built) reply out progressively instead of all at once', async () => {
+    installMatchMedia(false); // motion allowed -> the reveal animates
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+    // Flush the mount's async model fetch before switching to fake timers.
+    await act(async () => {});
+
+    vi.useFakeTimers();
+    try {
+      // A live turn: a single delta burst (the SDK's real cadence) then the full
+      // message ~immediately after -- exactly the short-reply case that used to
+      // pop in. The reveal must still play out over time.
+      act(() => {
+        richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.delta', text: LONG_REPLY } });
+        richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'assistant.message', text: LONG_REPLY } });
+        richFrameCallback?.({ session: 'rich-session', frame: { seq: 3, kind: 'idle' } });
+      });
+
+      const assistant = container.querySelector('.chat-msg--assistant') as HTMLElement;
+      // Nothing (or only the first words) revealed yet -- NOT the whole reply.
+      expect(assistant.textContent).not.toContain('running');
+      // Still writing => the trailing cursor is present.
+      expect(container.querySelector('.chat-msg__cursor')).not.toBeNull();
+
+      // Let the reveal play out.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect(assistant.textContent).toContain(LONG_REPLY);
+      // Done writing => cursor gone.
+      expect(container.querySelector('.chat-msg__cursor')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reveals resumed history (a full message with no deltas) instantly even with motion on', async () => {
+    installMatchMedia(false); // motion allowed, yet history must NOT animate
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    // A replayed/historical message arrives as a direct full 'assistant.message'
+    // (no preceding deltas) => fromDelta:false => snaps to full with no reveal.
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.message', text: LONG_REPLY } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'idle' } });
+    });
+
+    expect(screen.getByText(LONG_REPLY)).toBeInTheDocument();
+  });
+
+  it('snaps a live reply to full under reduced motion', async () => {
+    installMatchMedia(true); // prefers-reduced-motion: reduce
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.delta', text: LONG_REPLY } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'assistant.message', text: LONG_REPLY } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 3, kind: 'idle' } });
+    });
+
+    // No timer advance: reduced motion shows the whole reply at once.
+    expect(screen.getByText(LONG_REPLY)).toBeInTheDocument();
+  });
+
+  it('does not restart an in-flight reveal across a remount (re-subscribe)', async () => {
+    installMatchMedia(false);
+    const first = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+    await act(async () => {});
+
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.delta', text: LONG_REPLY } });
+        richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'assistant.message', text: LONG_REPLY } });
+      });
+      // Reveal partway (not finished).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(150);
+      });
+      const partial = (first.container.querySelector('.chat-msg--assistant') as HTMLElement).textContent ?? '';
+      expect(partial.length).toBeGreaterThan(0);
+      expect(partial).not.toContain('running');
+
+      // Remount: the per-session frame cache repaints the transcript and the
+      // module reveal store keeps progress, so the reveal must NOT restart at 0.
+      first.unmount();
+      const second = render(<ChatViewHost workspace={makeWorkspace()} />);
+      await act(async () => {});
+      const afterRemount = (second.container.querySelector('.chat-msg--assistant') as HTMLElement).textContent ?? '';
+      expect(afterRemount.length).toBeGreaterThanOrEqual(partial.length);
+
+      // And it still finishes.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4000);
+      });
+      expect((second.container.querySelector('.chat-msg--assistant') as HTMLElement).textContent).toContain(
+        LONG_REPLY,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
