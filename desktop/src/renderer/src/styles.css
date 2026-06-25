@@ -2790,10 +2790,12 @@ body.is-row-resizing .center-terminal__resizer::after {
   background: var(--bg-hover);
 }
 
-/* ---- Agent mode (placeholder shell) ----------------------------------- */
+/* ---- Agent mode (Copilot chat shell) ---------------------------------- */
 /* Full-screen Copilot Agent experience the app-mode toggle swaps into the
-   workspace row. Scoped under `app-mode-agent` so the downstream agent shell
-   can extend it without colliding with the standard workspace styles. */
+   workspace row: a chat sidebar (left) + a chat-view host (right). Everything is
+   scoped under `app-mode-agent` / `chat-sidebar` / `chat-view` so it never
+   collides with the standard workspace styles. The host body is a placeholder; a
+   downstream task fills in the real transcript/composer. */
 .app-mode-agent {
   display: grid;
   grid-template-columns: 280px 1fr;
@@ -2801,32 +2803,177 @@ body.is-row-resizing .center-terminal__resizer::after {
   height: 100%;
   background: var(--bg-base);
 }
-.app-mode-agent__sidebar {
+.app-mode-agent__main {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
   min-width: 0;
   min-height: 0;
-  padding: var(--space-4);
+  background: var(--bg-base);
+}
+.app-mode-agent__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  text-align: center;
+}
+.app-mode-agent__empty-title {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-lg);
+}
+
+/* Chat sidebar: rich-chat list + a prominent "New chat" action. */
+.chat-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-elevated);
 }
-.app-mode-agent__sidebar-title {
+.chat-sidebar__header {
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.chat-sidebar__new {
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--accent-gradient);
+  color: var(--accent-contrast);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter var(--dur-fast) var(--ease);
+}
+.chat-sidebar__new:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.chat-sidebar__new:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.chat-sidebar__error {
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--danger-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(241, 76, 76, 0.12);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+.chat-sidebar__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+.chat-sidebar__empty {
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
+
+/* A single chat row in the sidebar. */
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+.chat-row:hover {
+  background: var(--bg-hover);
+}
+.chat-row--selected {
+  background: var(--bg-selected);
+  border-color: var(--border-strong);
+}
+.chat-row__title {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-row__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.chat-row__repo {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-row__branch {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-row__time {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+/* Chat-view host (placeholder; downstream fills in the real transcript). */
+.chat-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.chat-view__header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+.chat-view__title {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-lg);
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.app-mode-agent__main {
+.chat-view__branch {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+.chat-view__placeholder {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 0;
-  min-height: 0;
   padding: var(--space-6);
-  background: var(--bg-base);
 }
-.app-mode-agent__placeholder {
+.chat-view__placeholder-text {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--fs-lg);

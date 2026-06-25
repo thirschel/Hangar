@@ -564,6 +564,17 @@ export function App(): JSX.Element {
     [refresh],
   );
 
+  // Agent-mode "new chat": create a rich Copilot workspace for the picked repo.
+  // Rich chats are Copilot-only -- the daemon's richBackend() only marks a
+  // workspace kind:'rich' when the agent is Copilot -- so force program:'copilot'
+  // alongside rich:true. onCreate handles the post-create refresh + auto-select.
+  const onCreateChat = useCallback(
+    async (repoPath: string): Promise<void> => {
+      await onCreate({ repoPath, program: 'copilot', rich: true });
+    },
+    [onCreate],
+  );
+
   const onArchive = useCallback(
     (id: string): void => {
       // Show the confirmation modal instead of immediately archiving. Look the
@@ -758,7 +769,12 @@ export function App(): JSX.Element {
       </header>
 
       {appMode === 'agent' ? (
-        <AgentMode />
+        <AgentMode
+          workspaces={workspaces}
+          selectedId={selectedId}
+          onSelectChat={setSelectedId}
+          onCreateChat={onCreateChat}
+        />
       ) : (
       <main
         className="workspace"

@@ -4,31 +4,36 @@ import { describe, expect, it, vi } from 'vitest';
 import { CreateWorkspaceModal } from '../components/CreateWorkspaceModal';
 
 describe('CreateWorkspaceModal', () => {
-  it('offers the rich toggle for a Copilot agent and passes rich=true on create', async () => {
+  it('creates a terminal workspace by default and never passes rich', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined);
     render(<CreateWorkspaceModal onClose={() => {}} onCreate={onCreate} initialRepoPath="C:/repo" />);
 
-    // window.cs.getDefaultProgram() resolves to 'copilot' (setup mock) => toggle shows.
-    const richCheckbox = await screen.findByLabelText(/Rich agent view/i);
-    await act(async () => {
-      fireEvent.click(richCheckbox);
-    });
+    // Wait for the async default program ('copilot' from the setup mock) to load
+    // into the agent field, flushing the effect's state update.
+    await screen.findByDisplayValue('copilot');
+
+    // The "Rich agent view" toggle was removed -- standard creation is always a
+    // terminal worktree; rich chats are created only from the agent-mode path.
+    expect(screen.queryByLabelText(/Rich agent view/i)).not.toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /Create workspace/i }));
     });
 
     await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-    expect(onCreate.mock.calls[0][0]).toMatchObject({ repoPath: 'C:/repo', rich: true });
+    expect(onCreate.mock.calls[0][0]).toMatchObject({ repoPath: 'C:/repo' });
+    expect(onCreate.mock.calls[0][0].rich).toBeUndefined();
   });
 
-  it('hides the rich toggle for a non-Copilot agent', async () => {
+  it('offers no rich toggle even after changing the agent', async () => {
     render(<CreateWorkspaceModal onClose={() => {}} onCreate={vi.fn()} initialRepoPath="C:/repo" />);
-    await screen.findByLabelText(/Rich agent view/i); // wait until the copilot default loads
+    await screen.findByDisplayValue('copilot'); // wait until the copilot default loads
+
     const agentInput = screen.getByPlaceholderText('copilot');
     await act(async () => {
       fireEvent.change(agentInput, { target: { value: 'aider' } });
     });
+
     expect(screen.queryByLabelText(/Rich agent view/i)).not.toBeInTheDocument();
   });
 });

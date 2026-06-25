@@ -1,19 +1,71 @@
 import type { JSX } from 'react';
+import { useState } from 'react';
+import type { WorkspaceInfo } from '../../../main/host-client';
+import { ChatSidebar } from './ChatSidebar';
+import { ChatViewHost } from './ChatViewHost';
 
-// AgentMode is a placeholder for the full-screen Copilot Agent experience that
-// the app-mode toggle swaps in for the standard workspace grid. It renders a
-// minimal two-pane scaffold - a left "Chats" sidebar column and a right main
-// column - so the toggle has a real surface to flip to. A downstream task
-// replaces this stub with the live agent shell (chat list + conversation view).
-// The root `app-mode-agent` class namespaces all agent-mode styling.
-export function AgentMode(): JSX.Element {
+export type AgentModeProps = {
+  // The full workspace list (App owns it); AgentMode filters to rich chats.
+  workspaces: WorkspaceInfo[];
+  // Shared selection id (reused from App, so a freshly created chat -- which App
+  // auto-selects -- shows immediately here).
+  selectedId: string | null;
+  onSelectChat: (id: string) => void;
+  // Creates a rich Copilot chat for the picked repo, then refreshes + selects it.
+  onCreateChat: (repoPath: string) => Promise<void>;
+};
+
+// AgentMode is the full-screen Copilot Agent shell the app-mode toggle swaps in
+// for the standard workspace grid. Two panes: a ChatSidebar (rich-chat list +
+// new-chat action) on the left and a ChatViewHost (the selected chat) on the
+// right. The conversation transcript, top bar, nav and composer inside the host
+// are separate downstream tasks; this builds the shell + host placeholder.
+export function AgentMode({
+  workspaces,
+  selectedId,
+  onSelectChat,
+  onCreateChat,
+}: AgentModeProps): JSX.Element {
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Only rich (Copilot SDK) workspaces are chats; terminal worktrees stay in the
+  // standard view.
+  const chats = workspaces.filter((w) => w.kind === 'rich');
+  const selectedChat = chats.find((w) => w.id === selectedId) ?? null;
+
+  const handleNewChat = async (): Promise<void> => {
+    setError(null);
+    const repoPath = await window.cs.pickFolder();
+    if (!repoPath) return; // user cancelled the folder picker
+    setCreating(true);
+    try {
+      await onCreateChat(repoPath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <main className="app-mode-agent">
-      <aside className="app-mode-agent__sidebar">
-        <h2 className="app-mode-agent__sidebar-title">Chats</h2>
-      </aside>
+      <ChatSidebar
+        chats={chats}
+        selectedId={selectedId}
+        onSelect={onSelectChat}
+        onNewChat={() => void handleNewChat()}
+        busy={creating}
+        error={error}
+      />
       <section className="app-mode-agent__main">
-        <p className="app-mode-agent__placeholder">Agent mode — chat surface coming soon</p>
+        {selectedChat ? (
+          <ChatViewHost workspace={selectedChat} />
+        ) : (
+          <div className="app-mode-agent__empty">
+            <p className="app-mode-agent__empty-title">Select a chat or start a new one</p>
+          </div>
+        )}
       </section>
     </main>
   );
