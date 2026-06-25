@@ -164,25 +164,28 @@ describe('ChatViewHost', () => {
     expect(screen.queryByText('Done')).not.toBeInTheDocument();
   });
 
-  it('shows an AutoYes linked permission as a shield popover on the gated tool', async () => {
+  it('links an AutoYes permission to a tool that started BEFORE it (read/view ordering)', async () => {
+    // The SDK emits tool.start BEFORE permission.requested for reads/view (verified
+    // via an SDK spike), so the reducer must link the permission to the already-
+    // existing tool entry -- not only when the tool arrives after the permission.
     const { container } = render(<ChatViewHost workspace={makeWorkspace({ autoYes: true })} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
 
     await act(async () => {
       richFrameCallback?.({
         session: 'rich-session',
-        frame: {
-          seq: 1,
-          kind: 'permission.requested',
-          requestId: 'p1',
-          toolCallId: 'call-1',
-          question: 'Run shell command: git status',
-          toolName: 'shell',
-        },
+        frame: { seq: 1, kind: 'tool.start', toolName: 'view', toolCallId: 'call-1' },
       });
       richFrameCallback?.({
         session: 'rich-session',
-        frame: { seq: 2, kind: 'tool.start', toolName: 'bash', toolCallId: 'call-1' },
+        frame: {
+          seq: 2,
+          kind: 'permission.requested',
+          requestId: 'p1',
+          toolCallId: 'call-1',
+          question: 'Read path: C:/repo/src/app.ts',
+          toolName: 'read',
+        },
       });
       richFrameCallback?.({
         session: 'rich-session',
@@ -193,8 +196,42 @@ describe('ChatViewHost', () => {
 
     const shield = container.querySelector('.chat-tool__perm');
     expect(shield).not.toBeNull();
+    expect(within(shield as HTMLElement).getByText('Read path: C:/repo/src/app.ts')).toBeInTheDocument();
+    expect(within(shield as HTMLElement).getByText('read')).toBeInTheDocument();
+    // The standalone bubble is hidden -- the permission is shown on the tool.
+    expect(container.querySelector('.chat-entry--permission')).toBeNull();
+  });
+
+  it('links an AutoYes permission to a tool that starts AFTER it (shell ordering)', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace({ autoYes: true })} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'p1',
+          toolCallId: 'call-2',
+          question: 'Run shell command: git status',
+          toolName: 'shell',
+        },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'tool.start', toolName: 'bash', toolCallId: 'call-2' },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 3, kind: 'tool.complete', toolCallId: 'call-2' },
+      });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 4, kind: 'idle' } });
+    });
+
+    const shield = container.querySelector('.chat-tool__perm');
+    expect(shield).not.toBeNull();
     expect(within(shield as HTMLElement).getByText('Run shell command: git status')).toBeInTheDocument();
-    expect(within(shield as HTMLElement).getByText('shell')).toBeInTheDocument();
     expect(container.querySelector('.chat-entry--permission')).toBeNull();
   });
 

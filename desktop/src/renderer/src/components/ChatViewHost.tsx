@@ -396,7 +396,30 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           toolName: frame.toolName,
           choices: frame.choices ?? [],
         };
-        if (frame.toolCallId) pendingPermissionByToolCallId.set(frame.toolCallId, entries.length);
+        if (frame.toolCallId) {
+          const toolIndex = toolEntries.get(frame.toolCallId);
+          const toolEntry = toolIndex !== undefined ? entries[toolIndex] : undefined;
+          if (toolIndex !== undefined && toolEntry?.kind === 'tool') {
+            // Tool-before-permission ordering (the SDK emits tool.start BEFORE the
+            // permission.requested for reads/view): the tool entry already exists,
+            // so link to it now. First permission wins the popover detail; later
+            // permissions for the same call still hide their own bubble.
+            if (!toolEntry.permission) {
+              entries[toolIndex] = {
+                ...toolEntry,
+                permission: {
+                  toolName: frame.toolName,
+                  question: entry.question,
+                  requestId: frame.requestId,
+                },
+              };
+            }
+            entry.linkedToTool = true;
+          } else {
+            // Permission-before-tool ordering (e.g. shell): buffer for tool.start.
+            pendingPermissionByToolCallId.set(frame.toolCallId, entries.length);
+          }
+        }
         entries.push(entry);
         break;
       }
