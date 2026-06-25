@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventFrame, WorkspaceInfo } from '../../../main/host-client';
-import { ChatViewHost } from '../components/ChatViewHost';
+import { ChatViewHost, __clearRichFrameCacheForTests } from '../components/ChatViewHost';
 
 function makeWorkspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   return {
@@ -36,6 +36,9 @@ describe('ChatViewHost', () => {
   let richFrameCallback: ((data: { session: string; frame: EventFrame }) => void) | undefined;
 
   beforeEach(() => {
+    // The rich-frame cache is module-global, so clear it between cases to keep
+    // each test's transcript isolated (no frames leaking across mounts/cases).
+    __clearRichFrameCacheForTests();
     richFrameCallback = undefined;
     window.cs.openRichStream = vi
       .fn()
@@ -329,6 +332,65 @@ describe('ChatViewHost', () => {
     expect(screen.getByText('Hello there')).toBeInTheDocument();
     expect(window.cs.openRichStream).toHaveBeenCalledTimes(1);
     expect(window.cs.closeRichStream).not.toHaveBeenCalled();
+  });
+
+  it('keeps the transcript on screen across a stream re-subscribe (no blank/pop-in)', async () => {
+    const { unmount } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    // Stream an assistant turn into the transcript (delta -> final -> idle).
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.delta', text: 'Hello ' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'assistant.message', text: 'Hello there' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 3, kind: 'idle' } });
+    });
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
+
+    // Simulate the rich stream re-subscribing for the SAME session: unmount +
+    // remount re-runs the [workspace.sessionName] effect. The bug blanked the
+    // transcript here (setFramesBySeq(new Map())) and only refilled it once the
+    // daemon replayed the since=0 snapshot over the wire -- the visible "pop in".
+    // The per-session cache seeds framesBySeq synchronously, so the transcript
+    // must already be present on remount with NO frames replayed yet.
+    unmount();
+    richFrameCallback = undefined;
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+
+    // Present immediately after remount -- proof it rendered from the cache, not
+    // from a replay (no richFrameCallback was invoked after the remount).
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
+
+    // And the stream genuinely re-subscribed: a fresh openRichStream at since=0
+    // (kept since=0 so a daemon-restart seq reset still replays cleanly).
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+    expect(window.cs.openRichStream).toHaveBeenCalledTimes(2);
+    expect(window.cs.openRichStream).toHaveBeenLastCalledWith('rich-session', 0);
+  });
+
+  it('merges a since=0 replay idempotently after re-subscribe without duplicating entries', async () => {
+    const { unmount } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.message', text: 'Hello there' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'idle' } });
+    });
+
+    // Re-subscribe, then let the daemon replay the same seqs (new frame objects,
+    // identical content). They merge by seq over the cache-seeded transcript, so
+    // the message is still rendered exactly once -- no flicker, no duplication.
+    unmount();
+    richFrameCallback = undefined;
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.message', text: 'Hello there' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'idle' } });
+    });
+
+    expect(container.querySelectorAll('.chat-msg--assistant')).toHaveLength(1);
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
   });
 
   it('renders the MCP servers page from an mcp.detail snapshot', async () => {

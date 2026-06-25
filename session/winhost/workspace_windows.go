@@ -1909,6 +1909,11 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 		SessionName: sessionName, AutoYes: req.AutoYes,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: req.SessionID, Shell: shell,
 		CopilotResume: true,
+		// A browser-resumed Copilot session is a rich (SDK) chat, so tag it as
+		// such. Without this the struct defaults Kind to "" -> kindOrTerminal()
+		// reports "terminal" and the workspace is filtered out of AgentMode (the
+		// normal create path sets Kind too).
+		Kind: proto.WorkspaceKindRich,
 	}
 	m.mu.Lock()
 	m.wss[id] = w

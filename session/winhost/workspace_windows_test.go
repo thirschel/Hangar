@@ -388,6 +388,44 @@ func TestRevivePlanRoutesRichAndTerminal(t *testing.T) {
 	}
 }
 
+// TestResumeCopilotSessionReportsRichKind guards the session-browser "open as
+// rich" resume path: a workspace built by resumeCopilotSession must report
+// Kind == rich through toInfo so AgentMode keeps it. The struct previously
+// omitted the Kind field, so kindOrTerminal() defaulted it to "terminal" and the
+// browser-resumed rich chat was filtered out of AgentMode. A fake session
+// backend keeps this a fast unit test (no real ConPTY spawn).
+func TestResumeCopilotSessionReportsRichKind(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	repo := initTempRepo(t)
+
+	h := newHost(io.Discard, time.Minute)
+	h.newSession = newFake // in-memory session: no real ConPTY process
+	m := h.workspaces
+
+	const validID = "123e4567-e89b-12d3-a456-426614174000"
+	resp := m.resumeCopilotSession(&proto.Request{
+		ID:        1,
+		SessionID: validID,
+		RepoPath:  repo,
+		// The test cwd is not the temp repo, so this is a cross-repo resume; the
+		// host requires explicit confirmation before creating the worktree.
+		Confirmed: true,
+		Title:     "Resumed",
+	})
+	if !resp.OK {
+		t.Fatalf("resumeCopilotSession failed: error=%q needsConfirm=%v", resp.Error, resp.NeedsConfirm)
+	}
+	if resp.Workspace == nil {
+		t.Fatalf("resumeCopilotSession returned OK with no workspace")
+	}
+	if got := resp.Workspace.Kind; got != proto.WorkspaceKindRich {
+		t.Fatalf("resumed workspace Kind = %q, want %q", got, proto.WorkspaceKindRich)
+	}
+}
+
 // runCopilotProbe runs copilotProbeScript with funcDef prepended (defining the
 // agent named by HANGAR_PROBE_NAME) under -NoProfile, so the create-time
 // detection heuristic is exercised hermetically. Returns the probe exit code

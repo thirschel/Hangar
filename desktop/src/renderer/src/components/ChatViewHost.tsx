@@ -478,6 +478,24 @@ function formatContextPercent(usage?: UsageSnapshot): string | undefined {
   return `${Math.round((currentTokens / tokenLimit) * 100)}% context`;
 }
 
+// Per-session rich-frame cache, kept at module scope so it survives both a
+// ChatViewHost remount and a rich-stream re-subscribe (desktop.log shows the
+// event stream closing and reopening every ~7-15s). Each entry is that
+// session's seq->frame map. Seeding `framesBySeq` from this cache on every
+// (re)subscribe keeps the transcript on screen instead of blanking it to empty
+// while the daemon replays the since=0 snapshot -- the replayed frames merge
+// idempotently by seq, so the transcript no longer "pops in" and live deltas
+// keep fading word-by-word. The cache is intentionally never evicted: a chat
+// transcript is small and the user can switch back to any prior session.
+const richFrameCache = new Map<string, Map<number, EventFrame>>();
+
+// Test-only hook: clear the module-global cache so frames never leak across
+// cases. The ChatViewHost test suite calls this in its beforeEach.
+// eslint-disable-next-line react-refresh/only-export-components
+export function __clearRichFrameCacheForTests(): void {
+  richFrameCache.clear();
+}
+
 export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const [framesBySeq, setFramesBySeq] = useState<Map<number, EventFrame>>(() => new Map());
   // Optimistic, client-side user-message frames (the backend never emits them).
@@ -565,7 +583,22 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   // Subscribe to the rich event stream for this chat; re-subscribe when the chat
   // (session) changes and tear down on unmount. Mirrors TranscriptView.
   useEffect(() => {
-    setFramesBySeq(new Map());
+    // Seed the transcript from the per-session frame cache so a re-subscribe
+    // (the rich stream closing and reopening) keeps the existing transcript on
+    // screen instead of blanking it. The since=0 replay below then merges
+    // idempotently by seq, so the transcript stays put rather than popping in.
+    const cached = richFrameCache.get(workspace.sessionName) ?? new Map<number, EventFrame>();
+    richFrameCache.set(workspace.sessionName, cached);
+    if (cached.size > 0) {
+      // A non-empty cache means we are re-subscribing over an existing
+      // transcript. Log it lightly (no renderer logger exists) so future
+      // stream churn stays visible in the devtools console.
+      console.debug('[ChatViewHost] rich re-subscribe', {
+        session: workspace.sessionName,
+        cachedFrames: cached.size,
+      });
+    }
+    setFramesBySeq(new Map(cached));
     setLocalUserFrames([]);
     setStreamError(null);
     setOptimisticTurn(false);
@@ -575,6 +608,10 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
     shouldStickToBottom.current = true;
 
     const addFrame = (frame: EventFrame): void => {
+      // Keep the per-session cache current (live deltas included) so a later
+      // re-subscribe re-seeds from the full transcript, not just the last
+      // replay. The framesBySeq guard below stays reference-idempotent.
+      cached.set(frame.seq, frame);
       setFramesBySeq((current) => {
         if (current.get(frame.seq) === frame) return current;
         const next = new Map(current);
