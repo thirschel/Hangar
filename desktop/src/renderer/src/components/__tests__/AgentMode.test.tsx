@@ -62,8 +62,9 @@ describe('AgentMode', () => {
 
     render(<AgentMode {...baseProps({ workspaces, selectedId: 'rich' })} />);
 
-    // Title appears in both the sidebar row and the chat-view host header.
+    // Title appears in both the sidebar row and the chat-view top bar.
     expect(screen.getAllByText('My Chat').length).toBeGreaterThan(0);
-    expect(screen.getByText(/Conversation coming soon/i)).toBeInTheDocument();
+    // The real ChatView host mounts (section nav) once a chat is selected.
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeInTheDocument();
   });
 });
