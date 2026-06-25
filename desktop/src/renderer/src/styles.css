@@ -3446,52 +3446,11 @@ body.is-row-resizing .center-terminal__resizer::after {
   font-size: var(--fs-xs);
 }
 
-/* Temporary minimal composer placeholder (chat-view__composer-slot). The
-   orchestrator swaps this for the standalone <Composer/>; styles are kept light. */
+/* Wrapper for the Agent composer (components/Composer.tsx). The composer owns its
+   own padding/border/background, so the slot just lets it fill the panel width. */
 .chat-view__composer-slot {
   display: flex;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  border-top: 1px solid var(--border);
-  background: var(--bg-elevated);
-}
-.chat-view__composer-input {
-  flex: 1;
-  resize: vertical;
-  min-height: 60px;
-  max-height: 160px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  background: var(--bg-control);
-  color: var(--text);
-}
-.chat-view__composer-input:focus {
-  outline: none;
-  box-shadow: var(--shadow-focus);
-}
-.chat-view__composer-actions {
-  display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-}
-.chat-view__composer-send,
-.chat-view__composer-stop {
-  min-width: 72px;
-  padding: 7px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-md);
-  background: var(--accent-gradient);
-  color: var(--accent-contrast);
-  cursor: pointer;
-}
-.chat-view__composer-send:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.chat-view__composer-stop {
-  background: var(--bg-control);
-  color: var(--text-secondary);
 }
 
 /* ============================================================================
