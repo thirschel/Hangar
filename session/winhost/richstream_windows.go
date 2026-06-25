@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 
 	copilot "github.com/github/copilot-sdk/go"
+	"hangar/session/copilotsdk"
 	"hangar/session/winhost/proto"
 )
 
@@ -23,7 +24,9 @@ func (s *sdkSession) onSDKEvent(ev copilot.SessionEvent) {
 
 func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 	// MCP status events fan out to one frame per server, so they are handled here
-	// rather than in sdkEventFrame (which maps one event to a single frame).
+	// rather than in sdkEventFrame (which maps one event to a single frame). Each
+	// MCP load/status change is additionally followed by a single mcp.detail
+	// snapshot of the full server list, which the desktop replaces wholesale.
 	switch data := ev.Data.(type) {
 	case *copilot.SessionMCPServersLoadedData:
 		for _, sv := range data.Servers {
@@ -34,6 +37,7 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 				Error:     stringPtrValue(sv.Error),
 			})
 		}
+		s.emitMCPDetail()
 		return
 	case *copilot.SessionMCPServerStatusChangedData:
 		s.emitFrame(proto.EventFrame{
@@ -42,6 +46,10 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 			Status:    string(data.Status),
 			Error:     stringPtrValue(data.Error),
 		})
+		s.emitMCPDetail()
+		return
+	case *copilot.SessionSkillsLoadedData:
+		s.emitSkills()
 		return
 	}
 	frame, ok := sdkEventFrame(ev)
@@ -58,6 +66,100 @@ func isMCPStatusEvent(ev copilot.SessionEvent) bool {
 	default:
 		return false
 	}
+}
+
+func isSkillsEvent(ev copilot.SessionEvent) bool {
+	_, ok := ev.Data.(*copilot.SessionSkillsLoadedData)
+	return ok
+}
+
+// emitMCPDetail emits one mcp.detail snapshot of the full current MCP server list
+// (v13). The desktop replaces its MCP page wholesale on each frame. Before the SDK
+// reports real server status (startup/resume), it falls back to a pending list
+// built from the configured server names so the page populates immediately.
+func (s *sdkSession) emitMCPDetail() {
+	s.emitMCPDetailSnapshot(s.sess.MCPServers(), s.sess.MCPServerNames())
+}
+
+// emitMCPDetailSnapshot maps captured MCP detail into a single mcp.detail frame,
+// falling back to a pending list from the configured server names when nothing has
+// been captured yet (startup/resume). Split from emitMCPDetail so the mapping is
+// unit-testable without driving a live copilotsdk session.
+func (s *sdkSession) emitMCPDetailSnapshot(details []copilotsdk.MCPServerDetail, names []string) {
+	servers := mcpServerInfos(details)
+	if len(servers) == 0 {
+		servers = pendingMCPServerInfos(names)
+	}
+	if len(servers) == 0 {
+		return
+	}
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindMCPDetail, MCPServers: servers})
+}
+
+// emitSkills emits one skills snapshot of the full current skills list (v13). The
+// desktop replaces its Skills page wholesale on each frame. A no-op until the SDK
+// has reported a skills-loaded event.
+func (s *sdkSession) emitSkills() {
+	s.emitSkillsSnapshot(s.sess.Skills())
+}
+
+// emitSkillsSnapshot maps a skills snapshot into a single skills frame. Split from
+// emitSkills so the mapping is unit-testable without a live copilotsdk session.
+func (s *sdkSession) emitSkillsSnapshot(details []copilotsdk.SkillDetail) {
+	skills := skillInfos(details)
+	if len(skills) == 0 {
+		return
+	}
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindSkills, Skills: skills})
+}
+
+func mcpServerInfos(details []copilotsdk.MCPServerDetail) []proto.MCPServerInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]proto.MCPServerInfo, 0, len(details))
+	for _, d := range details {
+		out = append(out, proto.MCPServerInfo{
+			Name:      d.Name,
+			Status:    d.Status,
+			Transport: d.Transport,
+			Source:    d.Source,
+			Error:     d.Error,
+			Tools:     append([]string(nil), d.Tools...),
+		})
+	}
+	return out
+}
+
+func pendingMCPServerInfos(names []string) []proto.MCPServerInfo {
+	out := make([]proto.MCPServerInfo, 0, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		out = append(out, proto.MCPServerInfo{Name: name, Status: "pending"})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func skillInfos(details []copilotsdk.SkillDetail) []proto.SkillInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]proto.SkillInfo, 0, len(details))
+	for _, d := range details {
+		out = append(out, proto.SkillInfo{
+			Name:        d.Name,
+			Description: d.Description,
+			Enabled:     d.Enabled,
+			Source:      d.Source,
+			Path:        d.Path,
+		})
+	}
+	return out
 }
 
 func (s *sdkSession) emitFrame(frame proto.EventFrame) {

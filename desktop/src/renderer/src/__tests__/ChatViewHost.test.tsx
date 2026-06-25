@@ -59,12 +59,12 @@ describe('ChatViewHost', () => {
 
     await vi.waitFor(() => expect(window.cs.openRichStream).toHaveBeenCalledWith('rich-session', 0));
     expect(screen.getByRole('heading', { name: 'My Chat' })).toBeInTheDocument();
-    // Chat, Changes and All files are live; MCP servers and Skills are disabled.
+    // All five sections are now live: Chat, MCP servers, Skills, Changes, All files.
     expect(screen.getByRole('button', { name: 'Chat' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'MCP servers' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Skills' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Changes' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'All files' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'MCP servers' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Skills' })).toBeDisabled();
   });
 
   it('renders assistant text as full-width plain Markdown (not a bubble)', async () => {
@@ -184,6 +184,137 @@ describe('ChatViewHost', () => {
     // stream was never re-opened (openRichStream stays at a single call).
     fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
     expect(screen.getByText('Hello there')).toBeInTheDocument();
+    expect(window.cs.openRichStream).toHaveBeenCalledTimes(1);
+    expect(window.cs.closeRichStream).not.toHaveBeenCalled();
+  });
+
+  it('renders the MCP servers page from an mcp.detail snapshot', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'mcp.detail',
+          mcpServers: [
+            {
+              name: 'filesystem',
+              status: 'connected',
+              transport: 'stdio',
+              source: 'user',
+              tools: ['read_file', 'write_file'],
+            },
+            {
+              name: 'github',
+              status: 'failed',
+              transport: 'http',
+              source: 'workspace',
+              error: 'authentication required',
+            },
+          ],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }));
+
+    // Server names, status badges, transports and tools all render on the page.
+    expect(screen.getByText('filesystem')).toBeInTheDocument();
+    expect(screen.getByText('Connected')).toBeInTheDocument();
+    expect(screen.getByText('stdio')).toBeInTheDocument();
+    expect(screen.getByText('read_file')).toBeInTheDocument();
+    expect(screen.getByText('write_file')).toBeInTheDocument();
+    expect(screen.getByText('github')).toBeInTheDocument();
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByText('authentication required')).toBeInTheDocument();
+    // Page takeover: the chat composer is gone and the stream stayed open.
+    expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
+    expect(window.cs.openRichStream).toHaveBeenCalledTimes(1);
+    expect(window.cs.closeRichStream).not.toHaveBeenCalled();
+  });
+
+  it('replaces the MCP list wholesale on a later mcp.detail (last-write-wins)', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'mcp.detail',
+          mcpServers: [{ name: 'old-server', status: 'connected' }],
+        },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 2,
+          kind: 'mcp.detail',
+          mcpServers: [{ name: 'new-server', status: 'pending' }],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }));
+
+    expect(screen.getByText('new-server')).toBeInTheDocument();
+    expect(screen.queryByText('old-server')).not.toBeInTheDocument();
+  });
+
+  it('renders the read-only Skills page from a skills snapshot', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'skills',
+          skills: [
+            {
+              name: 'pdf-tools',
+              description: 'Work with PDF files',
+              enabled: true,
+              source: 'project',
+              path: '.github/skills/pdf-tools',
+            },
+            { name: 'legacy-skill', enabled: false },
+          ],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
+
+    expect(screen.getByText('pdf-tools')).toBeInTheDocument();
+    expect(screen.getByText('Work with PDF files')).toBeInTheDocument();
+    expect(screen.getByText('project')).toBeInTheDocument();
+    expect(screen.getByText('.github/skills/pdf-tools')).toBeInTheDocument();
+    expect(screen.getByText('Enabled')).toBeInTheDocument();
+    expect(screen.getByText('legacy-skill')).toBeInTheDocument();
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
+    // Read-only page takeover: no composer is rendered.
+    expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
+  });
+
+  it('shows empty states and keeps the stream open when switching to MCP/Skills', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }));
+    expect(screen.getByText('No MCP servers configured.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
+    expect(screen.getByText('No skills available.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+
+    // The rich stream was opened exactly once and never torn down by switching
+    // pages -- the subscribing effect is keyed on the session, not activePage.
     expect(window.cs.openRichStream).toHaveBeenCalledTimes(1);
     expect(window.cs.closeRichStream).not.toHaveBeenCalled();
   });

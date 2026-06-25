@@ -108,8 +108,11 @@ type Session struct {
 	status     Status
 	started    bool
 	mcpServers []string
-	autoYes    atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
-	lastOutput atomic.Int64 // unix-ms of the last output-changing event
+	mcpTools   map[string][]string // configured tool allowlist per server (best-effort, v13)
+	mcpDetail  []MCPServerDetail   // full per-server MCP detail for the rich MCP page (v13)
+	skills     []SkillDetail       // resolved skills for the rich Skills page (v13)
+	autoYes    atomic.Bool         // runtime-toggleable auto-approval (host SetAutoYes)
+	lastOutput atomic.Int64        // unix-ms of the last output-changing event
 
 	promptMu sync.Mutex
 	prompts  map[string]chan userInputReply
@@ -350,9 +353,11 @@ func (s *Session) forwardedMCPServers() map[string]copilot.MCPServerConfig {
 	if err != nil {
 		s.cfg.Logger.Printf("mcp forward: %v (continuing without forwarded servers)", err)
 		s.setMCPServerNames(nil)
+		s.setMCPTools(nil)
 		return nil
 	}
 	s.setMCPServerNames(sortedMCPServerNames(servers))
+	s.setMCPTools(mcpConfiguredTools(s.mcpConfigPath()))
 	return servers
 }
 
@@ -401,16 +406,24 @@ func (s *Session) touch() { s.lastOutput.Store(time.Now().UnixMilli()) }
 // handleEvent maps the SDK event stream onto Status, then forwards to the consumer.
 func (s *Session) handleEvent(ev copilot.SessionEvent) {
 	if ev.Data != nil {
-		switch ev.Data.(type) {
+		switch data := ev.Data.(type) {
 		case *copilot.AssistantTurnStartData:
 			s.setStatus(StatusRunning)
 		case *copilot.PermissionRequestedData:
 			s.setStatus(StatusWaiting)
 		case *copilot.SessionIdleData:
 			s.setStatus(StatusReady)
+		case *copilot.SessionMCPServersLoadedData:
+			s.captureMCPServersLoaded(data)
+		case *copilot.SessionMCPServerStatusChangedData:
+			s.captureMCPServerStatusChanged(data)
+		case *copilot.SessionSkillsLoadedData:
+			s.captureSkillsLoaded(data)
 		}
 		s.touch()
 	}
+	// The MCP-detail/skills snapshots are captured (above) BEFORE forwarding so the
+	// OnEvent consumer can read the fresh state through MCPServers()/Skills().
 	if s.cfg.OnEvent != nil {
 		s.cfg.OnEvent(ev)
 	}

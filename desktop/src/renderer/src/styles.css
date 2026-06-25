@@ -3653,3 +3653,196 @@ body.is-row-resizing .center-terminal__resizer::after {
   flex: 1;
   min-height: 0;
 }
+
+/* ============================================================================
+   Agent-mode ChatView: MCP servers + Skills pages (McpPage / SkillsPage)
+   Appended at the END of styles.css so it never overlaps with concurrent edits
+   to the rest of the Agent shell. Both tabs render full-middle, read-only
+   snapshot pages (the latest mcp.detail / skills frame) inside the shared
+   .chat-view__page wrapper, exactly like the embedded ReviewPanel / FilesPanel:
+   the page root flexes to fill the chat body and owns its own vertical scroll.
+   Selectors are mcp-page / skills-page-prefixed and reuse the :root tokens; the
+   MCP status colours mirror the inline MCP pill bar.
+   ============================================================================ */
+.chat-view__page > .mcp-page,
+.chat-view__page > .skills-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Shared card stack: a scrollable column of cards with comfortable padding. */
+.mcp-page,
+.skills-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+}
+
+/* Empty states centre a muted hint in the middle of the page. */
+.mcp-page--empty,
+.skills-page--empty {
+  align-items: center;
+  justify-content: center;
+}
+.mcp-page__empty-text,
+.skills-page__empty-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-md);
+}
+
+/* Cards: one elevated, bordered block per server / skill. */
+.mcp-page__card,
+.skills-page__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+/* Card header: name on the left, status / enabled badge on the right. */
+.mcp-page__head,
+.skills-page__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.mcp-page__name,
+.skills-page__name {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* MCP status badge: a pill reusing the MCP pill-bar status colour vocabulary. */
+.mcp-page__status {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-control);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mcp-page__status--ok {
+  color: var(--success-text);
+}
+.mcp-page__status--error {
+  color: var(--danger);
+}
+.mcp-page__status--warn {
+  color: var(--warning);
+}
+.mcp-page__status--muted {
+  color: var(--text-faint);
+}
+
+/* Metadata rows: a compact key/value list (transport, source, path, ...). */
+.mcp-page__meta,
+.skills-page__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+.mcp-page__meta-row,
+.skills-page__meta-row {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--fs-sm);
+}
+.mcp-page__meta-key,
+.skills-page__meta-key {
+  flex: none;
+  width: 72px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.mcp-page__meta-val,
+.skills-page__meta-val {
+  margin: 0;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.skills-page__path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* Errors read as a muted danger line under the card head. */
+.mcp-page__error {
+  margin: 0;
+  color: #ffb4b4;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+/* Tools: a small label plus a wrapping row of monospace chips. */
+.mcp-page__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.mcp-page__tools-label {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.mcp-page__tool-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-page__tool {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-control);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+/* Skill description: a readable secondary paragraph. */
+.skills-page__description {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Skill enabled / disabled indicator badge. */
+.skills-page__enabled {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-control);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.skills-page__enabled--on {
+  color: var(--success-text);
+}
+.skills-page__enabled--off {
+  color: var(--text-faint);
+}

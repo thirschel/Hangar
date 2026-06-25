@@ -106,7 +106,9 @@ func (s *sdkSession) startResumed() error {
 		return nil
 	}
 	for _, ev := range evs {
-		if isMCPStatusEvent(ev) {
+		// MCP detail and skills are full snapshots re-emitted live on resume, so
+		// replaying every historical occurrence here would double-emit stale ones.
+		if isMCPStatusEvent(ev) || isSkillsEvent(ev) {
 			continue
 		}
 		s.translateAndEmit(ev)
@@ -161,6 +163,10 @@ func (s *sdkSession) cancelMCPStartupBuffer() {
 
 func (s *sdkSession) emitConfiguredMCPServersPending() {
 	s.emitMCPServerPendingFrames(s.sess.MCPServerNames())
+	// Mirror the pill-bar pending names with a single mcp.detail snapshot so the
+	// rich MCP page populates immediately; real status/transport/source arrive via
+	// the live (buffered then flushed) MCP events.
+	s.emitMCPDetail()
 }
 
 func (s *sdkSession) emitMCPServerPendingFrames(names []string) {

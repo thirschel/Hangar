@@ -90,3 +90,45 @@ func sortedMCPServerNames(servers map[string]copilot.MCPServerConfig) []string {
 	sort.Strings(names)
 	return names
 }
+
+// mcpConfiguredTools parses mcp-config.json and returns the explicitly configured
+// tool allowlist per server name, for the best-effort Tools field on the rich MCP
+// page. Servers with no tools list (the CLI's implicit "all tools" default) are
+// omitted, and a lone "*" wildcard is treated as "unknown" since it is not a real
+// tool name. It is purely advisory: a missing/malformed file yields a nil map.
+func mcpConfiguredTools(path string) map[string][]string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var cfg mcpConfigFile
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return nil
+	}
+	out := make(map[string][]string, len(cfg.MCPServers))
+	for name, e := range cfg.MCPServers {
+		if tools := explicitTools(e.Tools); len(tools) > 0 {
+			out[name] = tools
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// explicitTools filters a configured tools list down to real tool names, dropping
+// the empty and "*" (all-tools wildcard) entries that are not displayable names.
+func explicitTools(tools []string) []string {
+	out := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if t == "" || t == "*" {
+			continue
+		}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

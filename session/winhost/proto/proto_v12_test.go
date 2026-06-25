@@ -6,8 +6,10 @@ import (
 )
 
 func TestVersionV12(t *testing.T) {
-	if Version != 12 {
-		t.Fatalf("Version = %d, want 12", Version)
+	// v12 (permission/user-input answering) is a floor, not the current version:
+	// once shipped, its surface must remain present in every later version.
+	if Version < 12 {
+		t.Fatalf("Version = %d, want >= 12", Version)
 	}
 }
 

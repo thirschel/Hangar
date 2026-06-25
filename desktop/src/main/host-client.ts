@@ -65,6 +65,29 @@ export interface FileDiffInfo {
   removed: number;
 }
 
+// Structured MCP server snapshot carried on a frame with kind 'mcp.detail'
+// (proto v13). The daemon re-sends the FULL server list each time, so the
+// renderer replaces its MCP state wholesale (last-write-wins).
+export interface McpServerInfo {
+  name: string;
+  status?: string; // connected|failed|needs-auth|pending|disabled|not_configured
+  transport?: string; // stdio|http|sse|memory
+  source?: string; // user|workspace|plugin|builtin
+  error?: string;
+  tools?: string[]; // best-effort; may be absent
+}
+
+// Structured skill snapshot carried on a frame with kind 'skills' (proto v13).
+// The daemon re-sends the FULL skills list each time, so the renderer replaces
+// its skills state wholesale (last-write-wins).
+export interface SkillInfo {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  source?: string; // project|personal-copilot|plugin|builtin
+  path?: string;
+}
+
 export interface EventFrame {
   seq: number;
   kind: string;
@@ -78,6 +101,8 @@ export interface EventFrame {
   status?: string;
   aborted?: boolean;
   error?: string;
+  mcpServers?: McpServerInfo[]; // present on a frame with kind 'mcp.detail'
+  skills?: SkillInfo[]; // present on a frame with kind 'skills'
 }
 
 export interface HostInfo {

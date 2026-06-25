@@ -39,7 +39,14 @@ import (
 // the flag and create a worktree in the selected folder's repo anyway.
 // v11 adds the rich agent view: a structured event stream (OpenRichStream) plus
 // SendMessage/AbortTurn/GetTranscript control for Copilot SDK-backed sessions.
-const Version = 12
+// v12 adds permission/user-input answering on the rich stream (RespondPermission/
+// RespondUserInput) so a detached / AutoYes-OFF session can be resolved by a client.
+// v13 adds the rich MCP-detail + Skills snapshots on the event stream:
+// EventKindMCPDetail carries the full per-server MCPServerInfo list (rebuilt on
+// every MCP load / status change) and EventKindSkills carries the full SkillInfo
+// list; each replaces the desktop's view wholesale. Additive frames — the
+// per-server EventKindMCPStatus pill stream is unchanged.
+const Version = 13
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -337,6 +344,10 @@ type EventFrame struct {
 	Status    string   `json:"status,omitempty"`    // mcp/status changes
 	Aborted   bool     `json:"aborted,omitempty"`   // idle : the preceding turn was aborted
 	Error     string   `json:"error,omitempty"`     // error : message
+	// MCP-detail + Skills snapshots (v13): each carries a full list that replaces
+	// the desktop view wholesale, populated only on its corresponding Kind.
+	MCPServers []MCPServerInfo `json:"mcpServers,omitempty"` // populated on EventKindMCPDetail
+	Skills     []SkillInfo     `json:"skills,omitempty"`     // populated on EventKindSkills
 }
 
 // EventFrame.Kind values for the rich event stream (v11).
@@ -353,7 +364,30 @@ const (
 	EventKindIdle              = "idle"
 	EventKindError             = "error"
 	EventKindMCPStatus         = "mcp.status" // per-server MCP connection status (MCPServer, Status, Error)
+	EventKindMCPDetail         = "mcp.detail" // full MCP server-list snapshot
+	EventKindSkills            = "skills"     // full skills-list snapshot
 )
+
+// MCPServerInfo is per-server detail for the rich MCP page (v13). It is display-
+// safe: names/status/transport/source/tool-names only, never command args, env,
+// URLs, headers, or tokens.
+type MCPServerInfo struct {
+	Name      string   `json:"name"`
+	Status    string   `json:"status,omitempty"`    // connected|failed|needs-auth|pending|disabled|not_configured
+	Transport string   `json:"transport,omitempty"` // stdio|http|sse|memory
+	Source    string   `json:"source,omitempty"`    // user|workspace|plugin|builtin
+	Error     string   `json:"error,omitempty"`
+	Tools     []string `json:"tools,omitempty"` // tool names (best-effort; omit if unknown)
+}
+
+// SkillInfo is one skill for the rich Skills page (v13).
+type SkillInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Source      string `json:"source,omitempty"` // project|personal-copilot|plugin|builtin
+	Path        string `json:"path,omitempty"`
+}
 
 // Decision values for MethodRespondPermission (v12).
 const (

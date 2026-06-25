@@ -1,17 +1,25 @@
 import type { FormEvent, JSX } from 'react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { EventFrame, WorkspaceInfo } from '../../../main/host-client';
+import type {
+  EventFrame,
+  McpServerInfo,
+  SkillInfo,
+  WorkspaceInfo,
+} from '../../../main/host-client';
 import { Markdown } from './Markdown';
 import { Composer } from './Composer';
 import { ReviewPanel } from './ReviewPanel';
 import { FilesPanel } from './FilesPanel';
+import { McpPage } from './McpPage';
+import { SkillsPage } from './SkillsPage';
 
 // ChatViewHost is the rich chat surface for the new Agent mode: a top bar (chat
-// title + AutoYes), a section nav (Chat / Changes / All files are live; MCP
-// servers and Skills land later) and the streaming transcript with a composer
-// slot. The Changes and All files pages reuse the standard ReviewPanel /
-// FilesPanel embedded in the chat body. It subscribes to the same rich event
-// stream as TranscriptView but presents it as a chat -- user turns as
+// title + AutoYes), a section nav (Chat / MCP servers / Skills / Changes / All
+// files) and the streaming transcript with a composer slot. The Changes and All
+// files pages reuse the standard ReviewPanel / FilesPanel embedded in the chat
+// body; the MCP servers and Skills pages render the latest structured snapshots
+// (mcp.detail / skills frames) carried on the same rich event stream. It
+// subscribes to that stream and presents it as a chat -- user turns as
 // right-aligned bubbles, assistant turns as full-width Markdown-rendered text.
 //
 // The streaming pipeline below (frame reducer + permission / user-input handling)
@@ -30,12 +38,13 @@ type ChatNavTab = {
   enabled: boolean;
 };
 
-// Chat, Changes and All files are wired; MCP servers and Skills render as
-// disabled "Coming soon" tabs and get their pages in a later task.
+// All five sections are wired: Chat / Changes / All files embed inline panels,
+// while MCP servers and Skills render full-middle snapshot pages fed by the rich
+// event stream.
 const NAV_TABS: ChatNavTab[] = [
   { id: 'chat', label: 'Chat', enabled: true },
-  { id: 'mcp', label: 'MCP servers', enabled: false },
-  { id: 'skills', label: 'Skills', enabled: false },
+  { id: 'mcp', label: 'MCP servers', enabled: true },
+  { id: 'skills', label: 'Skills', enabled: true },
   { id: 'changes', label: 'Changes', enabled: true },
   { id: 'files', label: 'All files', enabled: true },
 ];
@@ -68,6 +77,12 @@ type TranscriptEntry =
 type TranscriptModel = {
   entries: TranscriptEntry[];
   servers: Map<string, { status: string; error?: string }>;
+  // Latest full-list snapshots from the rich stream (last-write-wins): a
+  // 'mcp.detail' frame replaces mcpServers, a 'skills' frame replaces skills.
+  // These feed the dedicated MCP servers / Skills pages and are independent of
+  // the pill bar (`servers`), which keeps tracking inline 'mcp.status' updates.
+  mcpServers: McpServerInfo[];
+  skills: SkillInfo[];
   turnInProgress: boolean;
 };
 
@@ -106,6 +121,9 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   let pendingAssistantIndex: number | null = null;
   let pendingAssistantText = '';
   let turnInProgress = false;
+  // Full-list snapshots; the last matching frame wins (frames are seq-sorted).
+  let mcpServers: McpServerInfo[] = [];
+  let skills: SkillInfo[] = [];
 
   for (const frame of frames) {
     switch (frame.kind) {
@@ -229,12 +247,20 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           servers.set(frame.mcpServer, { status: frame.status ?? 'pending', error: frame.error });
         }
         break;
+      case 'mcp.detail':
+        // Full MCP server list snapshot; replace wholesale (last-write-wins).
+        if (frame.mcpServers) mcpServers = frame.mcpServers;
+        break;
+      case 'skills':
+        // Full skills list snapshot; replace wholesale (last-write-wins).
+        if (frame.skills) skills = frame.skills;
+        break;
       default:
         break;
     }
   }
 
-  return { entries, servers, turnInProgress };
+  return { entries, servers, mcpServers, skills, turnInProgress };
 }
 
 export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
@@ -518,9 +544,15 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
         </div>
       )}
 
-      {(activePage === 'mcp' || activePage === 'skills') && (
-        <div className="chat-view__body chat-view__stub">
-          <p className="chat-view__stub-text">Coming soon</p>
+      {activePage === 'mcp' && (
+        <div className="chat-view__body chat-view__page">
+          <McpPage servers={transcript.mcpServers} />
+        </div>
+      )}
+
+      {activePage === 'skills' && (
+        <div className="chat-view__body chat-view__page">
+          <SkillsPage skills={transcript.skills} />
         </div>
       )}
     </section>
