@@ -595,10 +595,16 @@ ipcMain.handle('rich:close-stream', async (_event, session: string): Promise<voi
   closeRichStream(session);
 });
 
-ipcMain.handle('rich:send-message', async (_event, args: { session: string; message: string }): Promise<void> => {
-  const client = await getControlClient();
-  await client.sendMessage(args.session, args.message);
-});
+ipcMain.handle(
+  'rich:send-message',
+  async (
+    _event,
+    args: { session: string; message: string; attachments?: string[] },
+  ): Promise<void> => {
+    const client = await getControlClient();
+    await client.sendMessage(args.session, args.message, args.attachments);
+  },
+);
 
 ipcMain.handle('rich:abort-turn', async (_event, session: string): Promise<void> => {
   const client = await getControlClient();
@@ -786,6 +792,18 @@ ipcMain.handle('cs:pick-folder', async (): Promise<string | null> => {
   });
   if (result.canceled || result.filePaths.length === 0) return null;
   return result.filePaths[0];
+});
+
+// Multi-select open-file dialog for message attachments. Returns the chosen
+// absolute paths (or [] when canceled), mirroring cs:pick-folder above.
+ipcMain.handle('cs:pick-files', async (): Promise<string[]> => {
+  if (!mainWindow) return [];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select files to attach',
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (result.canceled) return [];
+  return result.filePaths;
 });
 
 // Returns the daemon's default agent program (from ~/.hangar/config.json)

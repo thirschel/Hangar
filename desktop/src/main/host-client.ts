@@ -180,6 +180,9 @@ export interface Request {
   autoYes?: boolean;
   enabled?: boolean;
   message?: string;
+  // SendMessage: optional absolute file paths to attach to the message. The
+  // daemon reads Request.attachments alongside the message text.
+  attachments?: string[];
   requestId?: string;
   decision?: 'approve' | 'reject';
   answer?: string;
@@ -460,8 +463,12 @@ export class ControlClient {
     return { attachPipe: response.attachPipe, attachToken: response.attachToken };
   }
 
-  public async sendMessage(session: string, message: string): Promise<void> {
-    const response = await this.call({ method: 'SendMessage', session, message });
+  public async sendMessage(
+    session: string,
+    message: string,
+    attachments?: string[],
+  ): Promise<void> {
+    const response = await this.call({ method: 'SendMessage', session, message, attachments });
     if (!response.ok) {
       throw new Error(response.error || 'SendMessage failed');
     }

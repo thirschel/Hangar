@@ -26,6 +26,11 @@ type sdkSession struct {
 	sess    *copilotsdk.Session
 	logger  *stdlog.Logger
 
+	// sendFn delivers a user message (text + absolute attachment paths) to the
+	// underlying SDK session. nil means call sess.Send directly; tests override it
+	// to observe what richSend threads through, without a live Copilot CLI.
+	sendFn func(ctx context.Context, text string, attachments []string) error
+
 	ctx    context.Context
 	cancel context.CancelFunc
 

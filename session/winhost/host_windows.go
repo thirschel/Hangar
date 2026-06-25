@@ -584,7 +584,7 @@ func (h *host) sendRichMessage(req *proto.Request) *proto.Response {
 	}
 	go func() {
 		defer recoverGoroutine("host.sendRichMessage")
-		if err := sess.richSend(context.Background(), req.Message); err != nil {
+		if err := sess.richSend(context.Background(), req.Message, req.Attachments); err != nil {
 			h.logger.Printf("rich send failed session=%q err=%v", req.Session, err)
 		}
 	}()

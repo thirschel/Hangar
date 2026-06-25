@@ -40,6 +40,7 @@ const mockCs = {
   setModel: asyncNoop,
   detectShells: async () => [],
   pickFolder: async () => null,
+  pickFiles: async () => [],
   getDefaultProgram: async () => 'copilot',
   openExternal: asyncNoop,
   getAppInfo: async () => ({

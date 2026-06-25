@@ -4,23 +4,32 @@ import type { ModelInfo } from '../../../main/host-client';
 
 /**
  * Composer is the message input for the Agent (rich Copilot) chat surface. It is
- * a self-contained, controlled text box plus an actions row -- a disabled upload
- * placeholder, a LIVE model selector, a Stop button while a turn streams, and
- * Send. The hosting ChatView renders it in a slot and owns send/stop plus the
- * model data (list + current + switch callback); Composer manages its own draft
- * text (cleared after a successful send) and the model menu's open/closed state.
+ * a self-contained, controlled text box plus an actions row -- a LIVE upload
+ * (file attachments) button, a LIVE model selector, a Stop button while a turn
+ * streams, and Send. The hosting ChatView renders it in a slot and owns
+ * send/stop plus the model data (list + current + switch callback); Composer
+ * manages its own draft text and attachment list (both cleared after a
+ * successful send) and the model menu's open/closed state.
+ *
+ * Attachments come from the native multi-select file picker (window.cs.pickFiles)
+ * and render as removable chips above the box; the list is de-duplicated by path.
  *
  * Submit is Ctrl/Cmd+Enter (mirrors TranscriptView) or the Send button; plain
- * Enter inserts a newline. Sending is a no-op while a turn is in progress, when
- * the draft is empty/whitespace, or when hard-disabled via `disabledSend`.
+ * Enter inserts a newline. Sending is a no-op while a turn is in progress or when
+ * hard-disabled via `disabledSend`; otherwise Send is enabled when there is
+ * trimmed text OR at least one attachment (so files can be sent with no text).
  */
 export type ComposerProps = {
   /** A turn is streaming: show Stop and disable Send. */
   turnInProgress: boolean;
   /** Hard-disable Send regardless of draft text (e.g. no active session). */
   disabledSend?: boolean;
-  /** Called with trimmed, non-empty text; Composer clears its draft afterwards. */
-  onSend: (text: string) => void;
+  /**
+   * Called with the trimmed draft text and the selected attachment paths
+   * (absolute). At least one of the two is non-empty. Composer clears both its
+   * draft and attachment list afterwards.
+   */
+  onSend: (text: string, attachments: string[]) => void;
   /** Abort the in-progress turn. */
   onStop: () => void;
   /** Right-aligned info shown ABOVE the box (model name + context %). */
@@ -42,6 +51,13 @@ function modelButtonLabel(models: ModelInfo[], currentModelId?: string): string 
   return current?.name ?? current?.id ?? currentModelId;
 }
 
+// Chip label for an attachment: the file's basename (handles both Windows and
+// POSIX separators), falling back to the full path when there is no separator.
+function basename(filePath: string): string {
+  const segments = filePath.split(/[\\/]/);
+  return segments[segments.length - 1] || filePath;
+}
+
 function ComposerView({
   turnInProgress,
   disabledSend = false,
@@ -53,10 +69,14 @@ function ComposerView({
   onSelectModel,
 }: ComposerProps): JSX.Element {
   const [text, setText] = useState('');
+  const [attachments, setAttachments] = useState<string[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const trimmed = text.trim();
-  const canSend = trimmed.length > 0 && !turnInProgress && !disabledSend;
+  // Send is allowed with trimmed text OR at least one attachment (a files-only
+  // send), but never while a turn streams or when hard-disabled.
+  const canSend =
+    (trimmed.length > 0 || attachments.length > 0) && !turnInProgress && !disabledSend;
 
   const modelList = models ?? [];
   // The selector is live only when there is something to pick and a way to apply
@@ -88,8 +108,38 @@ function ComposerView({
   // keyboard shortcut and the Send button share one guard.
   const trySend = (): void => {
     if (!canSend) return;
-    onSend(trimmed);
+    onSend(trimmed, attachments);
     setText('');
+    setAttachments([]);
+  };
+
+  // Open the native multi-select picker and append the chosen paths, skipping
+  // any already present (de-duplicate by absolute path). A canceled picker
+  // returns [] and a failing one is swallowed -- neither disturbs the current list.
+  const addAttachments = (): void => {
+    void window.cs
+      .pickFiles()
+      .then((paths) => {
+        if (paths.length === 0) return;
+        setAttachments((current) => {
+          const seen = new Set(current);
+          const next = [...current];
+          for (const path of paths) {
+            if (!seen.has(path)) {
+              seen.add(path);
+              next.push(path);
+            }
+          }
+          return next;
+        });
+      })
+      .catch(() => {
+        /* Picker unavailable/failed: keep the current attachments untouched. */
+      });
+  };
+
+  const removeAttachment = (path: string): void => {
+    setAttachments((current) => current.filter((entry) => entry !== path));
   };
 
   const onSubmit = (event: FormEvent): void => {
@@ -106,6 +156,26 @@ function ComposerView({
     <form className="chat-composer" onSubmit={onSubmit}>
       {info !== undefined && <div className="chat-composer__info">{info}</div>}
       <div className="chat-composer__box">
+        {attachments.length > 0 && (
+          <ul className="chat-composer__attachments" aria-label="Attachments">
+            {attachments.map((path) => (
+              <li key={path} className="chat-composer__chip">
+                <span className="chat-composer__chip-name" title={path}>
+                  {basename(path)}
+                </span>
+                <button
+                  type="button"
+                  className="chat-composer__chip-remove"
+                  title={`Remove ${basename(path)}`}
+                  aria-label={`Remove ${basename(path)}`}
+                  onClick={() => removeAttachment(path)}
+                >
+                  <span aria-hidden="true">{'\u00D7'}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
           className="chat-composer__input"
           value={text}
@@ -123,9 +193,9 @@ function ComposerView({
           <button
             type="button"
             className="chat-composer__tool chat-composer__upload"
-            disabled
-            title={'Attachments \u2014 coming soon'}
-            aria-label={'Attachments \u2014 coming soon'}
+            title="Attach files"
+            aria-label="Attach files"
+            onClick={addAttachments}
           >
             <span aria-hidden="true">{'\uD83D\uDCCE'}</span>
           </button>

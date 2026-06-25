@@ -108,10 +108,37 @@ describe('ChatViewHost', () => {
     fireEvent.change(textarea, { target: { value: 'ping' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'ping');
+    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'ping', []);
     const bubble = screen.getByText('ping');
     expect(bubble.closest('.chat-msg--user')).not.toBeNull();
     expect(bubble.closest('.md')).toBeNull(); // user text is plain, not Markdown
+  });
+
+  it('forwards picked attachments to sendMessage and reflects them in the bubble', async () => {
+    window.cs.pickFiles = vi.fn().mockResolvedValue(['/a/x.go', '/b/y.ts']);
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    const textarea = screen.getByPlaceholderText('Message Copilot…');
+    fireEvent.change(textarea, { target: { value: 'review these' } });
+    // The Upload button is now live: clicking it opens the (mocked) picker and
+    // renders a chip per chosen file (by basename) once it resolves.
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }));
+    expect(await screen.findByText('x.go')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    // handleSend threads the absolute attachment paths to the daemon call.
+    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'review these', [
+      '/a/x.go',
+      '/b/y.ts',
+    ]);
+    // The optimistic bubble shows the text plus a 📎 basenames summary so the
+    // user sees what they sent.
+    const bubble = container.querySelector('.chat-msg--user .chat-msg__bubble');
+    expect(bubble?.textContent).toContain('review these');
+    expect(bubble?.textContent).toContain('x.go');
+    expect(bubble?.textContent).toContain('y.ts');
   });
 
   it('toggles AutoYes optimistically and calls the host', async () => {

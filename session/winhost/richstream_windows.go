@@ -277,8 +277,12 @@ func (s *sdkSession) richUnsubscribe(sub *richSub) {
 	s.mu.Unlock()
 }
 
-func (s *sdkSession) richSend(ctx context.Context, text string) error {
-	err := s.sess.Send(ctx, text)
+func (s *sdkSession) richSend(ctx context.Context, text string, attachments []string) error {
+	send := s.sendFn
+	if send == nil {
+		send = s.sess.Send
+	}
+	err := send(ctx, text, attachments)
 	s.noteExitFrame()
 	return err
 }

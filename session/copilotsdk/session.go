@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -245,17 +246,37 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 	return nil
 }
 
-// Send delivers a user message. It returns once the turn completes (the SDK
-// resolves Send on idle); callers that want fire-and-forget should run it in a
-// goroutine and observe the event stream.
-func (s *Session) Send(ctx context.Context, prompt string) error {
+// Send delivers a user message with optional file attachments. It returns once
+// the turn completes (the SDK resolves Send on idle); callers that want
+// fire-and-forget should run it in a goroutine and observe the event stream.
+// attachments are absolute file paths; an empty/nil slice sends a plain message
+// exactly as before.
+func (s *Session) Send(ctx context.Context, prompt string, attachments []string) error {
 	sess := s.session()
 	if sess == nil {
 		return fmt.Errorf("session not started")
 	}
 	s.setStatus(StatusRunning)
-	_, err := sess.Send(ctx, copilot.MessageOptions{Prompt: prompt})
+	opts := copilot.MessageOptions{Prompt: prompt}
+	opts.Attachments = attachmentsFromPaths(attachments)
+	_, err := sess.Send(ctx, opts)
 	return s.noteErr(err)
+}
+
+// attachmentsFromPaths maps absolute file paths to Copilot SDK file attachments,
+// skipping empty entries. The display name is the path's base name and the
+// absolute path is forwarded as-is; file CONTENTS are never read or logged here.
+// Returns nil when no usable paths remain, so MessageOptions.Attachments stays
+// unset and the send behaves exactly like a plain message.
+func attachmentsFromPaths(paths []string) []copilot.Attachment {
+	var out []copilot.Attachment
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		out = append(out, &copilot.AttachmentFile{DisplayName: filepath.Base(p), Path: p})
+	}
+	return out
 }
 
 // Abort interrupts the current turn. Callers must let the session settle back to

@@ -285,8 +285,8 @@ const api = {
     ipcRenderer.invoke('rich:open-stream', { session, since }),
   closeRichStream: (session: string): Promise<void> =>
     ipcRenderer.invoke('rich:close-stream', session),
-  sendMessage: (session: string, message: string): Promise<void> =>
-    ipcRenderer.invoke('rich:send-message', { session, message }),
+  sendMessage: (session: string, message: string, attachments?: string[]): Promise<void> =>
+    ipcRenderer.invoke('rich:send-message', { session, message, attachments }),
   abortTurn: (session: string): Promise<void> =>
     ipcRenderer.invoke('rich:abort-turn', session),
   respondPermission: (
@@ -311,6 +311,9 @@ const api = {
     ipcRenderer.invoke('rich:set-model', { session: sessionName, modelId }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
+  // Native multi-select open-file dialog for message attachments; returns the
+  // chosen absolute paths (or [] when canceled). Mirrors pickFolder's wiring.
+  pickFiles: (): Promise<string[]> => ipcRenderer.invoke('cs:pick-files'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),

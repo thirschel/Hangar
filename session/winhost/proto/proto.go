@@ -53,7 +53,11 @@ import (
 // list/switch the active model on a rich session, scoped by Request.Session just
 // like SendMessage. Additive: the usage fields, ModelInfo, and the two methods are
 // all new surface; existing frames and methods are unchanged.
-const Version = 14
+// v15 adds message file attachments: Request.Attachments carries absolute file
+// paths the desktop sends alongside Request.Message on a SendMessage call, which
+// the host maps to Copilot SDK file attachments. Additive: an omitted/empty
+// Attachments sends a plain message exactly as before.
+const Version = 15
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -222,6 +226,10 @@ type Request struct {
 	// Model (v14) is the target model id for MethodSetModel (live model switch on a
 	// rich session). Unused by every other method.
 	Model string `json:"model,omitempty"`
+
+	// Attachments (v15) carries absolute file paths the desktop sends alongside
+	// Message on a MethodSendMessage call. Empty/nil = a plain message (unchanged).
+	Attachments []string `json:"attachments,omitempty"` // absolute file paths sent with a message
 }
 
 // SessionInfo is returned by ListSessions.

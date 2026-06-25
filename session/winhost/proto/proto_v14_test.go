@@ -6,8 +6,10 @@ import (
 )
 
 func TestVersionV14(t *testing.T) {
-	if Version != 14 {
-		t.Fatalf("Version = %d, want 14", Version)
+	// v14 (rich context-usage header + model selector) is a floor, not the current
+	// version: once shipped, its surface must remain present in every later version.
+	if Version < 14 {
+		t.Fatalf("Version = %d, want >= 14", Version)
 	}
 }
 

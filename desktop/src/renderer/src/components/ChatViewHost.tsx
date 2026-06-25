@@ -112,6 +112,23 @@ function frameText(frame: EventFrame): string {
   return frame.text ?? frame.error ?? frame.status ?? '';
 }
 
+// Basename of an absolute path (handles both Windows and POSIX separators),
+// used to label attachments in the optimistic user bubble.
+function basenameOf(filePath: string): string {
+  const segments = filePath.split(/[\\/]/);
+  return segments[segments.length - 1] || filePath;
+}
+
+// Build the optimistic user-bubble text. When files are attached, append a
+// "📎 name, name" summary (basenames) so the user sees what they sent; this is
+// display-only -- the message text and the attachment paths reach the daemon
+// separately via sendMessage(session, message, attachments).
+function composeUserBubble(message: string, attachments: string[]): string {
+  if (attachments.length === 0) return message;
+  const summary = `\uD83D\uDCCE ${attachments.map(basenameOf).join(', ')}`;
+  return message ? `${message}\n\n${summary}` : summary;
+}
+
 function toolKey(frame: EventFrame): string {
   return frame.requestId ?? `${frame.toolName ?? 'tool'}:${frame.mcpServer ?? ''}`;
 }
@@ -468,16 +485,19 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   };
 
   // --- Composer slot contract (consumed by <Composer/>; see slot below) -----
-  const handleSend = (text: string): void => {
+  const handleSend = (text: string, attachments: string[]): void => {
     const message = text.trim();
-    if (!message) return;
+    if (!message && attachments.length === 0) return;
     const seq = nextLocalSeq();
-    setLocalUserFrames((current) => [...current, { seq, kind: USER_LOCAL_KIND, text: message }]);
+    const bubbleText = composeUserBubble(message, attachments);
+    setLocalUserFrames((current) => [...current, { seq, kind: USER_LOCAL_KIND, text: bubbleText }]);
     setOptimisticTurn(true);
-    void window.cs.sendMessage(workspace.sessionName, message).catch((error: unknown) => {
-      setOptimisticTurn(false);
-      setStreamError(error instanceof Error ? error.message : String(error));
-    });
+    void window.cs
+      .sendMessage(workspace.sessionName, message, attachments)
+      .catch((error: unknown) => {
+        setOptimisticTurn(false);
+        setStreamError(error instanceof Error ? error.message : String(error));
+      });
   };
 
   const handleStop = (): void => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Composer, type ComposerProps } from '../Composer';
 
@@ -25,7 +25,7 @@ describe('Composer', () => {
     fireEvent.click(send);
 
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(onSend).toHaveBeenCalledWith('hello world');
+    expect(onSend).toHaveBeenCalledWith('hello world', []);
     expect(textbox.value).toBe('');
   });
 
@@ -63,7 +63,7 @@ describe('Composer', () => {
     fireEvent.change(textbox, { target: { value: 'via shortcut' } });
     fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true });
 
-    expect(onSend).toHaveBeenCalledWith('via shortcut');
+    expect(onSend).toHaveBeenCalledWith('via shortcut', []);
     expect(textbox.value).toBe('');
   });
 
@@ -88,9 +88,10 @@ describe('Composer', () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps Upload disabled and the Model button a placeholder when no models', () => {
+  it('keeps the Model button a placeholder when no models, with Upload live', () => {
     render(<Composer {...baseProps()} />);
-    expect(screen.getByTitle(/attachments/i)).toBeDisabled();
+    // Upload is always live now (file attachments), even with no models.
+    expect(screen.getByRole('button', { name: 'Attach files' })).toBeEnabled();
     // With no models / no handler the Model selector stays a disabled placeholder.
     const model = screen.getByRole('button', { name: /Model/ });
     expect(model).toBeDisabled();
@@ -160,5 +161,72 @@ describe('Composer', () => {
 
     rerender(<Composer {...baseProps()} />);
     expect(container.querySelector('.chat-composer__info')).toBeNull();
+  });
+});
+
+describe('Composer attachments', () => {
+  it('adds picked files as removable chips (basenames) and de-duplicates by path', async () => {
+    window.cs.pickFiles = vi.fn().mockResolvedValue(['/a/x.go', '/b/y.ts']);
+    render(<Composer {...baseProps()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }));
+
+    // Chips render the basenames of the chosen absolute paths.
+    expect(await screen.findByText('x.go')).toBeInTheDocument();
+    expect(screen.getByText('y.ts')).toBeInTheDocument();
+
+    // Picking the same paths again does not duplicate the existing chips.
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }));
+    await waitFor(() => expect(window.cs.pickFiles).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByText('x.go')).toHaveLength(1);
+    expect(screen.getAllByText('y.ts')).toHaveLength(1);
+  });
+
+  it('drops a chip when its remove button is clicked', async () => {
+    window.cs.pickFiles = vi.fn().mockResolvedValue(['/a/x.go', '/b/y.ts']);
+    render(<Composer {...baseProps()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }));
+    expect(await screen.findByText('x.go')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove x.go' }));
+
+    expect(screen.queryByText('x.go')).not.toBeInTheDocument();
+    expect(screen.getByText('y.ts')).toBeInTheDocument();
+  });
+
+  it('sends text + attachments via onSend and clears both', async () => {
+    const onSend = vi.fn();
+    window.cs.pickFiles = vi.fn().mockResolvedValue(['/a/x.go', '/b/y.ts']);
+    render(<Composer {...baseProps({ onSend })} />);
+
+    const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: 'with files' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }));
+    expect(await screen.findByText('x.go')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(onSend).toHaveBeenCalledWith('with files', ['/a/x.go', '/b/y.ts']);
+    // Both the draft and the chips clear after a successful send.
+    expect(textbox.value).toBe('');
+    expect(screen.queryByText('x.go')).not.toBeInTheDocument();
+    expect(screen.queryByText('y.ts')).not.toBeInTheDocument();
+  });
+
+  it('enables Send with at least one attachment even when the text is empty', async () => {
+    const onSend = vi.fn();
+    window.cs.pickFiles = vi.fn().mockResolvedValue(['/a/x.go']);
+    render(<Composer {...baseProps({ onSend })} />);
+
+    const send = screen.getByRole('button', { name: 'Send' });
+    expect(send).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Attach files' }));
+    expect(await screen.findByText('x.go')).toBeInTheDocument();
+    expect(send).toBeEnabled();
+
+    fireEvent.click(send);
+    expect(onSend).toHaveBeenCalledWith('', ['/a/x.go']);
   });
 });
