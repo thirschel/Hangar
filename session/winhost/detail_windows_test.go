@@ -84,7 +84,7 @@ func TestSkillInfosMapping(t *testing.T) {
 // TestEmitMCPDetailSnapshot asserts captured detail maps into a single mcp.detail
 // frame carrying the full server list (the desktop replaces its page wholesale).
 func TestEmitMCPDetailSnapshot(t *testing.T) {
-	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.emitMCPDetailSnapshot([]copilotsdk.MCPServerDetail{
@@ -112,7 +112,7 @@ func TestEmitMCPDetailSnapshot(t *testing.T) {
 // TestEmitMCPDetailSnapshotPendingFallback asserts the startup/resume fallback:
 // with nothing captured yet, the configured names become a pending snapshot.
 func TestEmitMCPDetailSnapshotPendingFallback(t *testing.T) {
-	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.emitMCPDetailSnapshot(nil, []string{"github", "", "docs"})
@@ -127,7 +127,7 @@ func TestEmitMCPDetailSnapshotPendingFallback(t *testing.T) {
 }
 
 func TestEmitMCPDetailSnapshotEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.emitMCPDetailSnapshot(nil, nil)
@@ -137,7 +137,7 @@ func TestEmitMCPDetailSnapshotEmptyNoFrame(t *testing.T) {
 }
 
 func TestEmitSkillsSnapshot(t *testing.T) {
-	s := newSDKSession("rich-skills", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-skills", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.emitSkillsSnapshot([]copilotsdk.SkillDetail{
@@ -155,7 +155,7 @@ func TestEmitSkillsSnapshot(t *testing.T) {
 }
 
 func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-skills", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-skills", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.emitSkillsSnapshot(nil)
@@ -170,7 +170,7 @@ func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
 // rather than falling through to a generic frame. onSDKEvent is downstream of
 // copilotsdk capture, so the snapshot emitters are no-ops on this path.
 func TestTranslateAndEmitPillBarUnchanged(t *testing.T) {
-	s := newSDKSession("rich-route", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-route", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServersLoadedData{Servers: []copilot.MCPServersLoadedServer{

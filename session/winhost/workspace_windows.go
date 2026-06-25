@@ -49,6 +49,13 @@ type workspace struct {
 	CopilotResume  bool   `json:"copilotResume,omitempty"` // agent is copilot or a detected copilot wrapper (e.g. "cpa") -> resumable
 	NoWorktree     bool   `json:"noWorktree,omitempty"`    // in-place session: opened directly against RepoPath, no managed worktree
 	Kind           string `json:"kind,omitempty"`          // "" / "terminal" = ConPTY backend; "rich" = Copilot SDK backend
+
+	// Rich model selection (v18). Persisted so a revived rich session restores the
+	// user's SetModel choice; without these the model is blank after a daemon
+	// restart. Empty = no explicit selection (a fresh chat / the SDK default).
+	Model           string `json:"model,omitempty"`           // selected model id
+	ReasoningEffort string `json:"reasoningEffort,omitempty"` // selected reasoning effort
+	ContextTier     string `json:"contextTier,omitempty"`     // selected context tier ("default"|"long_context")
 }
 
 type workspaceManager struct {
@@ -163,6 +170,21 @@ func (m *workspaceManager) saveLocked() {
 	}
 	if data, err := json.MarshalIndent(list, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o600)
+	}
+}
+
+// setRichModelSelection persists a rich session's model selection (v18) by session
+// name so a later revive restores it (see reviveBySession). A no-op when no
+// workspace owns the session name. Locks m.mu and saves the registry.
+func (m *workspaceManager) setRichModelSelection(sessionName, model, effort, contextTier string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, w := range m.wss {
+		if w.SessionName == sessionName {
+			w.Model, w.ReasoningEffort, w.ContextTier = model, effort, contextTier
+			m.saveLocked()
+			return
+		}
 	}
 }
 
@@ -701,7 +723,7 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 		m.host.logger.Printf("workspace %s: missing persisted AgentSessionID; launching without resume", w.ID)
 	}
 	if plan.rich {
-		if err := m.host.startSDKSession(w.SessionName, plan.program, w.WorktreePath, "", w.AutoYes, plan.agentSessionID, plan.resume); err != nil {
+		if err := m.host.startSDKSession(w.SessionName, plan.program, w.WorktreePath, "", w.AutoYes, plan.agentSessionID, w.Model, w.ReasoningEffort, w.ContextTier, plan.resume); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1363,7 +1385,9 @@ func richBackend(reqRich, cfgEnabled, copilotAgent bool) bool {
 // SDK) backend when rich is set, or the default ConPTY terminal backend otherwise.
 func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string, resume bool) error {
 	if rich {
-		return m.host.startSDKSession(sessionName, program, worktree, "", autoYes, agentSessionID, resume)
+		// A fresh chat has no persisted model selection yet; pass empty model/effort/
+		// tier so the SDK uses its default. Revive threads the stored selection (v18).
+		return m.host.startSDKSession(sessionName, program, worktree, "", autoYes, agentSessionID, "", "", "", resume)
 	}
 	return m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, cols, rows, autoYes)
 }

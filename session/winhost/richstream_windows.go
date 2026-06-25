@@ -142,6 +142,24 @@ func usageFrame(data *copilot.SessionUsageInfoData, model string) proto.EventFra
 	}
 }
 
+// emitModelFrame emits a single model frame (v18) carrying the session's active
+// model plus the persisted reasoning effort and context tier, so a (re)attaching
+// desktop restores the model selector after a restart. Called after start()/
+// startResumed(); a no-op when no model is known yet (e.g. a fresh chat that has
+// not selected one) so a brand-new session never emits a blank selection.
+func (s *sdkSession) emitModelFrame() {
+	model := s.sess.CurrentModel()
+	if model == "" {
+		return
+	}
+	s.emitFrame(proto.EventFrame{
+		Kind:        proto.EventKindModel,
+		Model:       model,
+		Effort:      s.effort,
+		ContextTier: s.contextTier,
+	})
+}
+
 func mcpServerInfos(details []copilotsdk.MCPServerDetail) []proto.MCPServerInfo {
 	if len(details) == 0 {
 		return nil
@@ -256,6 +274,36 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 			Question:  permissionSummary(data),
 			ToolName:  permissionToolName(data),
 		}, true
+	case *copilot.PermissionCompletedData:
+		// The SDK emits this after a permission is answered (live: post-RespondPermission;
+		// resume: replayed from Transcript). Translating it dismisses the already-answered
+		// card instead of re-showing Approve/Reject after a restart (v18).
+		return proto.EventFrame{
+			Kind:      proto.EventKindPermissionResolved,
+			RequestID: data.RequestID,
+			Decision:  permissionDecision(data.Result),
+		}, true
+	case *copilot.UserInputCompletedData:
+		// An answered ask_user request; dismiss the matching prompt UI on resume (v18).
+		return proto.EventFrame{
+			Kind:      proto.EventKindInputResolved,
+			RequestID: data.RequestID,
+		}, true
+	case *copilot.ElicitationCompletedData:
+		// An answered elicitation request; same resolve frame as user_input (v18).
+		return proto.EventFrame{
+			Kind:      proto.EventKindInputResolved,
+			RequestID: data.RequestID,
+		}, true
+	case *copilot.SessionModelChangeData:
+		// A live (or replayed) model switch; carry the new selection so the desktop
+		// keeps the model selector in sync (v18).
+		return proto.EventFrame{
+			Kind:        proto.EventKindModel,
+			Model:       data.NewModel,
+			Effort:      stringPtrValue(data.ReasoningEffort),
+			ContextTier: contextTierPtrValue(data.ContextTier),
+		}, true
 	case *copilot.SessionTitleChangedData:
 		return proto.EventFrame{Kind: proto.EventKindTitle, Title: data.Title}, true
 	case *copilot.SessionIdleData:
@@ -365,6 +413,33 @@ func stringPtrValue(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+// contextTierPtrValue dereferences an SDK context-tier pointer to its wire string
+// ("" when unset), used to carry a model change's context tier on the model frame.
+func contextTierPtrValue(v *copilot.ContextTier) string {
+	if v == nil {
+		return ""
+	}
+	return string(*v)
+}
+
+// permissionDecision maps an SDK permission result to the wire decision (v18). Any
+// approved* kind (ApproveOnce/ApprovedForSession/ApprovedForLocation) is an
+// approval; every other kind (denied*, cancelled) — and a nil result — is a
+// rejection, so a resolved card never re-shows Approve/Reject after a restart.
+func permissionDecision(result copilot.PermissionResult) string {
+	if result == nil {
+		return proto.DecisionReject
+	}
+	switch result.Kind() {
+	case copilot.PermissionResultKindApproved,
+		copilot.PermissionResultKindApprovedForLocation,
+		copilot.PermissionResultKindApprovedForSession:
+		return proto.DecisionApprove
+	default:
+		return proto.DecisionReject
+	}
 }
 
 func boolPtrValue(v *bool) bool {

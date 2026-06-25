@@ -80,6 +80,13 @@ type Config struct {
 	SessionID string   // stable id for resume (e.g. the Hangar workspace UUID)
 	AutoYes   bool     // when true, auto-approve permission requests
 
+	// ReasoningEffort/ContextTier (v18) ride along with Model so a (re)created
+	// session restores the user's selection. Both empty = unset (the SDK default),
+	// byte-for-byte the pre-v18 create/resume request. ContextTier is "default" /
+	// "long_context"; an empty/unknown value is left unset by the SDK (omitempty).
+	ReasoningEffort string // reasoning effort for models that support it ("low".."xhigh")
+	ContextTier     string // context window tier ("default"|"long_context")
+
 	// MCPConfigPath is the copilot mcp-config.json to forward; "" = the default
 	// ~/.copilot/mcp-config.json. Set DisableMCP to skip forwarding entirely.
 	MCPConfigPath string
@@ -171,6 +178,10 @@ func (s *Session) sessionConfig() *copilot.SessionConfig {
 	if s.cfg.Model != "" {
 		sc.Model = s.cfg.Model
 	}
+	// ReasoningEffort/ContextTier (v18): empty = unset (the SDK omits empty values),
+	// so a session created without a selection is byte-for-byte the pre-v18 request.
+	sc.ReasoningEffort = s.cfg.ReasoningEffort
+	sc.ContextTier = copilot.ContextTier(s.cfg.ContextTier)
 	if s.cfg.SessionID != "" {
 		sc.SessionID = s.cfg.SessionID
 	}
@@ -182,6 +193,34 @@ func (s *Session) sessionConfig() *copilot.SessionConfig {
 		s.setMCPServerNames(nil)
 	}
 	return sc
+}
+
+// resumeConfig builds the ResumeSessionConfig for a resume. The SDK "can change the
+// model when resuming", so it carries Model/ReasoningEffort/ContextTier (v18) — the
+// persisted selection a fresh daemon would otherwise drop, leaving the model blank.
+// Empty values are unset (omitempty), so a resume without a stored selection is
+// byte-for-byte the pre-v18 request. MCP forwarding mirrors sessionConfig.
+func (s *Session) resumeConfig() *copilot.ResumeSessionConfig {
+	rc := &copilot.ResumeSessionConfig{
+		Streaming:            copilot.Bool(true),
+		OnEvent:              s.handleEvent,
+		OnPermissionRequest:  s.onPermission,
+		OnUserInputRequest:   s.onUserInput,
+		OnElicitationRequest: s.onElicitation,
+	}
+	if s.cfg.Model != "" {
+		rc.Model = s.cfg.Model
+	}
+	rc.ReasoningEffort = s.cfg.ReasoningEffort
+	rc.ContextTier = copilot.ContextTier(s.cfg.ContextTier)
+	if !s.cfg.DisableMCP {
+		if servers := s.forwardedMCPServers(); len(servers) > 0 {
+			rc.MCPServers = servers
+		}
+	} else {
+		s.setMCPServerNames(nil)
+	}
+	return rc
 }
 
 // Start launches the CLI runtime and creates a fresh session.
@@ -214,21 +253,7 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 		err  error
 	)
 	if resume {
-		resumeConfig := &copilot.ResumeSessionConfig{
-			OnEvent:              s.handleEvent,
-			OnPermissionRequest:  s.onPermission,
-			OnUserInputRequest:   s.onUserInput,
-			OnElicitationRequest: s.onElicitation,
-			Streaming:            copilot.Bool(true),
-		}
-		if !s.cfg.DisableMCP {
-			if servers := s.forwardedMCPServers(); len(servers) > 0 {
-				resumeConfig.MCPServers = servers
-			}
-		} else {
-			s.setMCPServerNames(nil)
-		}
-		sess, err = client.ResumeSession(ctx, s.cfg.SessionID, resumeConfig)
+		sess, err = client.ResumeSession(ctx, s.cfg.SessionID, s.resumeConfig())
 	} else {
 		sess, err = client.CreateSession(ctx, s.sessionConfig())
 	}

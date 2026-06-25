@@ -109,6 +109,15 @@ export interface EventFrame {
   model?: string;
   currentTokens?: number;
   tokenLimit?: number;
+  // Resume-persistence frames for the rich Agent view. `decision` rides a
+  // 'permission.resolved' frame ('approve' | 'reject') so an answered permission
+  // replays as answered after a remount; 'input.resolved' carries only requestId.
+  // `effort` and `contextTier` ride a 'model' frame (alongside the shared `model`
+  // above) to restore the session's model selection on start/resume + live switch
+  // (`contextTier` is 'default' | 'long_context').
+  decision?: string;
+  effort?: string;
+  contextTier?: string;
   // Concise tool detail for the Agent transcript's CLI-style tool line. toolArgs
   // rides a 'tool.start' frame (e.g. a path/query); toolResult rides a
   // 'tool.complete' frame (e.g. "150 lines read") and carries the error message

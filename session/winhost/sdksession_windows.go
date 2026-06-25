@@ -26,6 +26,13 @@ type sdkSession struct {
 	sess    *copilotsdk.Session
 	logger  *stdlog.Logger
 
+	// effort/contextTier (v18) are the persisted reasoning-effort and context-tier
+	// selections threaded in at (re)create time. They are echoed back on the model
+	// frame (emitModelFrame) so a restarted desktop restores the model selector;
+	// the active model itself is read from the copilotsdk session (CurrentModel).
+	effort      string
+	contextTier string
+
 	// sendFn delivers a user message (text + absolute attachment paths) to the
 	// underlying SDK session. nil means call sess.Send directly; tests override it
 	// to observe what richSend threads through, without a live Copilot CLI.
@@ -48,24 +55,31 @@ type sdkSession struct {
 }
 
 // newSDKSession builds a rich SDK-backed session. workDir is the git worktree;
-// baseDir overrides COPILOT_HOME (empty = default). onEvent (optional) receives
-// the structured event stream for the eventual rich-view pipe.
-func newSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
+// baseDir overrides COPILOT_HOME (empty = default). model/effort/contextTier (v18)
+// seed the Copilot SDK model selection so a (re)created session restores the user's
+// choice (empty = the SDK default, a fresh chat). onEvent (optional) receives the
+// structured event stream for the eventual rich-view pipe.
+func newSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &sdkSession{
-		name:     name,
-		program:  program,
-		logger:   logger,
-		ctx:      ctx,
-		cancel:   cancel,
-		subs:     make(map[*subscriber]struct{}),
-		richSubs: make(map[*richSub]struct{}),
+		name:        name,
+		program:     program,
+		effort:      effort,
+		contextTier: contextTier,
+		logger:      logger,
+		ctx:         ctx,
+		cancel:      cancel,
+		subs:        make(map[*subscriber]struct{}),
+		richSubs:    make(map[*richSub]struct{}),
 	}
 	s.sess = copilotsdk.New(copilotsdk.Config{
-		WorkDir:   workDir,
-		BaseDir:   baseDir,
-		SessionID: sessionID,
-		AutoYes:   autoYes,
+		WorkDir:         workDir,
+		BaseDir:         baseDir,
+		SessionID:       sessionID,
+		Model:           model,
+		ReasoningEffort: effort,
+		ContextTier:     contextTier,
+		AutoYes:         autoYes,
 		OnEvent: func(ev copilot.SessionEvent) {
 			s.onSDKEvent(ev)
 			if onEvent != nil {

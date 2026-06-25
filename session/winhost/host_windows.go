@@ -403,14 +403,15 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 // "rich" session (the opt-in structured backend, parallel to
 // startManagedSessionWithShell). sessionID seeds or resumes the SDK session id so
 // a later resume continues the same conversation; baseDir overrides COPILOT_HOME
-// ("" = default).
-func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID string, resume bool) error {
+// ("" = default). model/effort/contextTier (v18) seed the SDK model selection so a
+// revived session restores the user's choice ("" = a fresh chat / the SDK default).
+func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.sessions[name]; exists {
 		return fmt.Errorf("session already exists: %s", name)
 	}
-	s := newSDKSession(name, program, workDir, baseDir, autoYes, sessionID, nil, h.logger)
+	s := newSDKSession(name, program, workDir, baseDir, autoYes, sessionID, model, effort, contextTier, nil, h.logger)
 	var err error
 	if resume {
 		err = s.startResumed()
@@ -420,6 +421,10 @@ func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes b
 	if err != nil {
 		return fmt.Errorf("start sdk session: %w", err)
 	}
+	// Emit the active model after start/resume (and after any transcript replay) so a
+	// (re)attaching desktop restores the model selector (v18). A no-op for a fresh
+	// chat with no selection yet.
+	s.emitModelFrame()
 	h.sessions[name] = s
 	h.lastActive = time.Now()
 	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", name, filepath.Base(program), workDir, resume)
@@ -652,6 +657,9 @@ func (h *host) setRichModel(req *proto.Request) *proto.Response {
 	if err := sess.richSetModel(context.Background(), req.Model, req.Effort, req.ContextTier); err != nil {
 		return proto.Errorf(req.ID, "set model: %v", err)
 	}
+	// Persist the selection so a later revive restores it (v18): without this the
+	// model is blank after a daemon restart. Keyed by session name like the switch.
+	h.workspaces.setRichModelSelection(req.Session, req.Model, req.Effort, req.ContextTier)
 	return &proto.Response{ID: req.ID, OK: true}
 }
 

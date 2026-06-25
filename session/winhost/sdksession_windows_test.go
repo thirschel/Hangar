@@ -13,7 +13,7 @@ import (
 // TestSDKSessionAdapter exercises the managedSession mapping that does not need a
 // live Copilot runtime (start() is covered by the package's e2e tests).
 func TestSDKSessionAdapter(t *testing.T) {
-	s := newSDKSession("ws1", "copilot", t.TempDir(), "", true, "", nil, nil)
+	s := newSDKSession("ws1", "copilot", t.TempDir(), "", true, "", "", "", "", nil, nil)
 
 	var ms managedSession = s // also enforced by the package-level assertion
 	if ms == nil {
@@ -76,7 +76,7 @@ func TestSDKSessionAdapter(t *testing.T) {
 }
 
 func TestSDKSessionEmitsPendingMCPStatusFrames(t *testing.T) {
-	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.emitMCPServerPendingFrames([]string{"github", "", "docs"})
@@ -93,7 +93,7 @@ func TestSDKSessionEmitsPendingMCPStatusFrames(t *testing.T) {
 }
 
 func TestSDKSessionBuffersStartupMCPStatusUntilPending(t *testing.T) {
-	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	s.beginMCPStartupBuffer()
@@ -118,7 +118,7 @@ func TestSDKSessionBuffersStartupMCPStatusUntilPending(t *testing.T) {
 }
 
 func TestSDKSessionResumeReplaySkipsHistoricalMCPStatus(t *testing.T) {
-	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	stale := copilot.SessionEvent{Data: &copilot.SessionMCPServerStatusChangedData{

@@ -141,3 +141,44 @@ func TestModelDetailMapping(t *testing.T) {
 		t.Fatalf("bare modelDetail efforts = %+v, want empty", bare)
 	}
 }
+
+// TestConfigThreadsModelEffortTier asserts the v18 Config.Model/ReasoningEffort/
+// ContextTier are threaded into BOTH the create (SessionConfig) and resume
+// (ResumeSessionConfig) requests, so a (re)created session restores the user's
+// selection instead of leaving the model blank after a daemon restart.
+func TestConfigThreadsModelEffortTier(t *testing.T) {
+	s := New(Config{
+		Model:           "gpt-5",
+		ReasoningEffort: "high",
+		ContextTier:     "long_context",
+		SessionID:       "sess-1",
+		DisableMCP:      true,
+	})
+
+	sc := s.sessionConfig()
+	if sc.Model != "gpt-5" || sc.ReasoningEffort != "high" || sc.ContextTier != copilot.ContextTierLongContext {
+		t.Fatalf("sessionConfig model/effort/tier = %q/%q/%q, want gpt-5/high/long_context", sc.Model, sc.ReasoningEffort, sc.ContextTier)
+	}
+
+	rc := s.resumeConfig()
+	if rc.Model != "gpt-5" || rc.ReasoningEffort != "high" || rc.ContextTier != copilot.ContextTierLongContext {
+		t.Fatalf("resumeConfig model/effort/tier = %q/%q/%q, want gpt-5/high/long_context", rc.Model, rc.ReasoningEffort, rc.ContextTier)
+	}
+}
+
+// TestConfigOmitsModelEffortTierWhenUnset asserts an empty selection leaves the
+// create/resume requests unset (the SDK omits empty values), so a session with no
+// stored model is byte-for-byte the pre-v18 request.
+func TestConfigOmitsModelEffortTierWhenUnset(t *testing.T) {
+	s := New(Config{SessionID: "sess-1", DisableMCP: true})
+
+	sc := s.sessionConfig()
+	if sc.Model != "" || sc.ReasoningEffort != "" || sc.ContextTier != "" {
+		t.Fatalf("sessionConfig should be unset, got model/effort/tier = %q/%q/%q", sc.Model, sc.ReasoningEffort, sc.ContextTier)
+	}
+
+	rc := s.resumeConfig()
+	if rc.Model != "" || rc.ReasoningEffort != "" || rc.ContextTier != "" {
+		t.Fatalf("resumeConfig should be unset, got model/effort/tier = %q/%q/%q", rc.Model, rc.ReasoningEffort, rc.ContextTier)
+	}
+}

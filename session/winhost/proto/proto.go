@@ -69,7 +69,14 @@ import (
 // EventKindToolComplete. Both are short, single-line, and truncated; they never
 // carry a full payload (e.g. a file's contents). Additive: a tool.start/tool.complete
 // frame with empty summaries serializes exactly as it did under v16.
-const Version = 17
+// v18 restores two rich-view selections across a session restart. EventFrame gains
+// three new Kinds plus the fields they carry: permission.resolved (Decision =
+// "approve"|"reject") and input.resolved (RequestID) translate the SDK permission/
+// user-input COMPLETION events so an already-answered card is dismissed on resume
+// instead of re-showing Approve/Reject; and model (Model + Effort + ContextTier)
+// carries the session's active model so the desktop restores the model selector
+// after a restart. Additive: the fields are omitempty and the Kinds are all new.
+const Version = 18
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -406,6 +413,13 @@ type EventFrame struct {
 	// the desktop view wholesale, populated only on its corresponding Kind.
 	MCPServers []MCPServerInfo `json:"mcpServers,omitempty"` // populated on EventKindMCPDetail
 	Skills     []SkillInfo     `json:"skills,omitempty"`     // populated on EventKindSkills
+	// Resume-restore fields (v18). Decision is "approve"|"reject" on a
+	// permission.resolved frame (the SDK permission completion). Effort/ContextTier
+	// ride with Model (above) on a model frame so the desktop restores the model
+	// selector after a restart; all three are best-effort and omitempty.
+	Decision    string `json:"decision,omitempty"`    // permission.resolved: "approve"|"reject"
+	Effort      string `json:"effort,omitempty"`      // model: reasoning effort (with Model/ContextTier)
+	ContextTier string `json:"contextTier,omitempty"` // model: pinned context tier (with Model/Effort)
 }
 
 // EventFrame.Kind values for the rich event stream (v11).
@@ -424,6 +438,11 @@ const (
 	EventKindMCPStatus         = "mcp.status" // per-server MCP connection status (MCPServer, Status, Error)
 	EventKindMCPDetail         = "mcp.detail" // full MCP server-list snapshot
 	EventKindSkills            = "skills"     // full skills-list snapshot
+	// Resume-restore frames (v18): translate the SDK completion events and carry the
+	// active model so a restarted session restores its answered cards and selection.
+	EventKindPermissionResolved = "permission.resolved" // a permission request was answered (Decision)
+	EventKindInputResolved      = "input.resolved"      // a user-input/elicitation request was answered (RequestID)
+	EventKindModel              = "model"               // the session's active model (Model + Effort + ContextTier)
 )
 
 // MCPServerInfo is per-server detail for the rich MCP page (v13). It is display-

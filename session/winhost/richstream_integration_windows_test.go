@@ -120,7 +120,7 @@ func TestRichStreamPipeEndToEnd(t *testing.T) {
 	h := newHost(io.Discard, time.Minute)
 	defer h.triggerShutdown()
 
-	sess := newSDKSession("rich-e2e", "copilot", t.TempDir(), "", false, "", nil, nil)
+	sess := newSDKSession("rich-e2e", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer sess.close()
 
 	// Snapshot: inject distinct events BEFORE any client connects. These land in
@@ -231,7 +231,7 @@ func TestRichStreamConcurrentIsolation(t *testing.T) {
 
 	rigs := make([]richRig, sessions)
 	for i := 0; i < sessions; i++ {
-		s := newSDKSession(fmt.Sprintf("rich-conc-%d", i), "copilot", t.TempDir(), "", false, "", nil, nil)
+		s := newSDKSession(fmt.Sprintf("rich-conc-%d", i), "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 		defer s.close()
 		marker := sessionMarker(i)
 		for j := 0; j < perSnap; j++ {

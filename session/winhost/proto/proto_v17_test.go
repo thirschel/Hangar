@@ -6,8 +6,11 @@ import (
 )
 
 func TestVersionV17(t *testing.T) {
-	if Version != 17 {
-		t.Fatalf("Version = %d, want 17", Version)
+	// v17 (CLI-style tool args/result on the tool stream) is a floor, not the
+	// current version: once shipped, its surface must remain present in every later
+	// version.
+	if Version < 17 {
+		t.Fatalf("Version = %d, want >= 17", Version)
 	}
 }
 

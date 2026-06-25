@@ -776,6 +776,74 @@ func TestLoadKeepsInPlaceSkipsUncontained(t *testing.T) {
 	}
 }
 
+// TestRichModelSelectionPersistsAndReloads proves a rich session's model selection
+// (v18) survives a daemon restart: setRichModelSelection stores Model/ReasoningEffort/
+// ContextTier on the workspace by session name and saves, and a fresh manager
+// reloads them from workspaces.json so reviveBySession can restore the selection.
+func TestRichModelSelectionPersistsAndReloads(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// saveLocked silently no-ops if the config dir is missing, so create it.
+	p, err := workspacesPath()
+	if err != nil {
+		t.Fatalf("workspacesPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h1 := newHost(io.Discard, time.Minute)
+	m1 := h1.workspaces
+	m1.mu.Lock()
+	m1.wss = map[string]*workspace{
+		"rich1": {ID: "rich1", SessionName: "ws_rich1", Kind: "rich", NoWorktree: true},
+	}
+	m1.saveLocked()
+	m1.mu.Unlock()
+
+	// The SetModel persistence path: store a selection keyed by session name.
+	m1.setRichModelSelection("ws_rich1", "gpt-5", "high", "long_context")
+
+	// A fresh manager reloads from the same workspaces.json.
+	h2 := newHost(io.Discard, time.Minute)
+	m2 := h2.workspaces
+	m2.mu.Lock()
+	w := m2.wss["rich1"]
+	m2.mu.Unlock()
+	if w == nil {
+		t.Fatal("rich workspace not reloaded")
+	}
+	if w.Model != "gpt-5" || w.ReasoningEffort != "high" || w.ContextTier != "long_context" {
+		t.Fatalf("reloaded selection = %q/%q/%q, want gpt-5/high/long_context", w.Model, w.ReasoningEffort, w.ContextTier)
+	}
+}
+
+// TestSetRichModelSelectionUnknownSessionNoop proves setRichModelSelection is a
+// no-op (and does not panic) when no workspace owns the named session.
+func TestSetRichModelSelectionUnknownSessionNoop(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	h := newHost(io.Discard, time.Minute)
+	h.workspaces.mu.Lock()
+	h.workspaces.wss = map[string]*workspace{
+		"rich1": {ID: "rich1", SessionName: "ws_rich1", Kind: "rich", NoWorktree: true},
+	}
+	h.workspaces.mu.Unlock()
+
+	h.workspaces.setRichModelSelection("ghost", "gpt-5", "high", "long_context") // must not panic
+
+	h.workspaces.mu.Lock()
+	w := h.workspaces.wss["rich1"]
+	h.workspaces.mu.Unlock()
+	if w.Model != "" || w.ReasoningEffort != "" || w.ContextTier != "" {
+		t.Fatalf("unrelated workspace mutated: %q/%q/%q", w.Model, w.ReasoningEffort, w.ContextTier)
+	}
+}
+
 // TestArchiveInPlaceLeavesFolder guards the archive safety rule: archiving an
 // in-place session must never delete the user's folder or branch, even when the
 // request sets DeleteWorktree.

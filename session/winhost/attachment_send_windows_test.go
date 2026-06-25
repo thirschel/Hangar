@@ -18,7 +18,7 @@ func TestSendMessageThreadsAttachmentsToRichSend(t *testing.T) {
 	_, h, cleanup := startTestHostWithHandle(t)
 	defer cleanup()
 
-	rich := newSDKSession("rich-attach", "copilot", t.TempDir(), "", false, "", nil, nil)
+	rich := newSDKSession("rich-attach", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer rich.close()
 
 	type call struct {
@@ -62,7 +62,7 @@ func TestSendMessageThreadsAttachmentsToRichSend(t *testing.T) {
 // TestRichSendNilAttachmentsUnchanged proves the empty-attachments path threads a
 // nil slice straight through richSend, preserving today's plain-message behavior.
 func TestRichSendNilAttachmentsUnchanged(t *testing.T) {
-	rich := newSDKSession("rich-plain", "copilot", t.TempDir(), "", false, "", nil, nil)
+	rich := newSDKSession("rich-plain", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer rich.close()
 
 	got := make(chan []string, 1)

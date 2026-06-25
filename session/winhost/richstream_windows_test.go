@@ -13,7 +13,7 @@ import (
 )
 
 func TestSDKSessionRichEventsAndReplay(t *testing.T) {
-	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	mcpServer := "github"
@@ -100,7 +100,7 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 }
 
 func TestOnSDKEventMCPStatusFrames(t *testing.T) {
-	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	failed := "boom"
@@ -153,7 +153,7 @@ func TestPermissionFrameIncludesQuestionAndTool(t *testing.T) {
 }
 
 func TestSDKPromptEmitsUserInputFrame(t *testing.T) {
-	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", nil, nil)
+	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
 	_, sub := s.richSubscribe(0)
@@ -186,5 +186,123 @@ func TestSDKPromptEmitsUserInputFrame(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live prompt frame")
+	}
+}
+
+// TestSDKEventFramePermissionCompleted asserts the SDK permission-completion event
+// maps onto a permission.resolved frame with the right Decision (v18), so an
+// answered card is dismissed (not re-shown) after a restart. Covers the approve
+// variants, the deny/cancel variants, and a nil result (all -> reject).
+func TestSDKEventFramePermissionCompleted(t *testing.T) {
+	cases := []struct {
+		name    string
+		result  copilot.PermissionResult
+		wantDec string
+	}{
+		{"approved", copilot.PermissionApproved{}, proto.DecisionApprove},
+		{"approved-for-session", copilot.PermissionApprovedForSession{}, proto.DecisionApprove},
+		{"approved-for-location", copilot.PermissionApprovedForLocation{}, proto.DecisionApprove},
+		{"denied-interactively", copilot.PermissionDeniedInteractivelyByUser{}, proto.DecisionReject},
+		{"denied-by-rules", copilot.PermissionDeniedByRules{}, proto.DecisionReject},
+		{"cancelled", copilot.PermissionCancelled{}, proto.DecisionReject},
+		{"nil-result", nil, proto.DecisionReject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			frame, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.PermissionCompletedData{
+				RequestID: "perm-1",
+				Result:    tc.result,
+			}})
+			if !ok {
+				t.Fatal("sdkEventFrame did not map PermissionCompletedData")
+			}
+			if frame.Kind != proto.EventKindPermissionResolved || frame.RequestID != "perm-1" || frame.Decision != tc.wantDec {
+				t.Fatalf("permission.resolved frame = %+v, want decision=%q", frame, tc.wantDec)
+			}
+		})
+	}
+}
+
+// TestSDKEventFrameInputCompleted asserts the SDK user-input and elicitation
+// completion events both map onto an input.resolved frame carrying the request id
+// (v18), so the matching prompt UI is dismissed on resume.
+func TestSDKEventFrameInputCompleted(t *testing.T) {
+	frame, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.UserInputCompletedData{RequestID: "ui-1"}})
+	if !ok || frame.Kind != proto.EventKindInputResolved || frame.RequestID != "ui-1" {
+		t.Fatalf("user_input.completed frame = %+v ok=%v", frame, ok)
+	}
+	frame, ok = sdkEventFrame(copilot.SessionEvent{Data: &copilot.ElicitationCompletedData{RequestID: "el-1"}})
+	if !ok || frame.Kind != proto.EventKindInputResolved || frame.RequestID != "el-1" {
+		t.Fatalf("elicitation.completed frame = %+v ok=%v", frame, ok)
+	}
+}
+
+// TestSDKEventFrameModelChange asserts a live SDK model-change event maps onto a
+// model frame carrying the new model plus the dereferenced effort and context tier
+// (v18), and that nil effort/tier pointers deref to empty (omitted on the wire).
+func TestSDKEventFrameModelChange(t *testing.T) {
+	effort := "high"
+	tier := copilot.ContextTierLongContext
+	frame, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.SessionModelChangeData{
+		NewModel:        "gpt-5",
+		ReasoningEffort: &effort,
+		ContextTier:     &tier,
+	}})
+	if !ok {
+		t.Fatal("sdkEventFrame did not map SessionModelChangeData")
+	}
+	if frame.Kind != proto.EventKindModel || frame.Model != "gpt-5" || frame.Effort != "high" || frame.ContextTier != "long_context" {
+		t.Fatalf("model frame = %+v", frame)
+	}
+
+	bare, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.SessionModelChangeData{NewModel: "claude"}})
+	if !ok || bare.Model != "claude" || bare.Effort != "" || bare.ContextTier != "" {
+		t.Fatalf("bare model frame = %+v ok=%v", bare, ok)
+	}
+}
+
+// TestTranslateAndEmitResolutionFrames proves the completion events route through
+// onSDKEvent (the live and resume-replay path) onto resolution frames, so an
+// answered permission/input is dismissed on resume instead of re-prompting.
+func TestTranslateAndEmitResolutionFrames(t *testing.T) {
+	s := newSDKSession("rich-resolve", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.PermissionCompletedData{RequestID: "perm-1", Result: copilot.PermissionApproved{}}})
+	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.UserInputCompletedData{RequestID: "ui-1"}})
+
+	frames := s.richTranscript(0)
+	if len(frames) != 2 {
+		t.Fatalf("richTranscript len = %d, want 2", len(frames))
+	}
+	if frames[0].Kind != proto.EventKindPermissionResolved || frames[0].RequestID != "perm-1" || frames[0].Decision != proto.DecisionApprove {
+		t.Fatalf("permission.resolved frame = %+v", frames[0])
+	}
+	if frames[1].Kind != proto.EventKindInputResolved || frames[1].RequestID != "ui-1" {
+		t.Fatalf("input.resolved frame = %+v", frames[1])
+	}
+}
+
+// TestEmitModelFrame asserts emitModelFrame emits one model frame carrying the
+// session's current model (seeded from the v18 newSDKSession params) plus the
+// persisted effort and tier, and is a no-op when no model is known (a fresh chat).
+func TestEmitModelFrame(t *testing.T) {
+	s := newSDKSession("rich-model", "copilot", t.TempDir(), "", false, "", "gpt-5", "high", "long_context", nil, nil)
+	defer s.close()
+
+	s.emitModelFrame()
+	frames := s.richTranscript(0)
+	if len(frames) != 1 {
+		t.Fatalf("richTranscript len = %d, want 1", len(frames))
+	}
+	if f := frames[0]; f.Kind != proto.EventKindModel || f.Model != "gpt-5" || f.Effort != "high" || f.ContextTier != "long_context" {
+		t.Fatalf("model frame = %+v", f)
+	}
+
+	bare := newSDKSession("rich-bare", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer bare.close()
+	bare.emitModelFrame()
+	if got := bare.richTranscript(0); len(got) != 0 {
+		t.Fatalf("emitModelFrame with no model should emit nothing, got %+v", got)
 	}
 }

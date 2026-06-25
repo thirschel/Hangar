@@ -524,4 +524,132 @@ describe('ChatViewHost', () => {
 
     expect(screen.getByRole('button', { name: /Model/ })).toBeDisabled();
   });
+
+  // --- Resume persistence (rebuilt from the stream, not volatile React state) ---
+
+  it('renders a stream-resolved permission as answered with no active buttons on replay', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    // Simulate a fresh-mount replay: the daemon replays both the request AND its
+    // resolution. The optimistic local answeredRequests is empty (no click this
+    // mount), so answered-state must be reconstructed from the permission.resolved
+    // frame alone -- otherwise the card would reappear with live Approve/Reject.
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'p1',
+          question: 'Allow shell command?',
+          choices: ['approve', 'reject'],
+        },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'permission.resolved', requestId: 'p1', decision: 'approve' },
+      });
+    });
+
+    // The decision label shows and both buttons are inactive (disabled) -- the
+    // component disables rather than removes answered controls (matches a click).
+    expect(screen.getByText('approved')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+  });
+
+  it('renders a rejected stream-resolved permission as "rejected" on replay', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'permission.requested',
+          requestId: 'p2',
+          question: 'Allow shell command?',
+          choices: ['approve', 'reject'],
+        },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'permission.resolved', requestId: 'p2', decision: 'reject' },
+      });
+    });
+
+    expect(screen.getByText('rejected')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
+  });
+
+  it('renders a stream-resolved user input as answered with no active buttons on replay', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'user_input.requested',
+          requestId: 'i1',
+          question: 'Pick an option',
+          choices: ['Alpha', 'Beta'],
+        },
+      });
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'input.resolved', requestId: 'i1' },
+      });
+    });
+
+    // The generic "answered" state shows and the choice buttons are disabled, even
+    // though no local click happened this mount (reconstructed from input.resolved).
+    expect(screen.getByText('answered')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Alpha' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Beta' })).toBeDisabled();
+  });
+
+  it('restores the model selector (model + effort + tier) from a model frame after resume', async () => {
+    window.cs.listModels = vi.fn().mockResolvedValue([
+      {
+        id: 'gpt-5',
+        name: 'gpt-5',
+        supportedEfforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+      },
+    ]);
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    // Wait for the model list to resolve (selector becomes live) before replay.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Model/ })).toBeEnabled());
+    expect(richFrameCallback).toBeDefined();
+
+    // A resume replays the persisted selection as a 'model' frame; the user made
+    // no local pick this mount, so the selector must reflect the stream values.
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'model',
+          model: 'gpt-5',
+          effort: 'high',
+          contextTier: 'long_context',
+        },
+      });
+    });
+
+    // The selector button shows the restored model + effort (High, NOT the model's
+    // default Medium) -- proof the 'model' frame's effort won over the default.
+    const modelButton = screen.getByRole('button', { name: /gpt-5/ });
+    expect(within(modelButton).getByText('High')).toBeInTheDocument();
+
+    // Opening the menu reflects the restored long-context tier (no local pick).
+    fireEvent.click(modelButton);
+    const menu = screen.getByRole('menu', { name: 'Select model' });
+    expect(within(menu).getByText('Long context')).toBeInTheDocument();
+  });
 });

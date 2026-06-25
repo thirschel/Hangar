@@ -72,8 +72,30 @@ type TranscriptEntry =
       args?: string;
       result?: string;
     }
-  | { id: string; kind: 'permission'; requestId?: string; question: string; toolName?: string; choices: string[] }
-  | { id: string; kind: 'input'; requestId?: string; question: string; choices: string[] }
+  | {
+      id: string;
+      kind: 'permission';
+      requestId?: string;
+      question: string;
+      toolName?: string;
+      choices: string[];
+      // Answered-state derived in the reducer from a replayed 'permission.resolved'
+      // frame, so it survives a fresh mount even when the optimistic local
+      // answeredRequests set is empty. answerLabel is "approved" / "rejected".
+      answered?: boolean;
+      answerLabel?: string;
+    }
+  | {
+      id: string;
+      kind: 'input';
+      requestId?: string;
+      question: string;
+      choices: string[];
+      // Answered-state derived from a replayed 'input.resolved' frame (label
+      // "answered"); mirrors the permission entry above so it survives a remount.
+      answered?: boolean;
+      answerLabel?: string;
+    }
   | { id: string; kind: 'idle'; aborted: boolean }
   | { id: string; kind: 'error'; text: string };
 
@@ -91,6 +113,11 @@ type TranscriptModel = {
   // the composer header (active model + context %). Undefined until the first
   // usage frame arrives.
   usage?: UsageSnapshot;
+  // Latest model-selection snapshot from a 'model' frame (last-write-wins). The
+  // daemon emits it on start/resume and on a live switch, so it restores the
+  // selector (model + effort + context tier) after a remount/replay. Undefined
+  // until the first model frame arrives.
+  modelState?: ModelSelectionSnapshot;
 };
 
 // A single context-usage reading carried on a 'usage' frame. Context % is
@@ -99,6 +126,15 @@ type UsageSnapshot = {
   model?: string;
   currentTokens?: number;
   tokenLimit?: number;
+};
+
+// The session's current model selection carried on a 'model' frame: the model id
+// plus the optional reasoning effort and context tier. Last-write-wins across the
+// seq-sorted frames; used to restore the selector after a resume/remount.
+type ModelSelectionSnapshot = {
+  model?: string;
+  effort?: string;
+  contextTier?: string;
 };
 
 const MCP_STATUS_META: Record<string, { label: string; className: string }> = {
@@ -166,6 +202,12 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   let skills: SkillInfo[] = [];
   // Latest usage reading; last-write-wins across the seq-sorted frames.
   let usage: UsageSnapshot | undefined;
+  // Latest model selection; last-write-wins across the seq-sorted frames.
+  let modelState: ModelSelectionSnapshot | undefined;
+  // requestId -> answered label, derived from 'permission.resolved' /
+  // 'input.resolved' frames so answered-state survives a fresh mount/replay
+  // (independent of the optimistic local answeredRequests marks).
+  const resolved = new Map<string, string>();
 
   for (const frame of frames) {
     switch (frame.kind) {
@@ -259,6 +301,14 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           choices: frame.choices ?? [],
         });
         break;
+      case 'permission.resolved':
+        // A permission was answered (approve/reject). Record the decision label so
+        // the matching permission entry replays as answered after a remount; the
+        // label mirrors the optimistic local mark (markAnswered) for consistency.
+        if (frame.requestId) {
+          resolved.set(frame.requestId, frame.decision === 'approve' ? 'approved' : 'rejected');
+        }
+        break;
       case 'user_input.requested':
         turnInProgress = true;
         entries.push({
@@ -269,6 +319,13 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           choices: frame.choices ?? [],
         });
         break;
+      case 'input.resolved':
+        // A user_input/elicitation was answered. Record the generic "answered"
+        // label so the matching input entry replays as answered after a remount.
+        if (frame.requestId) {
+          resolved.set(frame.requestId, 'answered');
+        }
+        break;
       case 'usage':
         // Capture the structured reading for the composer header (active model +
         // context %). The CLI shows no inline "Usage updated" line, so we never
@@ -278,6 +335,16 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           model: frame.model,
           currentTokens: frame.currentTokens,
           tokenLimit: frame.tokenLimit,
+        };
+        break;
+      case 'model':
+        // The session's current model selection (model + effort + context tier),
+        // emitted on start/resume and on a live switch. Captured last-write-wins
+        // (like usage) and used to restore the selector after a remount/replay.
+        modelState = {
+          model: frame.model,
+          effort: frame.effort,
+          contextTier: frame.contextTier,
         };
         break;
       case 'idle':
@@ -315,7 +382,18 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
     }
   }
 
-  return { entries, servers, mcpServers, skills, turnInProgress, usage };
+  // Stamp answered-state onto permission/input entries from the resolved map so a
+  // replayed *.requested + *.resolved pair renders answered (decision label, no
+  // active buttons) even on a fresh mount where answeredRequests is still empty.
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (entry.kind !== 'permission' && entry.kind !== 'input') continue;
+    if (!entry.requestId) continue;
+    const label = resolved.get(entry.requestId);
+    if (label) entries[i] = { ...entry, answered: true, answerLabel: label };
+  }
+
+  return { entries, servers, mcpServers, skills, turnInProgress, usage, modelState };
 }
 
 // Context % = currentTokens / tokenLimit, rendered as e.g. "42% context".
@@ -348,8 +426,10 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   // The user's explicit reasoning-effort pick; undefined falls back to the active
   // model's default (see currentEffort below). Reset when the model changes.
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
-  // The context tier ('default' | 'long_context'); seeded to 'default' per session.
-  const [selectedContextTier, setSelectedContextTier] = useState<string>('default');
+  // The context tier ('default' | 'long_context'). Undefined means no local pick
+  // this mount, so currentContextTier can fall back to the restored 'model' frame
+  // tier (then the 'default' tier). A user pick sets it explicitly.
+  const [selectedContextTier, setSelectedContextTier] = useState<string | undefined>(undefined);
   // Mirrors the last list applied to `models` so the fetch can skip a no-op
   // dispatch (a direct-value setState React can eager-bail, unlike an updater).
   const modelsRef = useRef<ModelInfo[]>([]);
@@ -376,16 +456,18 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const transcript = useMemo(() => buildTranscript(frames), [frames]);
   const turnInProgress = transcript.turnInProgress || optimisticTurn;
 
-  // Composer header (model + context %) is driven by the latest usage frame. The
-  // active model for the selector prefers the optimistic local pick so the button
-  // updates immediately, then the daemon's usage frames reconcile it.
-  const currentModelId = selectedModelId ?? transcript.usage?.model;
+  // The active selection prefers the optimistic local pick (instant feedback on a
+  // user switch), then the daemon's persisted 'model' frame (restores model +
+  // effort + tier after a resume/remount), then the usage frame's model / the
+  // model's own defaults. modelState is last-write-wins from the stream.
+  const modelState = transcript.modelState;
+  const currentModelId = selectedModelId ?? modelState?.model ?? transcript.usage?.model;
   // Resolve the active model from the list to drive effort support + defaults.
   const currentModel = models.find((model) => model.id === currentModelId);
-  // The effort shown/sent falls back to the active model's default until the user
-  // picks one explicitly; the context tier is the local pick.
-  const currentEffort = selectedEffort ?? currentModel?.defaultEffort;
-  const currentContextTier = selectedContextTier;
+  // Effort/context fall back to the persisted 'model' frame, then the active
+  // model's default / the 'default' tier, until the user picks one explicitly.
+  const currentEffort = selectedEffort ?? modelState?.effort ?? currentModel?.defaultEffort;
+  const currentContextTier = selectedContextTier ?? modelState?.contextTier ?? 'default';
   // Adjust-state-during-render: when the active model changes (a live switch or
   // the first usage frame), drop any explicit effort pick so currentEffort falls
   // back to the new model's default. Mirrors the AutoYes seed pattern above; no
@@ -464,9 +546,10 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
     }
     setSelectedModelId(undefined);
     // Reset the per-session effort/context picks so they re-seed from the new
-    // session's active model (effort) / the 'default' tier (context).
+    // session's restored 'model' frame (then the active model's default effort /
+    // the 'default' tier). Undefined = no local pick yet this mount.
     setSelectedEffort(undefined);
-    setSelectedContextTier('default');
+    setSelectedContextTier(undefined);
     void window.cs
       .listModels(workspace.sessionName)
       .then((list) => {
@@ -784,25 +867,34 @@ function ChatEntryView({
           {entry.result && <span className="chat-tool__result">{entry.result}</span>}
         </div>
       );
-    case 'permission':
+    case 'permission': {
+      // Answered when the stream replayed a permission.resolved (survives a fresh
+      // mount/replay) OR the optimistic local click marked it (instant feedback).
+      const localAnswered = entry.requestId ? answeredRequests.has(entry.requestId) : false;
+      const localLabel = entry.requestId ? answerLabels.get(entry.requestId) : undefined;
       return (
         <ChatPermissionEntry
           entry={entry}
           autoYes={autoYes}
-          answered={entry.requestId ? answeredRequests.has(entry.requestId) : false}
-          answerLabel={entry.requestId ? answerLabels.get(entry.requestId) : undefined}
+          answered={entry.answered === true || localAnswered}
+          answerLabel={localLabel ?? entry.answerLabel}
           onRespond={onRespondPermission}
         />
       );
-    case 'input':
+    }
+    case 'input': {
+      // Same dual source as permission: stream-resolved (replay) OR local click.
+      const localAnswered = entry.requestId ? answeredRequests.has(entry.requestId) : false;
+      const localLabel = entry.requestId ? answerLabels.get(entry.requestId) : undefined;
       return (
         <ChatUserInputEntry
           entry={entry}
-          answered={entry.requestId ? answeredRequests.has(entry.requestId) : false}
-          answerLabel={entry.requestId ? answerLabels.get(entry.requestId) : undefined}
+          answered={entry.answered === true || localAnswered}
+          answerLabel={localLabel ?? entry.answerLabel}
           onRespond={onRespondUserInput}
         />
       );
+    }
     case 'idle':
       // A tiny faded centered turn marker (the CLI shows no usage line at all).
       return (
