@@ -4,6 +4,7 @@ import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { GridPane } from './components/GridPane';
+import { AgentMode } from './components/AgentMode';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
 import { BreadcrumbCopy } from './components/BreadcrumbCopy';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
@@ -29,6 +30,10 @@ import { PROTO_VERSION } from '../../shared/proto-version';
 
 type ConnectionState = 'connecting' | 'connected' | 'error';
 
+// App-level experience mode: the existing workspace UI ('standard') or the
+// full-screen Copilot Agent surface ('agent'). Persisted across launches.
+type AppMode = 'standard' | 'agent';
+
 // Right-panel resize bounds (the panel width is user-draggable and persisted).
 const SIDE_MIN = 320;
 const SIDE_DEFAULT = 420;
@@ -44,6 +49,9 @@ const STATUS_FILTER_KEY = 'cs.statusFilter';
 const GRID_COLUMNS_KEY = 'cs.gridColumns';
 const GRID_ORDER_KEY = 'cs.gridOrder';
 const GRID_ROW_HEIGHTS_KEY = 'cs.gridRowHeights';
+
+// App-mode persistence key.
+const APP_MODE_KEY = 'cs.appMode';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -93,6 +101,10 @@ export function App(): JSX.Element {
     }
   });
   const [showHelp, setShowHelp] = useState(false);
+  const [appMode, setAppMode] = useState<AppMode>(() => {
+    const saved = localStorage.getItem(APP_MODE_KEY);
+    return saved === 'agent' ? 'agent' : 'standard';
+  });
   const [gridMode, setGridMode] = useState(false);
   const [gridSelectedIds, setGridSelectedIds] = useState<Set<string>>(() => new Set());
   const [gridColumns, setGridColumns] = useState<number>(() => {
@@ -699,6 +711,24 @@ export function App(): JSX.Element {
         </div>
         <button
           type="button"
+          className={`top-bar__mode${appMode === 'agent' ? ' is-active' : ''}`}
+          title={
+            appMode === 'agent'
+              ? 'Switch to the standard workspace view'
+              : 'Switch to the Copilot Agent view'
+          }
+          aria-label="Toggle app mode"
+          aria-pressed={appMode === 'agent'}
+          onClick={() => {
+            const next: AppMode = appMode === 'agent' ? 'standard' : 'agent';
+            localStorage.setItem(APP_MODE_KEY, next);
+            setAppMode(next);
+          }}
+        >
+          {appMode === 'agent' ? '⌂ Standard' : '💬 Agent'}
+        </button>
+        <button
+          type="button"
           className={`top-bar__grid${gridMode ? ' is-active' : ''}`}
           title={gridMode ? 'Close agent grid' : 'Open a grid of the selected agents (select 2+)'}
           aria-label="Toggle agent grid"
@@ -727,6 +757,9 @@ export function App(): JSX.Element {
         </button>
       </header>
 
+      {appMode === 'agent' ? (
+        <AgentMode />
+      ) : (
       <main
         className="workspace"
         style={{
@@ -799,6 +832,7 @@ export function App(): JSX.Element {
           </>
         )}
       </main>
+      )}
 
       <footer className="status-bar">
         <span>Protocol v{hostVersion ?? '?'}</span>
