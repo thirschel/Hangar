@@ -3643,6 +3643,77 @@ body.is-row-resizing .center-terminal__resizer::after {
   cursor: default;
 }
 
+/* Header parts (model name + context %). The model name reads slightly stronger
+   than the muted context reading; the separator is decorative. */
+.chat-composer__info-model {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.chat-composer__info-sep {
+  color: var(--text-faint);
+}
+
+/* Live model selector: the button anchors an absolutely-positioned menu that
+   opens UPWARD (the composer sits at the bottom of the chat view). */
+.chat-composer__model-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.chat-composer__model {
+  max-width: 220px;
+}
+
+.chat-composer__model-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-1));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+}
+
+.chat-composer__model-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms var(--ease);
+}
+
+.chat-composer__model-item:hover {
+  background: var(--bg-hover);
+}
+
+.chat-composer__model-item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chat-composer__model-item--active::after {
+  content: '\2713';
+  margin-left: auto;
+  padding-left: var(--space-2);
+}
+
 /* ChatView section pages: the Changes and All files tabs drop the standard
    ReviewPanel / FilesPanel straight into the chat body. The page wrapper reuses
    the .chat-view__body flex column, so the embedded panel fills the middle and

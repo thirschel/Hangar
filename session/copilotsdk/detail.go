@@ -148,3 +148,58 @@ func strDeref(v *string) string {
 	}
 	return *v
 }
+
+// ModelDetail is a display-safe snapshot of one selectable model, returned by
+// (*Session).ListModels for the rich model selector (v14). It exposes the id and
+// human-readable name only; winhost maps it to proto.ModelInfo (this package stays
+// free of any proto coupling).
+type ModelDetail struct {
+	ID   string
+	Name string
+}
+
+// CurrentModel returns the session's active model id (best-effort; "" if unknown).
+// It is seeded from Config.Model and updated on SessionModelChangeData / SetModel.
+func (s *Session) CurrentModel() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.currentModel
+}
+
+// Usage returns the most recent context-window usage captured from the SDK event
+// stream (SessionUsageInfoData). known is false until the first usage_info event.
+func (s *Session) Usage() (currentTokens, tokenLimit int64, known bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.usageCurrent, s.usageLimit, s.usageKnown
+}
+
+func (s *Session) setCurrentModel(model string) {
+	if model == "" {
+		return
+	}
+	s.mu.Lock()
+	s.currentModel = model
+	s.mu.Unlock()
+}
+
+// captureUsage records the latest context-window usage from a usage_info event so
+// the host can read it back through Usage().
+func (s *Session) captureUsage(data *copilot.SessionUsageInfoData) {
+	if data == nil {
+		return
+	}
+	s.mu.Lock()
+	s.usageCurrent = data.CurrentTokens
+	s.usageLimit = data.TokenLimit
+	s.usageKnown = true
+	s.mu.Unlock()
+}
+
+// captureModelChange updates the tracked current model from a model-change event.
+func (s *Session) captureModelChange(data *copilot.SessionModelChangeData) {
+	if data == nil {
+		return
+	}
+	s.setCurrentModel(data.NewModel)
+}

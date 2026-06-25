@@ -314,6 +314,10 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.respondRichPermission(req)
 	case proto.MethodRespondUserInput:
 		return h.respondRichUserInput(req)
+	case proto.MethodListModels:
+		return h.listRichModels(req)
+	case proto.MethodSetModel:
+		return h.setRichModel(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodListWorkspaces:
@@ -624,6 +628,29 @@ func (h *host) respondRichUserInput(req *proto.Request) *proto.Response {
 	}
 	if err := sess.richRespondUserInput(req.RequestID, req.Answer, req.Freeform); err != nil {
 		return proto.Errorf(req.ID, "respond user input: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) listRichModels(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	models, err := sess.richListModels(context.Background())
+	if err != nil {
+		return proto.Errorf(req.ID, "list models: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true, Models: models}
+}
+
+func (h *host) setRichModel(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richSetModel(context.Background(), req.Model); err != nil {
+		return proto.Errorf(req.ID, "set model: %v", err)
 	}
 	return &proto.Response{ID: req.ID, OK: true}
 }

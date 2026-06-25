@@ -103,6 +103,19 @@ export interface EventFrame {
   error?: string;
   mcpServers?: McpServerInfo[]; // present on a frame with kind 'mcp.detail'
   skills?: SkillInfo[]; // present on a frame with kind 'skills'
+  // Context-usage snapshot carried on a frame with kind 'usage'. Context % is
+  // currentTokens / tokenLimit (guard divide-by-zero / missing). `model` is the
+  // active model id/name for the live model selector header.
+  model?: string;
+  currentTokens?: number;
+  tokenLimit?: number;
+}
+
+// A selectable agent model, returned by the ListModels RPC and switched live via
+// SetModel. `name` is an optional human-friendly label; fall back to `id`.
+export interface ModelInfo {
+  id: string;
+  name?: string;
 }
 
 export interface HostInfo {
@@ -156,6 +169,8 @@ export interface Request {
     | 'GetTranscript'
     | 'RespondPermission'
     | 'RespondUserInput'
+    | 'ListModels'
+    | 'SetModel'
     | string;
   session?: string;
   program?: string;
@@ -169,6 +184,8 @@ export interface Request {
   decision?: 'approve' | 'reject';
   answer?: string;
   freeform?: boolean;
+  // SetModel: the target model id to switch the session to (live).
+  model?: string;
   data?: string;
   mode?: string;
   withANSI?: boolean;
@@ -238,6 +255,8 @@ export interface Response {
   absPath?: string;
   // Rich agent event stream (v11)
   frames?: EventFrame[];
+  // Live model selector: ListModels returns the selectable models.
+  models?: ModelInfo[];
 }
 
 type PendingCall = {
@@ -490,6 +509,21 @@ export class ControlClient {
       throw new Error(response.error || 'GetTranscript failed');
     }
     return response.frames ?? [];
+  }
+
+  public async listModels(session: string): Promise<ModelInfo[]> {
+    const response = await this.call({ method: 'ListModels', session });
+    if (!response.ok) {
+      throw new Error(response.error || 'ListModels failed');
+    }
+    return response.models ?? [];
+  }
+
+  public async setModel(session: string, modelId: string): Promise<void> {
+    const response = await this.call({ method: 'SetModel', session, model: modelId });
+    if (!response.ok) {
+      throw new Error(response.error || 'SetModel failed');
+    }
   }
 
   private rejectAll(error: Error): void {

@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   EventFrame,
   McpServerInfo,
+  ModelInfo,
   SkillInfo,
   WorkspaceInfo,
 } from '../../../main/host-client';
@@ -84,6 +85,18 @@ type TranscriptModel = {
   mcpServers: McpServerInfo[];
   skills: SkillInfo[];
   turnInProgress: boolean;
+  // Latest context-usage snapshot from a 'usage' frame (last-write-wins). Drives
+  // the composer header (active model + context %). Undefined until the first
+  // usage frame arrives.
+  usage?: UsageSnapshot;
+};
+
+// A single context-usage reading carried on a 'usage' frame. Context % is
+// currentTokens / tokenLimit; any field may be absent (guard before dividing).
+type UsageSnapshot = {
+  model?: string;
+  currentTokens?: number;
+  tokenLimit?: number;
 };
 
 const MCP_STATUS_META: Record<string, { label: string; className: string }> = {
@@ -107,6 +120,14 @@ function mcpStatusMeta(status: string): { label: string; className: string } {
   return MCP_STATUS_META[status] ?? { label: status || 'Unknown', className: 'muted' };
 }
 
+// Shallow id/name equality for two model lists. Lets the ListModels fetch skip a
+// no-op state update (e.g. an empty list resolving over an already-empty one),
+// which keeps the selector from re-rendering on every chat mount.
+function sameModelList(a: ModelInfo[], b: ModelInfo[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((model, i) => model.id === b[i].id && model.name === b[i].name);
+}
+
 function requestDetail(question: string, genericLabel: string, toolName?: string): string {
   const trimmedQuestion = question.trim();
   const nonGenericQuestion =
@@ -124,6 +145,8 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   // Full-list snapshots; the last matching frame wins (frames are seq-sorted).
   let mcpServers: McpServerInfo[] = [];
   let skills: SkillInfo[] = [];
+  // Latest usage reading; last-write-wins across the seq-sorted frames.
+  let usage: UsageSnapshot | undefined;
 
   for (const frame of frames) {
     switch (frame.kind) {
@@ -223,6 +246,13 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         });
         break;
       case 'usage':
+        // Capture the structured reading for the composer header AND keep the
+        // existing inline transcript entry (last-write-wins for the header).
+        usage = {
+          model: frame.model,
+          currentTokens: frame.currentTokens,
+          tokenLimit: frame.tokenLimit,
+        };
         entries.push({ id: `usage-${frame.seq}`, kind: 'usage', text: frameText(frame) });
         break;
       case 'idle':
@@ -260,7 +290,19 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
     }
   }
 
-  return { entries, servers, mcpServers, skills, turnInProgress };
+  return { entries, servers, mcpServers, skills, turnInProgress, usage };
+}
+
+// Context % = currentTokens / tokenLimit, rendered as e.g. "42% context".
+// Returns undefined when the reading is missing or would divide by zero, so the
+// header shows nothing rather than "NaN%".
+function formatContextPercent(usage?: UsageSnapshot): string | undefined {
+  if (!usage) return undefined;
+  const { currentTokens, tokenLimit } = usage;
+  if (typeof currentTokens !== 'number' || typeof tokenLimit !== 'number' || tokenLimit <= 0) {
+    return undefined;
+  }
+  return `${Math.round((currentTokens / tokenLimit) * 100)}% context`;
 }
 
 export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
@@ -273,6 +315,13 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const [answerLabels, setAnswerLabels] = useState<Map<string, string>>(() => new Map());
   const [autoYes, setAutoYes] = useState(workspace.autoYes);
   const [activePage, setActivePage] = useState<ChatPage>('chat');
+  // Live model selector: the list from ListModels and the optimistic local pick
+  // (until the daemon's usage frames report the switch). Both reset per session.
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
+  // Mirrors the last list applied to `models` so the fetch can skip a no-op
+  // dispatch (a direct-value setState React can eager-bail, unlike an updater).
+  const modelsRef = useRef<ModelInfo[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldStickToBottom = useRef(true);
@@ -295,6 +344,25 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   }, [framesBySeq, localUserFrames]);
   const transcript = useMemo(() => buildTranscript(frames), [frames]);
   const turnInProgress = transcript.turnInProgress || optimisticTurn;
+
+  // Composer header (model + context %) is driven by the latest usage frame. The
+  // active model for the selector prefers the optimistic local pick so the button
+  // updates immediately, then the daemon's usage frames reconcile it.
+  const currentModelId = selectedModelId ?? transcript.usage?.model;
+  const usageModel = transcript.usage?.model?.trim() || undefined;
+  const contextLabel = formatContextPercent(transcript.usage);
+  const composerInfo =
+    usageModel || contextLabel ? (
+      <>
+        {usageModel && <span className="chat-composer__info-model">{usageModel}</span>}
+        {usageModel && contextLabel && (
+          <span className="chat-composer__info-sep" aria-hidden="true">
+            {'\u00B7'}
+          </span>
+        )}
+        {contextLabel && <span className="chat-composer__info-context">{contextLabel}</span>}
+      </>
+    ) : undefined;
 
   // Subscribe to the rich event stream for this chat; re-subscribe when the chat
   // (session) changes and tear down on unmount. Mirrors TranscriptView.
@@ -334,6 +402,35 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
       unsubscribeFrame();
       unsubscribeError();
       void window.cs.closeRichStream(workspace.sessionName);
+    };
+  }, [workspace.sessionName]);
+
+  // Fetch the selectable models for this session (live model selector). Resets
+  // the list + optimistic pick when the session changes; a stale resolve from a
+  // previous session is dropped via the cancelled flag.
+  useEffect(() => {
+    let cancelled = false;
+    // Clear the previous session's list/pick. Guard the dispatch so an
+    // already-empty list does not schedule a no-op update (avoids act() noise).
+    if (modelsRef.current.length > 0) {
+      modelsRef.current = [];
+      setModels([]);
+    }
+    setSelectedModelId(undefined);
+    void window.cs
+      .listModels(workspace.sessionName)
+      .then((list) => {
+        // Skip entirely when unchanged so an empty result over an empty list
+        // never dispatches (and never warns about an update outside act()).
+        if (cancelled || sameModelList(modelsRef.current, list)) return;
+        modelsRef.current = list;
+        setModels(list);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setStreamError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      cancelled = true;
     };
   }, [workspace.sessionName]);
 
@@ -386,6 +483,16 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const handleStop = (): void => {
     setOptimisticTurn(false);
     void window.cs.abortTurn(workspace.sessionName).catch((error: unknown) => {
+      setStreamError(error instanceof Error ? error.message : String(error));
+    });
+  };
+
+  // Switch the session's model live. Optimistically reflect the pick in the
+  // selector, then let the daemon's usage frames reconcile; revert on failure.
+  const handleSelectModel = (id: string): void => {
+    setSelectedModelId(id);
+    void window.cs.setModel(workspace.sessionName, id).catch((error: unknown) => {
+      setSelectedModelId(undefined);
       setStreamError(error instanceof Error ? error.message : String(error));
     });
   };
@@ -526,7 +633,10 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
               turnInProgress={turnInProgress}
               onSend={handleSend}
               onStop={handleStop}
-              info={<>model · context%</>}
+              info={composerInfo}
+              models={models}
+              currentModelId={currentModelId}
+              onSelectModel={handleSelectModel}
             />
           </div>
         </div>

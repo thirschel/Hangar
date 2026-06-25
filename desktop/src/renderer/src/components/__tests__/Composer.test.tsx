@@ -88,10 +88,67 @@ describe('Composer', () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the upload and model selector as disabled placeholders', () => {
+  it('keeps Upload disabled and the Model button a placeholder when no models', () => {
     render(<Composer {...baseProps()} />);
     expect(screen.getByTitle(/attachments/i)).toBeDisabled();
-    expect(screen.getByTitle(/model selector/i)).toBeDisabled();
+    // With no models / no handler the Model selector stays a disabled placeholder.
+    const model = screen.getByRole('button', { name: /Model/ });
+    expect(model).toBeDisabled();
+    expect(model).toHaveAttribute('title', 'No models available');
+  });
+
+  it('opens the model menu, marks the active model and reports a selection', () => {
+    const onSelectModel = vi.fn();
+    render(
+      <Composer
+        {...baseProps({
+          models: [
+            { id: 'gpt-5', name: 'GPT-5' },
+            { id: 'claude', name: 'Claude' },
+          ],
+          currentModelId: 'gpt-5',
+          onSelectModel,
+        })}
+      />,
+    );
+
+    // The button label reflects the current model; the menu is closed initially.
+    const modelButton = screen.getByRole('button', { name: /GPT-5/ });
+    expect(modelButton).toBeEnabled();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    fireEvent.click(modelButton);
+    expect(screen.getByRole('menu', { name: 'Select model' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: 'GPT-5' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Claude' }));
+    expect(onSelectModel).toHaveBeenCalledWith('claude');
+    // Selecting closes the menu.
+    expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
+  });
+
+  it('falls back to the model id as the menu label when no name is provided', () => {
+    render(
+      <Composer {...baseProps({ models: [{ id: 'bare-id' }], onSelectModel: vi.fn() })} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Model/ }));
+    expect(screen.getByRole('menuitemradio', { name: 'bare-id' })).toBeInTheDocument();
+  });
+
+  it('closes the model menu on Escape without selecting', () => {
+    const onSelectModel = vi.fn();
+    render(
+      <Composer {...baseProps({ models: [{ id: 'gpt-5', name: 'GPT-5' }], onSelectModel })} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Model/ }));
+    expect(screen.getByRole('menu', { name: 'Select model' })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
+    expect(onSelectModel).not.toHaveBeenCalled();
   });
 
   it('renders the info slot above the box only when provided', () => {

@@ -46,7 +46,14 @@ import (
 // every MCP load / status change) and EventKindSkills carries the full SkillInfo
 // list; each replaces the desktop's view wholesale. Additive frames — the
 // per-server EventKindMCPStatus pill stream is unchanged.
-const Version = 13
+// v14 adds the rich context-usage header + model selector. The (previously dead)
+// EventKindUsage frame now carries Model/CurrentTokens/TokenLimit so the desktop
+// can render context% (CurrentTokens/TokenLimit), and two request/response RPCs —
+// ListModels (-> Response.Models) and SetModel (Request.Model = target id) —
+// list/switch the active model on a rich session, scoped by Request.Session just
+// like SendMessage. Additive: the usage fields, ModelInfo, and the two methods are
+// all new surface; existing frames and methods are unchanged.
+const Version = 14
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -112,6 +119,13 @@ const (
 	// answer unblocks the SDK handler that is waiting on RequestID.
 	MethodRespondPermission = "RespondPermission" // approve/reject a pending permission.requested
 	MethodRespondUserInput  = "RespondUserInput"  // answer a pending user_input.requested
+
+	// Context-usage header + model selector (v14): list/switch the active model on a
+	// rich session (scoped by Request.Session like SendMessage). The usage header
+	// itself is delivered on the existing EventKindUsage event-stream frame, not a
+	// method.
+	MethodListModels = "ListModels" // -> Response.Models
+	MethodSetModel   = "SetModel"   // Request.Model = target model id; live switch
 )
 
 // Capture modes for MethodCapturePane.
@@ -204,6 +218,10 @@ type Request struct {
 	Decision  string `json:"decision,omitempty"`
 	Answer    string `json:"answer,omitempty"`
 	Freeform  bool   `json:"freeform,omitempty"`
+
+	// Model (v14) is the target model id for MethodSetModel (live model switch on a
+	// rich session). Unused by every other method.
+	Model string `json:"model,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -325,6 +343,9 @@ type Response struct {
 
 	// Rich agent view (v11): GetTranscript / OpenRichStream replay frames.
 	Frames []EventFrame `json:"frames,omitempty"`
+
+	// Rich model selector (v14): the MethodListModels result.
+	Models []ModelInfo `json:"models,omitempty"`
 }
 
 // EventFrame is one structured event on a rich session's event stream (v11). It is
@@ -344,6 +365,13 @@ type EventFrame struct {
 	Status    string   `json:"status,omitempty"`    // mcp/status changes
 	Aborted   bool     `json:"aborted,omitempty"`   // idle : the preceding turn was aborted
 	Error     string   `json:"error,omitempty"`     // error : message
+	// Context-usage header (v14): populated only on EventKindUsage. Model is the
+	// session's active model; CurrentTokens/TokenLimit are the context-window usage
+	// the desktop renders as context% (CurrentTokens/TokenLimit). Best-effort —
+	// omitempty drops any value the SDK has not reported yet.
+	Model         string `json:"model,omitempty"`         // active model (on "usage")
+	CurrentTokens int    `json:"currentTokens,omitempty"` // context tokens used (on "usage")
+	TokenLimit    int    `json:"tokenLimit,omitempty"`    // context window size (on "usage")
 	// MCP-detail + Skills snapshots (v13): each carries a full list that replaces
 	// the desktop view wholesale, populated only on its corresponding Kind.
 	MCPServers []MCPServerInfo `json:"mcpServers,omitempty"` // populated on EventKindMCPDetail
@@ -387,6 +415,14 @@ type SkillInfo struct {
 	Enabled     bool   `json:"enabled"`
 	Source      string `json:"source,omitempty"` // project|personal-copilot|plugin|builtin
 	Path        string `json:"path,omitempty"`
+}
+
+// ModelInfo is one selectable model for the rich model selector (v14), returned in
+// Response.Models for MethodListModels. winhost maps the copilotsdk model list onto
+// it; it is display-safe (id + name only).
+type ModelInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
 }
 
 // Decision values for MethodRespondPermission (v12).

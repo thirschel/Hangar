@@ -6,8 +6,10 @@ import (
 )
 
 func TestVersionV13(t *testing.T) {
-	if Version != 13 {
-		t.Fatalf("Version = %d, want 13", Version)
+	// v13 (rich MCP-detail + Skills snapshots) is a floor, not the current version:
+	// once shipped, its surface must remain present in every later version.
+	if Version < 13 {
+		t.Fatalf("Version = %d, want >= 13", Version)
 	}
 }
 

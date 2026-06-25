@@ -111,8 +111,15 @@ type Session struct {
 	mcpTools   map[string][]string // configured tool allowlist per server (best-effort, v13)
 	mcpDetail  []MCPServerDetail   // full per-server MCP detail for the rich MCP page (v13)
 	skills     []SkillDetail       // resolved skills for the rich Skills page (v13)
-	autoYes    atomic.Bool         // runtime-toggleable auto-approval (host SetAutoYes)
-	lastOutput atomic.Int64        // unix-ms of the last output-changing event
+	// Context-usage header + model selector (v14). currentModel is seeded from
+	// cfg.Model and updated on SessionModelChangeData (best-effort; "" when unknown).
+	// usage* hold the most recent context-window usage reported by the SDK.
+	currentModel string
+	usageCurrent int64
+	usageLimit   int64
+	usageKnown   bool
+	autoYes      atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
+	lastOutput   atomic.Int64 // unix-ms of the last output-changing event
 
 	promptMu sync.Mutex
 	prompts  map[string]chan userInputReply
@@ -130,7 +137,7 @@ func New(cfg Config) *Session {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stderr, "[copilotsdk] ", log.LstdFlags)
 	}
-	s := &Session{cfg: cfg, status: StatusLoading, prompts: make(map[string]chan userInputReply)}
+	s := &Session{cfg: cfg, status: StatusLoading, currentModel: cfg.Model, prompts: make(map[string]chan userInputReply)}
 	s.autoYes.Store(cfg.AutoYes)
 	return s
 }
@@ -300,6 +307,43 @@ func (s *Session) Transcript(ctx context.Context) ([]copilot.SessionEvent, error
 	return evs, s.noteErr(err)
 }
 
+// ListModels returns the models advertised by the underlying Copilot runtime
+// (Client.ListModels), reduced to the display-safe id+name pairs used by the rich
+// model selector (v14). The SDK caches the list after the first successful call.
+func (s *Session) ListModels(ctx context.Context) ([]ModelDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	out := make([]ModelDetail, 0, len(models))
+	for _, m := range models {
+		out = append(out, ModelDetail{ID: m.ID, Name: m.Name})
+	}
+	return out, nil
+}
+
+// SetModel switches the live session to modelID (v14). The tracked current model
+// is updated optimistically so the next usage frame reflects the switch even if
+// the SDK does not emit a SessionModelChangeData event; an authoritative update
+// still arrives through handleEvent when it does.
+func (s *Session) SetModel(ctx context.Context, modelID string) error {
+	sess := s.session()
+	if sess == nil {
+		return fmt.Errorf("session not started")
+	}
+	if err := sess.SetModel(ctx, modelID, nil); err != nil {
+		return s.noteErr(err)
+	}
+	s.setCurrentModel(modelID)
+	return nil
+}
+
 // Close disconnects the session and stops the runtime.
 func (s *Session) Close() error {
 	s.mu.Lock()
@@ -419,6 +463,10 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 			s.captureMCPServerStatusChanged(data)
 		case *copilot.SessionSkillsLoadedData:
 			s.captureSkillsLoaded(data)
+		case *copilot.SessionUsageInfoData:
+			s.captureUsage(data)
+		case *copilot.SessionModelChangeData:
+			s.captureModelChange(data)
 		}
 		s.touch()
 	}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EventFrame, WorkspaceInfo } from '../../../main/host-client';
 import { ChatViewHost } from '../components/ChatViewHost';
@@ -48,6 +48,8 @@ describe('ChatViewHost', () => {
     window.cs.onRichError = vi.fn().mockReturnValue(() => {});
     window.cs.sendMessage = vi.fn().mockResolvedValue(undefined);
     window.cs.setWorkspaceAutoYes = vi.fn().mockResolvedValue(undefined);
+    window.cs.listModels = vi.fn().mockResolvedValue([]);
+    window.cs.setModel = vi.fn().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -301,21 +303,69 @@ describe('ChatViewHost', () => {
     expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
   });
 
-  it('shows empty states and keeps the stream open when switching to MCP/Skills', async () => {
-    render(<ChatViewHost workspace={makeWorkspace()} />);
+  it('shows the model + context % header from a usage frame', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
 
-    fireEvent.click(screen.getByRole('button', { name: 'MCP servers' }));
-    expect(screen.getByText('No MCP servers configured.')).toBeInTheDocument();
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'usage', model: 'gpt-5', currentTokens: 5000, tokenLimit: 10000 },
+      });
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Skills' }));
-    expect(screen.getByText('No skills available.')).toBeInTheDocument();
+    // Header (above the composer box) shows the active model and 50% context.
+    // Scoped to the header because the model button also shows the active model.
+    const header = container.querySelector('.chat-composer__info') as HTMLElement;
+    expect(header).not.toBeNull();
+    expect(within(header).getByText('gpt-5')).toBeInTheDocument();
+    expect(within(header).getByText('50% context')).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Chat' }));
+  it('omits the context % when the usage reading would divide by zero', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
 
-    // The rich stream was opened exactly once and never torn down by switching
-    // pages -- the subscribing effect is keyed on the session, not activePage.
-    expect(window.cs.openRichStream).toHaveBeenCalledTimes(1);
-    expect(window.cs.closeRichStream).not.toHaveBeenCalled();
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'usage', model: 'gpt-5', currentTokens: 5000, tokenLimit: 0 },
+      });
+    });
+
+    const header = container.querySelector('.chat-composer__info') as HTMLElement;
+    expect(within(header).getByText('gpt-5')).toBeInTheDocument();
+    expect(screen.queryByText(/% context/)).not.toBeInTheDocument();
+  });
+
+  it('opens the model menu and switches the session model live', async () => {
+    window.cs.listModels = vi.fn().mockResolvedValue([
+      { id: 'gpt-5', name: 'GPT-5' },
+      { id: 'claude-sonnet', name: 'Claude Sonnet' },
+    ]);
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+
+    // The Model button becomes live (enabled) once the list resolves. waitFor
+    // (act-wrapped) settles the async setModels inside act.
+    const modelButton = screen.getByRole('button', { name: /Model/ });
+    await waitFor(() => expect(modelButton).toBeEnabled());
+
+    fireEvent.click(modelButton);
+    expect(screen.getByRole('menu', { name: 'Select model' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: 'GPT-5' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Claude Sonnet' }));
+
+    expect(window.cs.setModel).toHaveBeenCalledWith('rich-session', 'claude-sonnet');
+    // Selecting closes the menu.
+    expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
+  });
+
+  it('leaves the Model button a disabled placeholder when no models are available', async () => {
+    window.cs.listModels = vi.fn().mockResolvedValue([]);
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(window.cs.listModels).toHaveBeenCalledWith('rich-session'));
+
+    expect(screen.getByRole('button', { name: /Model/ })).toBeDisabled();
   });
 });

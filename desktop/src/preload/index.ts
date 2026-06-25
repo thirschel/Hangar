@@ -5,6 +5,7 @@ import type {
   EventFrame,
   FileContents,
   FileDiffInfo,
+  ModelInfo,
   Request,
   Response,
   WorkspaceInfo,
@@ -303,6 +304,11 @@ const api = {
     ipcRenderer.invoke('rich:respond-user-input', { session, requestId, answer, wasFreeform }),
   getTranscript: (session: string, since = 0): Promise<EventFrame[]> =>
     ipcRenderer.invoke('rich:get-transcript', { session, since }),
+  // Live model selector (session-scoped, same session id as the other rich calls).
+  listModels: (sessionName: string): Promise<ModelInfo[]> =>
+    ipcRenderer.invoke('rich:list-models', sessionName),
+  setModel: (sessionName: string, modelId: string): Promise<void> =>
+    ipcRenderer.invoke('rich:set-model', { session: sessionName, modelId }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),

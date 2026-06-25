@@ -51,6 +51,9 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 	case *copilot.SessionSkillsLoadedData:
 		s.emitSkills()
 		return
+	case *copilot.SessionUsageInfoData:
+		s.emitUsage(data)
+		return
 	}
 	frame, ok := sdkEventFrame(ev)
 	if !ok {
@@ -113,6 +116,32 @@ func (s *sdkSession) emitSkillsSnapshot(details []copilotsdk.SkillDetail) {
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindSkills, Skills: skills})
 }
 
+// emitUsage emits one usage frame (v14) translating an SDK context-usage event onto
+// the rich event stream. The token counts come straight from the event, so it is
+// correct for both live events and transcript replay (which bypasses the copilotsdk
+// capture); the Model is the session's current model, best-effort.
+func (s *sdkSession) emitUsage(data *copilot.SessionUsageInfoData) {
+	s.emitUsageSnapshot(data, s.sess.CurrentModel())
+}
+
+// emitUsageSnapshot maps a context-usage event + model into a single usage frame.
+// Split from emitUsage so the mapping is unit-testable without a live session.
+func (s *sdkSession) emitUsageSnapshot(data *copilot.SessionUsageInfoData, model string) {
+	if data == nil {
+		return
+	}
+	s.emitFrame(usageFrame(data, model))
+}
+
+func usageFrame(data *copilot.SessionUsageInfoData, model string) proto.EventFrame {
+	return proto.EventFrame{
+		Kind:          proto.EventKindUsage,
+		Model:         model,
+		CurrentTokens: int(data.CurrentTokens),
+		TokenLimit:    int(data.TokenLimit),
+	}
+}
+
 func mcpServerInfos(details []copilotsdk.MCPServerDetail) []proto.MCPServerInfo {
 	if len(details) == 0 {
 		return nil
@@ -158,6 +187,17 @@ func skillInfos(details []copilotsdk.SkillDetail) []proto.SkillInfo {
 			Source:      d.Source,
 			Path:        d.Path,
 		})
+	}
+	return out
+}
+
+func modelInfos(details []copilotsdk.ModelDetail) []proto.ModelInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]proto.ModelInfo, 0, len(details))
+	for _, d := range details {
+		out = append(out, proto.ModelInfo{ID: d.ID, Name: d.Name})
 	}
 	return out
 }
@@ -272,6 +312,18 @@ func (s *sdkSession) richRespondPermission(ctx context.Context, requestID string
 
 func (s *sdkSession) richRespondUserInput(requestID, answer string, freeform bool) error {
 	return s.sess.RespondUserInput(requestID, answer, freeform)
+}
+
+func (s *sdkSession) richListModels(ctx context.Context) ([]proto.ModelInfo, error) {
+	details, err := s.sess.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return modelInfos(details), nil
+}
+
+func (s *sdkSession) richSetModel(ctx context.Context, modelID string) error {
+	return s.sess.SetModel(ctx, modelID)
 }
 
 func (s *sdkSession) richTranscript(since uint64) []proto.EventFrame {

@@ -20,6 +20,7 @@ import {
   type DirEntry,
   type EventFrame,
   type FileContents,
+  type ModelInfo,
 } from './host-client';
 import {
   getSettings,
@@ -629,6 +630,16 @@ ipcMain.handle(
 ipcMain.handle('rich:get-transcript', async (_event, args: { session: string; since?: number }): Promise<EventFrame[]> => {
   const client = await getControlClient();
   return client.getTranscript(args.session, args.since ?? 0);
+});
+
+ipcMain.handle('rich:list-models', async (_event, session: string): Promise<ModelInfo[]> => {
+  const client = await getControlClient();
+  return client.listModels(session);
+});
+
+ipcMain.handle('rich:set-model', async (_event, args: { session: string; modelId: string }): Promise<void> => {
+  const client = await getControlClient();
+  await client.setModel(args.session, args.modelId);
 });
 
 ipcMain.handle(

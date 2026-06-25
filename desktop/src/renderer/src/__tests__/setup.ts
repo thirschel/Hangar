@@ -36,6 +36,8 @@ const mockCs = {
   respondPermission: asyncNoop,
   respondUserInput: asyncNoop,
   getTranscript: async () => [],
+  listModels: async () => [],
+  setModel: asyncNoop,
   detectShells: async () => [],
   pickFolder: async () => null,
   getDefaultProgram: async () => 'copilot',
