@@ -252,6 +252,11 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 		return proto.EventFrame{Kind: proto.EventKindAssistantMessage, Text: data.Content}, true
 	case *copilot.AssistantMessageDeltaData:
 		return proto.EventFrame{Kind: proto.EventKindAssistantDelta, Text: data.DeltaContent}, true
+	case *copilot.AssistantReasoningDeltaData:
+		// Incremental reasoning chunk (v19): forward each delta so the desktop can grow
+		// the "thinking" block live; the *copilot.AssistantReasoningData case below is the
+		// finalizer carrying the complete block.
+		return proto.EventFrame{Kind: proto.EventKindReasoningDelta, Text: data.DeltaContent}, true
 	case *copilot.AssistantReasoningData:
 		return proto.EventFrame{Kind: proto.EventKindReasoning, Text: data.Content}, true
 	case *copilot.ToolExecutionStartData:

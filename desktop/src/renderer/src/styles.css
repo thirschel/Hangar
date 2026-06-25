@@ -3327,6 +3327,29 @@ body.is-row-resizing .center-terminal__resizer::after {
   background: var(--accent);
 }
 
+/* Per-word fade-in for the live streaming assistant message (Claude-app style).
+   Markdown.tsx wraps each streamed word in a `.word-fade` span; React reconciles
+   already-shown words by position so only newly-arrived words mount and animate
+   -- earlier words (and finalized/resumed messages) never re-flash. */
+@keyframes word-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.word-fade {
+  animation: word-fade-in 0.26s var(--ease) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .word-fade {
+    animation: none;
+  }
+}
+
 /* Secondary entries (reasoning, tools, permission / input, usage, errors). */
 .chat-entry {
   margin-bottom: var(--space-4);

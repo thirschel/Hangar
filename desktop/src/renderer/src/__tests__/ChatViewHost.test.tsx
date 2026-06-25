@@ -86,6 +86,37 @@ describe('ChatViewHost', () => {
     expect(screen.getByText('Turn complete.')).toBeInTheDocument();
   });
 
+  it('fades streaming words in but renders the finalized message plainly without remounting', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    // Stream the turn in word-by-word deltas: the live message wraps each word
+    // in a `.word-fade` span so it can fade in one-after-another.
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.delta', text: 'Hello ' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'assistant.delta', text: 'world' } });
+    });
+
+    const streaming = container.querySelector('.chat-msg--assistant');
+    expect(streaming).not.toBeNull();
+    expect(streaming?.querySelectorAll('.word-fade').length).toBeGreaterThan(0);
+
+    // Finalize with the authoritative full message + idle.
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 3, kind: 'assistant.message', text: 'Hello world' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 4, kind: 'idle' } });
+    });
+
+    const finalized = container.querySelector('.chat-msg--assistant');
+    // Same DOM node: the entry id stayed stable across streaming -> finalize, so
+    // React reconciled in place instead of remounting (a remount would re-flash
+    // the whole message's word fade-in).
+    expect(finalized).toBe(streaming);
+    // Finalized message renders plainly -- no per-word spans, no re-animation.
+    expect(finalized?.querySelectorAll('.word-fade').length).toBe(0);
+    expect(finalized?.textContent).toContain('Hello world');
+  });
+
   it('renders a completed tool call as a clean line with a done dot (no badge)', async () => {
     const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
@@ -141,6 +172,32 @@ describe('ChatViewHost', () => {
     expect(container.querySelector('.chat-entry--reasoning')).toBe(details);
     // The boxed bubble base class (border/background) is dropped -- no bubble.
     expect(details).not.toHaveClass('chat-entry');
+  });
+
+  it('streams reasoning deltas into one growing entry finalized by the full frame', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    // Three incremental reasoning chunks accumulate into a SINGLE entry...
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'assistant.reasoning.delta', text: 'Thinking ' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'assistant.reasoning.delta', text: 'about ' } });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 3, kind: 'assistant.reasoning.delta', text: 'it' } });
+    });
+
+    expect(container.querySelectorAll('.chat-entry--reasoning')).toHaveLength(1);
+    expect(container.querySelector('.chat-reasoning__text')?.textContent).toBe('Thinking about it');
+
+    // ...then the full reasoning frame replaces that same entry's text with the
+    // authoritative complete block (still exactly one entry, not multiple).
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 4, kind: 'assistant.reasoning', text: 'Thinking about it carefully.' } });
+    });
+
+    expect(container.querySelectorAll('.chat-entry--reasoning')).toHaveLength(1);
+    expect(container.querySelector('.chat-reasoning__text')?.textContent).toBe(
+      'Thinking about it carefully.',
+    );
   });
 
   it('does not render an inline "Usage updated" entry for a usage frame', async () => {

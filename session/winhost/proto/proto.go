@@ -76,7 +76,13 @@ import (
 // instead of re-showing Approve/Reject; and model (Model + Effort + ContextTier)
 // carries the session's active model so the desktop restores the model selector
 // after a restart. Additive: the fields are omitempty and the Kinds are all new.
-const Version = 18
+// v19 streams reasoning deltas to the rich view so the desktop can grow the
+// "thinking" block live (as the CLI already does). EventFrame gains no fields: the
+// new EventKindReasoningDelta ("assistant.reasoning.delta") carries each incremental
+// chunk in the existing Text field, and the existing assistant.reasoning frame still
+// delivers the complete block as the finalizer. Additive: a host that never emits the
+// delta Kind serializes exactly as it did under v18.
+const Version = 19
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -387,7 +393,7 @@ type Response struct {
 type EventFrame struct {
 	Seq       uint64   `json:"seq"`
 	Kind      string   `json:"kind"`
-	Text      string   `json:"text,omitempty"`      // assistant.message / assistant.delta / assistant.reasoning text
+	Text      string   `json:"text,omitempty"`      // assistant.message / assistant.delta / assistant.reasoning(.delta) text
 	ToolName  string   `json:"toolName,omitempty"`  // tool.start / tool.complete
 	MCPServer string   `json:"mcpServer,omitempty"` // tool.* : MCP server name, when the tool is an MCP tool
 	RequestID string   `json:"requestId,omitempty"` // permission.requested / user_input.requested id
@@ -427,6 +433,7 @@ const (
 	EventKindAssistantMessage  = "assistant.message"
 	EventKindAssistantDelta    = "assistant.delta"
 	EventKindReasoning         = "assistant.reasoning"
+	EventKindReasoningDelta    = "assistant.reasoning.delta" // incremental reasoning chunk (v19); finalized by EventKindReasoning
 	EventKindToolStart         = "tool.start"
 	EventKindToolComplete      = "tool.complete"
 	EventKindPermissionRequest = "permission.requested"

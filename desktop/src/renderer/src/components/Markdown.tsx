@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Highlight, themes } from 'prism-react-renderer';
+import type { Element, ElementContent, Root, RootContent, Text } from 'hast';
 
 /**
  * Reusable Markdown renderer for assistant / agent output.
@@ -20,6 +21,13 @@ import { Highlight, themes } from 'prism-react-renderer';
  */
 type MarkdownProps = {
   text: string;
+  // When true, wrap each rendered word in a `.word-fade` span so words fade in
+  // one-after-another as streaming deltas grow the text (Claude-app style).
+  // React reconciles the already-rendered word spans by position, so only the
+  // newly-arrived words mount and animate -- earlier words never re-flash. Leave
+  // false/undefined for finalized, resumed or historical messages so they render
+  // instantly with no animation.
+  animate?: boolean;
 };
 
 // GFM tables, strikethrough, task lists and autolinks.
@@ -33,6 +41,75 @@ const CODE_THEME = themes.vsDark;
 
 // Matches a fenced code block's language class, e.g. `language-ts`.
 const LANGUAGE_CLASS = /language-(\w[\w-]*)/;
+
+// --- Per-word fade-in (streaming) ------------------------------------------
+// A rehype transform that splits every text node into per-word spans so the live
+// streaming assistant message can fade words in one-after-another. Code is left
+// untouched: text inside <pre>/<code> must stay verbatim for syntax rendering,
+// and `CodeBlock` reads it back as a raw string.
+
+// A word plus its trailing whitespace, OR a run of standalone whitespace (e.g.
+// leading indentation); together these tile the text so every character is kept.
+const WORD_OR_WHITESPACE = /\S+\s*|\s+/g;
+
+function textNode(value: string): Text {
+  return { type: 'text', value };
+}
+
+function wordFadeSpan(value: string): Element {
+  return {
+    type: 'element',
+    tagName: 'span',
+    properties: { className: ['word-fade'] },
+    children: [textNode(value)],
+  };
+}
+
+// Split one text node into a span per word (trailing whitespace kept on the
+// word); pure-whitespace chunks pass through as plain text so spacing survives.
+function splitTextNode(node: Text): Array<Element | Text> {
+  const chunks = node.value.match(WORD_OR_WHITESPACE);
+  if (!chunks) return [node];
+  return chunks.map((chunk) => (/\S/.test(chunk) ? wordFadeSpan(chunk) : textNode(chunk)));
+}
+
+// Recurse into an element, wrapping descendant words -- but never the contents of
+// <pre>/<code>, which are left verbatim for the syntax-highlighted code path.
+function wrapElementWords(element: Element): void {
+  if (element.tagName === 'pre' || element.tagName === 'code') return;
+  const next: ElementContent[] = [];
+  for (const child of element.children) {
+    if (child.type === 'text') {
+      next.push(...splitTextNode(child));
+    } else {
+      if (child.type === 'element') wrapElementWords(child);
+      next.push(child);
+    }
+  }
+  element.children = next;
+}
+
+// rehype plugin: walk the hast tree and wrap every (non-code) word in a
+// `.word-fade` span. Mutates the tree in place per the unified plugin contract.
+function rehypeWordFade() {
+  return (tree: Root): undefined => {
+    const next: RootContent[] = [];
+    for (const child of tree.children) {
+      if (child.type === 'text') {
+        next.push(...splitTextNode(child));
+      } else {
+        if (child.type === 'element') wrapElementWords(child);
+        next.push(child);
+      }
+    }
+    tree.children = next;
+    return undefined;
+  };
+}
+
+// Stable rehype-plugin list for the animated path (avoids re-allocating on every
+// render); the static path passes no rehype plugins so text renders plainly.
+const WORD_FADE_REHYPE_PLUGINS = [rehypeWordFade];
 
 type CodeBlockProps = {
   language: string;
@@ -106,10 +183,14 @@ const MARKDOWN_COMPONENTS: Components = {
   },
 };
 
-function MarkdownView({ text }: MarkdownProps): JSX.Element {
+function MarkdownView({ text, animate = false }: MarkdownProps): JSX.Element {
   return (
     <div className="md">
-      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={animate ? WORD_FADE_REHYPE_PLUGINS : undefined}
+        components={MARKDOWN_COMPONENTS}
+      >
         {text}
       </ReactMarkdown>
     </div>

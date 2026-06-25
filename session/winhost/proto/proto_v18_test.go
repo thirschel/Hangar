@@ -6,8 +6,11 @@ import (
 )
 
 func TestVersionV18(t *testing.T) {
-	if Version != 18 {
-		t.Fatalf("Version = %d, want 18", Version)
+	// v18 (resume-restore frames: permission.resolved/input.resolved/model) is a
+	// floor, not the current version: once shipped, its surface must remain present
+	// in every later version.
+	if Version < 18 {
+		t.Fatalf("Version = %d, want >= 18", Version)
 	}
 }
 

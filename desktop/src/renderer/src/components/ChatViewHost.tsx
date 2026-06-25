@@ -60,7 +60,7 @@ const SCROLL_SLOP = 48;
 type TranscriptEntry =
   | { id: string; kind: 'user'; text: string }
   | { id: string; kind: 'assistant'; text: string; streaming: boolean }
-  | { id: string; kind: 'reasoning'; text: string }
+  | { id: string; kind: 'reasoning'; text: string; streaming?: boolean }
   | {
       id: string;
       kind: 'tool';
@@ -196,6 +196,15 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   const toolEntries = new Map<string, number>();
   let pendingAssistantIndex: number | null = null;
   let pendingAssistantText = '';
+  // Seq of the assistant turn's first delta. Reused as the entry id across both
+  // the streaming and finalized states so completion reconciles the entry in
+  // place instead of remounting it (a remount would re-flash the word fade-in).
+  let pendingAssistantSeq: number | null = null;
+  // Mirror of the assistant accumulator for reasoning: deltas grow a single
+  // pending reasoning entry, finalized by the full 'assistant.reasoning' frame.
+  let pendingReasoningIndex: number | null = null;
+  let pendingReasoningText = '';
+  let pendingReasoningSeq: number | null = null;
   let turnInProgress = false;
   // Full-list snapshots; the last matching frame wins (frames are seq-sorted).
   let mcpServers: McpServerInfo[] = [];
@@ -218,9 +227,12 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         pendingAssistantText += frame.text ?? '';
         turnInProgress = true;
         if (pendingAssistantIndex === null) {
+          // Capture the first-delta seq and reuse it for the entry id through the
+          // streaming and finalized states (see pendingAssistantSeq above).
+          pendingAssistantSeq = frame.seq;
           pendingAssistantIndex = entries.length;
           entries.push({
-            id: `assistant-stream-${frame.seq}`,
+            id: `assistant-${pendingAssistantSeq}`,
             kind: 'assistant',
             text: pendingAssistantText,
             streaming: true,
@@ -239,7 +251,10 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         const text = frame.text ?? pendingAssistantText;
         if (pendingAssistantIndex !== null) {
           entries[pendingAssistantIndex] = {
-            id: `assistant-${frame.seq}`,
+            // Keep the streaming entry's stable id (first-delta seq) so the
+            // streaming -> finalized transition reconciles in place rather than
+            // remounting and re-animating the whole message.
+            id: `assistant-${pendingAssistantSeq ?? frame.seq}`,
             kind: 'assistant',
             text,
             streaming: false,
@@ -249,13 +264,54 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         }
         pendingAssistantIndex = null;
         pendingAssistantText = '';
+        pendingAssistantSeq = null;
         turnInProgress = false;
         break;
       }
-      case 'assistant.reasoning':
+      case 'assistant.reasoning.delta': {
         turnInProgress = true;
-        entries.push({ id: `reasoning-${frame.seq}`, kind: 'reasoning', text: frameText(frame) });
+        pendingReasoningText += frame.text ?? '';
+        if (pendingReasoningIndex === null) {
+          // First reasoning delta: create the pending entry (marked streaming so
+          // it can be finalized below); reuse this seq as a stable id.
+          pendingReasoningSeq = frame.seq;
+          pendingReasoningIndex = entries.length;
+          entries.push({
+            id: `reasoning-${pendingReasoningSeq}`,
+            kind: 'reasoning',
+            text: pendingReasoningText,
+            streaming: true,
+          });
+        } else {
+          entries[pendingReasoningIndex] = {
+            ...entries[pendingReasoningIndex],
+            kind: 'reasoning',
+            text: pendingReasoningText,
+            streaming: true,
+          } as TranscriptEntry;
+        }
         break;
+      }
+      case 'assistant.reasoning': {
+        turnInProgress = true;
+        const text = frameText(frame);
+        if (pendingReasoningIndex !== null) {
+          // Finalize the streamed reasoning: replace the accumulated text with the
+          // authoritative complete block and clear the streaming flag (same id).
+          entries[pendingReasoningIndex] = {
+            id: `reasoning-${pendingReasoningSeq ?? frame.seq}`,
+            kind: 'reasoning',
+            text,
+          };
+        } else {
+          // No deltas were streamed: push a finished reasoning entry as before.
+          entries.push({ id: `reasoning-${frame.seq}`, kind: 'reasoning', text });
+        }
+        pendingReasoningIndex = null;
+        pendingReasoningText = '';
+        pendingReasoningSeq = null;
+        break;
+      }
       case 'tool.start': {
         turnInProgress = true;
         const entry: TranscriptEntry = {
@@ -356,6 +412,20 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           } as TranscriptEntry;
           pendingAssistantIndex = null;
           pendingAssistantText = '';
+          pendingAssistantSeq = null;
+        }
+        // Finalize a still-streaming reasoning entry too, so a turn that ends
+        // without a full 'assistant.reasoning' frame doesn't stay marked
+        // streaming (clears the flag; same id, no remount).
+        if (pendingReasoningIndex !== null) {
+          entries[pendingReasoningIndex] = {
+            ...entries[pendingReasoningIndex],
+            kind: 'reasoning',
+            streaming: false,
+          } as TranscriptEntry;
+          pendingReasoningIndex = null;
+          pendingReasoningText = '';
+          pendingReasoningSeq = null;
         }
         turnInProgress = false;
         entries.push({ id: `idle-${frame.seq}`, kind: 'idle', aborted: frame.aborted ?? false });
@@ -842,7 +912,9 @@ function ChatEntryView({
     case 'assistant':
       return (
         <div className="chat-msg chat-msg--assistant">
-          <Markdown text={entry.text} />
+          {/* Only the live streaming message fades word-by-word; finalized and
+              resumed/historical messages (streaming === false) render instantly. */}
+          <Markdown text={entry.text} animate={entry.streaming} />
           {entry.streaming && <span className="chat-msg__cursor" aria-label="streaming" />}
         </div>
       );

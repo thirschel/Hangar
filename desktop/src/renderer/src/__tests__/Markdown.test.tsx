@@ -72,4 +72,45 @@ describe('Markdown', () => {
     // It is escaped and surfaced as literal text instead.
     expect(container.textContent).toContain('onerror');
   });
+
+  it('wraps each word in a .word-fade span when animate is set', () => {
+    const { container } = render(<Markdown text="Hello there world" animate />);
+    const words = container.querySelectorAll('.word-fade');
+    // One span per word (trailing whitespace kept on the word).
+    expect(words).toHaveLength(3);
+    // The spans tile the text without dropping any characters.
+    expect(
+      Array.from(words)
+        .map((word) => word.textContent)
+        .join(''),
+    ).toBe('Hello there world');
+  });
+
+  it('does not split a fenced code block into word spans even when animate is set', () => {
+    const md = ['```ts', 'const answer = 42;', '```'].join('\n');
+    const { container } = render(<Markdown text={md} animate />);
+
+    const pre = container.querySelector('pre.md-code');
+    expect(pre).not.toBeNull();
+    // Code text stays verbatim -- no per-word spans inside the block.
+    expect(pre?.querySelectorAll('.word-fade')).toHaveLength(0);
+    expect(pre?.textContent).toContain('const answer = 42;');
+  });
+
+  it('does not split inline code into word spans when animate is set', () => {
+    const { container } = render(<Markdown text="Run `npm install` now" animate />);
+    const code = container.querySelector('code.md-inline-code');
+    expect(code).not.toBeNull();
+    expect(code?.querySelectorAll('.word-fade')).toHaveLength(0);
+    expect(code?.textContent).toBe('npm install');
+    // Surrounding prose is still word-wrapped.
+    expect(container.querySelectorAll('.word-fade').length).toBeGreaterThan(0);
+  });
+
+  it('renders no .word-fade spans without animate (default)', () => {
+    const { container } = render(<Markdown text="Hello there world" />);
+    expect(container.querySelectorAll('.word-fade')).toHaveLength(0);
+    // The unsplit text is a single node, queryable as a whole.
+    expect(screen.getByText('Hello there world')).toBeInTheDocument();
+  });
 });

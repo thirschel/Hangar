@@ -306,3 +306,31 @@ func TestEmitModelFrame(t *testing.T) {
 		t.Fatalf("emitModelFrame with no model should emit nothing, got %+v", got)
 	}
 }
+
+// TestSDKEventFrameReasoningDelta asserts the SDK incremental reasoning event maps onto
+// an assistant.reasoning.delta frame carrying the chunk in Text (v19) so the desktop can
+// grow the "thinking" block live, while the complete-block AssistantReasoningData still
+// maps onto the assistant.reasoning finalizer frame.
+func TestSDKEventFrameReasoningDelta(t *testing.T) {
+	delta, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.AssistantReasoningDeltaData{
+		DeltaContent: "thin",
+		ReasoningID:  "r1",
+	}})
+	if !ok {
+		t.Fatal("sdkEventFrame did not map AssistantReasoningDeltaData")
+	}
+	if delta.Kind != proto.EventKindReasoningDelta || delta.Text != "thin" {
+		t.Fatalf("reasoning delta frame = %+v, want kind=%q text=%q", delta, proto.EventKindReasoningDelta, "thin")
+	}
+
+	full, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.AssistantReasoningData{
+		Content:     "thinking",
+		ReasoningID: "r1",
+	}})
+	if !ok {
+		t.Fatal("sdkEventFrame did not map AssistantReasoningData")
+	}
+	if full.Kind != proto.EventKindReasoning || full.Text != "thinking" {
+		t.Fatalf("reasoning finalizer frame = %+v, want kind=%q text=%q", full, proto.EventKindReasoning, "thinking")
+	}
+}
