@@ -649,7 +649,7 @@ func (h *host) setRichModel(req *proto.Request) *proto.Response {
 	if errResp != nil {
 		return errResp
 	}
-	if err := sess.richSetModel(context.Background(), req.Model); err != nil {
+	if err := sess.richSetModel(context.Background(), req.Model, req.Effort, req.ContextTier); err != nil {
 		return proto.Errorf(req.ID, "set model: %v", err)
 	}
 	return &proto.Response{ID: req.ID, OK: true}

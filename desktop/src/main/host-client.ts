@@ -113,9 +113,14 @@ export interface EventFrame {
 
 // A selectable agent model, returned by the ListModels RPC and switched live via
 // SetModel. `name` is an optional human-friendly label; fall back to `id`.
+// `supportedEfforts` lists the reasoning-effort tiers the model accepts (raw SDK
+// values, e.g. ["low","medium","high","xhigh"]); empty/absent means the model
+// does not support a reasoning effort. `defaultEffort` is the model's default.
 export interface ModelInfo {
   id: string;
   name?: string;
+  supportedEfforts?: string[];
+  defaultEffort?: string;
 }
 
 export interface HostInfo {
@@ -187,8 +192,12 @@ export interface Request {
   decision?: 'approve' | 'reject';
   answer?: string;
   freeform?: boolean;
-  // SetModel: the target model id to switch the session to (live).
+  // SetModel: the target model id to switch the session to (live), plus the
+  // optional reasoning effort and context tier to apply with it. `contextTier`
+  // is 'default' | 'long_context'.
   model?: string;
+  effort?: string;
+  contextTier?: string;
   data?: string;
   mode?: string;
   withANSI?: boolean;
@@ -526,8 +535,19 @@ export class ControlClient {
     return response.models ?? [];
   }
 
-  public async setModel(session: string, modelId: string): Promise<void> {
-    const response = await this.call({ method: 'SetModel', session, model: modelId });
+  public async setModel(
+    session: string,
+    modelId: string,
+    effort?: string,
+    contextTier?: string,
+  ): Promise<void> {
+    const response = await this.call({
+      method: 'SetModel',
+      session,
+      model: modelId,
+      effort,
+      contextTier,
+    });
     if (!response.ok) {
       throw new Error(response.error || 'SetModel failed');
     }

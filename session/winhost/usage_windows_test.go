@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -13,18 +14,20 @@ import (
 
 func TestModelInfosMapping(t *testing.T) {
 	details := []copilotsdk.ModelDetail{
-		{ID: "gpt-5", Name: "GPT-5"},
+		{ID: "gpt-5", Name: "GPT-5", SupportedEfforts: []string{"low", "high"}, DefaultEffort: "high"},
 		{ID: "claude-sonnet-4.5"},
 	}
 	got := modelInfos(details)
 	if len(got) != 2 {
 		t.Fatalf("modelInfos len = %d, want 2", len(got))
 	}
-	if got[0] != (proto.ModelInfo{ID: "gpt-5", Name: "GPT-5"}) {
-		t.Fatalf("model0 = %+v", got[0])
+	want0 := proto.ModelInfo{ID: "gpt-5", Name: "GPT-5", SupportedEfforts: []string{"low", "high"}, DefaultEffort: "high"}
+	if !reflect.DeepEqual(got[0], want0) {
+		t.Fatalf("model0 = %+v, want %+v", got[0], want0)
 	}
-	if got[1] != (proto.ModelInfo{ID: "claude-sonnet-4.5"}) {
-		t.Fatalf("model1 = %+v", got[1])
+	want1 := proto.ModelInfo{ID: "claude-sonnet-4.5"}
+	if !reflect.DeepEqual(got[1], want1) {
+		t.Fatalf("model1 = %+v, want %+v", got[1], want1)
 	}
 	if modelInfos(nil) != nil {
 		t.Fatal("modelInfos(nil) should be nil")
@@ -138,5 +141,34 @@ func TestModelMethodsRouteToRichSession(t *testing.T) {
 	resp = h.dispatch(&proto.Request{ID: 2, Method: proto.MethodSetModel, Session: "rich-route", Model: "gpt-5"})
 	if resp.OK || !strings.Contains(resp.Error, "set model:") || !strings.Contains(resp.Error, "not started") {
 		t.Fatalf("SetModel(rich) = %+v, want set-model not-started error", resp)
+	}
+}
+
+// TestSetModelRoutesEffortAndTier proves the host threads the v16 Request.Effort
+// and Request.ContextTier through setRichModel -> richSetModel -> the SDK adapter
+// on the same rich-session path as a plain model switch: an unstarted session
+// surfaces the SDK not-started error (no CLI is spawned). The effort/tier ->
+// SetModelOptions mapping itself is unit-tested in copilotsdk.TestSetModelOptions;
+// here we only guard that the new request fields are accepted and forwarded.
+func TestSetModelRoutesEffortAndTier(t *testing.T) {
+	_, h, cleanup := startTestHostWithHandle(t)
+	defer cleanup()
+
+	rich := newSDKSession("rich-effort", "copilot", t.TempDir(), "", false, "", nil, nil)
+	defer rich.close()
+	h.mu.Lock()
+	h.sessions["rich-effort"] = rich
+	h.mu.Unlock()
+
+	resp := h.dispatch(&proto.Request{
+		ID:          1,
+		Method:      proto.MethodSetModel,
+		Session:     "rich-effort",
+		Model:       "gpt-5",
+		Effort:      "high",
+		ContextTier: "long_context",
+	})
+	if resp.OK || !strings.Contains(resp.Error, "set model:") || !strings.Contains(resp.Error, "not started") {
+		t.Fatalf("SetModel(rich, effort+tier) = %+v, want set-model not-started error", resp)
 	}
 }

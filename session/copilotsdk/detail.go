@@ -151,11 +151,17 @@ func strDeref(v *string) string {
 
 // ModelDetail is a display-safe snapshot of one selectable model, returned by
 // (*Session).ListModels for the rich model selector (v14). It exposes the id and
-// human-readable name only; winhost maps it to proto.ModelInfo (this package stays
-// free of any proto coupling).
+// human-readable name plus the model's reasoning-effort options (v16); winhost maps
+// it to proto.ModelInfo (this package stays free of any proto coupling).
 type ModelDetail struct {
 	ID   string
 	Name string
+
+	// SupportedEfforts/DefaultEffort (v16) are the model's reasoning-effort options,
+	// from the SDK ModelInfo.SupportedReasoningEfforts/DefaultReasoningEffort. Empty
+	// when the model has no selectable reasoning effort.
+	SupportedEfforts []string
+	DefaultEffort    string
 }
 
 // CurrentModel returns the session's active model id (best-effort; "" if unknown).

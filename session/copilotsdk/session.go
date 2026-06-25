@@ -329,8 +329,9 @@ func (s *Session) Transcript(ctx context.Context) ([]copilot.SessionEvent, error
 }
 
 // ListModels returns the models advertised by the underlying Copilot runtime
-// (Client.ListModels), reduced to the display-safe id+name pairs used by the rich
-// model selector (v14). The SDK caches the list after the first successful call.
+// (Client.ListModels), reduced to the display-safe ModelDetail (id, name, and the
+// reasoning-effort options) used by the rich model selector (v14/v16). The SDK
+// caches the list after the first successful call.
 func (s *Session) ListModels(ctx context.Context) ([]ModelDetail, error) {
 	s.mu.RLock()
 	client := s.client
@@ -344,25 +345,73 @@ func (s *Session) ListModels(ctx context.Context) ([]ModelDetail, error) {
 	}
 	out := make([]ModelDetail, 0, len(models))
 	for _, m := range models {
-		out = append(out, ModelDetail{ID: m.ID, Name: m.Name})
+		out = append(out, modelDetail(m))
 	}
 	return out, nil
 }
 
-// SetModel switches the live session to modelID (v14). The tracked current model
-// is updated optimistically so the next usage frame reflects the switch even if
-// the SDK does not emit a SessionModelChangeData event; an authoritative update
-// still arrives through handleEvent when it does.
-func (s *Session) SetModel(ctx context.Context, modelID string) error {
+// modelDetail maps an SDK ModelInfo to the display-safe ModelDetail, carrying the
+// id, name, and the model's reasoning-effort options (v16). SupportedEfforts is a
+// defensive copy so callers never alias the SDK's slice.
+func modelDetail(m copilot.ModelInfo) ModelDetail {
+	return ModelDetail{
+		ID:               m.ID,
+		Name:             m.Name,
+		SupportedEfforts: append([]string(nil), m.SupportedReasoningEfforts...),
+		DefaultEffort:    m.DefaultReasoningEffort,
+	}
+}
+
+// SetModel switches the live session to modelID (v14). The optional per-model
+// reasoning effort and context tier (v16) are applied through SetModelOptions:
+// an empty effort/tier leaves that option unset, and when both are empty the
+// switch passes nil options — byte-for-byte the original v14 behavior. The
+// tracked current model is updated optimistically so the next usage frame reflects
+// the switch even if the SDK does not emit a SessionModelChangeData event; an
+// authoritative update still arrives through handleEvent when it does.
+func (s *Session) SetModel(ctx context.Context, modelID, effort, contextTier string) error {
 	sess := s.session()
 	if sess == nil {
 		return fmt.Errorf("session not started")
 	}
-	if err := sess.SetModel(ctx, modelID, nil); err != nil {
+	if err := sess.SetModel(ctx, modelID, setModelOptions(effort, contextTier)); err != nil {
 		return s.noteErr(err)
 	}
 	s.setCurrentModel(modelID)
 	return nil
+}
+
+// setModelOptions builds the SDK SetModelOptions for a model switch from the
+// optional per-model reasoning effort and context tier (v16). An empty effort
+// leaves ReasoningEffort unset; the context tier maps "default" -> ContextTierDefault
+// and "long_context" -> ContextTierLongContext, and an empty or unrecognized value
+// leaves ContextTier unset (defensive: an unknown tier never overrides normal model
+// behavior). When neither field selects anything it returns nil so SetModel is
+// byte-for-byte the original v14 call (nil options).
+func setModelOptions(effort, contextTier string) *copilot.SetModelOptions {
+	var opts copilot.SetModelOptions
+	set := false
+	if effort != "" {
+		eff := effort
+		opts.ReasoningEffort = &eff
+		set = true
+	}
+	switch contextTier {
+	case string(copilot.ContextTierDefault):
+		tier := copilot.ContextTierDefault
+		opts.ContextTier = &tier
+		set = true
+	case string(copilot.ContextTierLongContext):
+		tier := copilot.ContextTierLongContext
+		opts.ContextTier = &tier
+		set = true
+	default:
+		// Empty or unknown context tier: leave ContextTier unset (defensive).
+	}
+	if !set {
+		return nil
+	}
+	return &opts
 }
 
 // Close disconnects the session and stops the runtime.

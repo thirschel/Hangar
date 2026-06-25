@@ -332,10 +332,16 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const [answerLabels, setAnswerLabels] = useState<Map<string, string>>(() => new Map());
   const [autoYes, setAutoYes] = useState(workspace.autoYes);
   const [activePage, setActivePage] = useState<ChatPage>('chat');
-  // Live model selector: the list from ListModels and the optimistic local pick
-  // (until the daemon's usage frames report the switch). Both reset per session.
+  // Live model selector: the list from ListModels and the optimistic local picks
+  // (model + reasoning effort + context tier) until the daemon's usage frames
+  // report the switch. All reset per session.
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
+  // The user's explicit reasoning-effort pick; undefined falls back to the active
+  // model's default (see currentEffort below). Reset when the model changes.
+  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
+  // The context tier ('default' | 'long_context'); seeded to 'default' per session.
+  const [selectedContextTier, setSelectedContextTier] = useState<string>('default');
   // Mirrors the last list applied to `models` so the fetch can skip a no-op
   // dispatch (a direct-value setState React can eager-bail, unlike an updater).
   const modelsRef = useRef<ModelInfo[]>([]);
@@ -366,6 +372,21 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   // active model for the selector prefers the optimistic local pick so the button
   // updates immediately, then the daemon's usage frames reconcile it.
   const currentModelId = selectedModelId ?? transcript.usage?.model;
+  // Resolve the active model from the list to drive effort support + defaults.
+  const currentModel = models.find((model) => model.id === currentModelId);
+  // The effort shown/sent falls back to the active model's default until the user
+  // picks one explicitly; the context tier is the local pick.
+  const currentEffort = selectedEffort ?? currentModel?.defaultEffort;
+  const currentContextTier = selectedContextTier;
+  // Adjust-state-during-render: when the active model changes (a live switch or
+  // the first usage frame), drop any explicit effort pick so currentEffort falls
+  // back to the new model's default. Mirrors the AutoYes seed pattern above; no
+  // effect required.
+  const [effortModelSeed, setEffortModelSeed] = useState<string | undefined>(currentModelId);
+  if (effortModelSeed !== currentModelId) {
+    setEffortModelSeed(currentModelId);
+    setSelectedEffort(undefined);
+  }
   const usageModel = transcript.usage?.model?.trim() || undefined;
   const contextLabel = formatContextPercent(transcript.usage);
   const composerInfo =
@@ -434,6 +455,10 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
       setModels([]);
     }
     setSelectedModelId(undefined);
+    // Reset the per-session effort/context picks so they re-seed from the new
+    // session's active model (effort) / the 'default' tier (context).
+    setSelectedEffort(undefined);
+    setSelectedContextTier('default');
     void window.cs
       .listModels(workspace.sessionName)
       .then((list) => {
@@ -507,14 +532,24 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
     });
   };
 
-  // Switch the session's model live. Optimistically reflect the pick in the
-  // selector, then let the daemon's usage frames reconcile; revert on failure.
-  const handleSelectModel = (id: string): void => {
-    setSelectedModelId(id);
-    void window.cs.setModel(workspace.sessionName, id).catch((error: unknown) => {
-      setSelectedModelId(undefined);
-      setStreamError(error instanceof Error ? error.message : String(error));
-    });
+  // Switch the session's model (and reasoning effort + context tier) live.
+  // Optimistically reflect the picks in the selector, then let the daemon's usage
+  // frames reconcile; revert to the previous picks on failure.
+  const applyModel = (modelId: string, effort: string, contextTier: string): void => {
+    const prevModelId = selectedModelId;
+    const prevEffort = selectedEffort;
+    const prevContextTier = selectedContextTier;
+    setSelectedModelId(modelId);
+    setSelectedEffort(effort);
+    setSelectedContextTier(contextTier);
+    void window.cs
+      .setModel(workspace.sessionName, modelId, effort, contextTier)
+      .catch((error: unknown) => {
+        setSelectedModelId(prevModelId);
+        setSelectedEffort(prevEffort);
+        setSelectedContextTier(prevContextTier);
+        setStreamError(error instanceof Error ? error.message : String(error));
+      });
   };
 
   const markAnswered = (requestId: string, label: string): void => {
@@ -656,7 +691,9 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
               info={composerInfo}
               models={models}
               currentModelId={currentModelId}
-              onSelectModel={handleSelectModel}
+              currentEffort={currentEffort}
+              currentContextTier={currentContextTier}
+              onApplyModel={applyModel}
             />
           </div>
         </div>

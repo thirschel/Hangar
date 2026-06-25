@@ -84,8 +84,8 @@ func TestModelSelectorRoundTrip(t *testing.T) {
 		t.Fatalf("Unmarshal response: %v", err)
 	}
 	if len(gotResp.Models) != 2 ||
-		gotResp.Models[0] != (ModelInfo{ID: "gpt-5", Name: "GPT-5"}) ||
-		gotResp.Models[1] != (ModelInfo{ID: "claude-sonnet-4.5"}) {
+		gotResp.Models[0].ID != "gpt-5" || gotResp.Models[0].Name != "GPT-5" ||
+		gotResp.Models[1].ID != "claude-sonnet-4.5" || gotResp.Models[1].Name != "" {
 		t.Fatalf("ListModels response round-trip = %+v", gotResp.Models)
 	}
 	if !containsKey(rb, "models") {

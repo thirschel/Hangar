@@ -6,8 +6,10 @@ import (
 )
 
 func TestVersionV15(t *testing.T) {
-	if Version != 15 {
-		t.Fatalf("Version = %d, want 15", Version)
+	// v15 (message file attachments) is a floor, not the current version: once
+	// shipped, its surface must remain present in every later version.
+	if Version < 15 {
+		t.Fatalf("Version = %d, want >= 15", Version)
 	}
 }
 

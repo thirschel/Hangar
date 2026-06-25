@@ -57,7 +57,13 @@ import (
 // paths the desktop sends alongside Request.Message on a SendMessage call, which
 // the host maps to Copilot SDK file attachments. Additive: an omitted/empty
 // Attachments sends a plain message exactly as before.
-const Version = 15
+// v16 adds per-model reasoning effort + context tier to the model switch:
+// ModelInfo.SupportedEfforts/DefaultEffort advertise a model's reasoning-effort
+// options (from the SDK), and Request.Effort/Request.ContextTier ride along with
+// Request.Model on a SetModel call so the host can pass them to the Copilot SDK
+// SetModelOptions. Additive: an omitted/empty Effort and ContextTier switch the
+// model exactly as before (SetModel with nil options).
+const Version = 16
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -226,6 +232,11 @@ type Request struct {
 	// Model (v14) is the target model id for MethodSetModel (live model switch on a
 	// rich session). Unused by every other method.
 	Model string `json:"model,omitempty"`
+
+	// Effort/ContextTier (v16) ride along with Model on a MethodSetModel call; with
+	// both empty the switch behaves exactly as v14 (nil SDK SetModelOptions).
+	Effort      string `json:"effort,omitempty"`      // reasoning effort; empty = leave unset
+	ContextTier string `json:"contextTier,omitempty"` // "default"|"long_context"; empty = leave unset
 
 	// Attachments (v15) carries absolute file paths the desktop sends alongside
 	// Message on a MethodSendMessage call. Empty/nil = a plain message (unchanged).
@@ -431,6 +442,11 @@ type SkillInfo struct {
 type ModelInfo struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
+
+	// SupportedEfforts/DefaultEffort (v16) advertise a model's reasoning-effort
+	// options so the desktop can offer a per-model effort picker on the model switch.
+	SupportedEfforts []string `json:"supportedEfforts,omitempty"` // from SDK SupportedReasoningEfforts
+	DefaultEffort    string   `json:"defaultEffort,omitempty"`    // from SDK DefaultReasoningEffort
 }
 
 // Decision values for MethodRespondPermission (v12).

@@ -365,7 +365,7 @@ describe('ChatViewHost', () => {
     expect(screen.queryByText(/% context/)).not.toBeInTheDocument();
   });
 
-  it('opens the model menu and switches the session model live', async () => {
+  it('opens the model menu and switches the session model live via More models', async () => {
     window.cs.listModels = vi.fn().mockResolvedValue([
       { id: 'gpt-5', name: 'GPT-5' },
       { id: 'claude-sonnet', name: 'Claude Sonnet' },
@@ -379,13 +379,85 @@ describe('ChatViewHost', () => {
 
     fireEvent.click(modelButton);
     expect(screen.getByRole('menu', { name: 'Select model' })).toBeInTheDocument();
-    expect(screen.getByRole('menuitemradio', { name: 'GPT-5' })).toBeInTheDocument();
-
+    // No usage frame yet => no active model => only the More models section shows.
+    fireEvent.click(screen.getByRole('menuitem', { name: /More models/ }));
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Claude Sonnet' }));
 
-    expect(window.cs.setModel).toHaveBeenCalledWith('rich-session', 'claude-sonnet');
+    // A model with no default effort applies with '' effort + the 'default' tier.
+    expect(window.cs.setModel).toHaveBeenCalledWith('rich-session', 'claude-sonnet', '', 'default');
     // Selecting closes the menu.
     expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
+  });
+
+  it('threads a chosen reasoning effort through SetModel', async () => {
+    window.cs.listModels = vi.fn().mockResolvedValue([
+      {
+        id: 'sonnet',
+        name: 'Sonnet 4.6',
+        supportedEfforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+      },
+    ]);
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    // RTL waitFor (act-wrapped) settles the async listModels/setModels inside act;
+    // the rich-frame callback is registered synchronously on mount by then.
+    await waitFor(() => expect(screen.getByRole('button', { name: /Model/ })).toBeEnabled());
+    expect(richFrameCallback).toBeDefined();
+
+    // A usage frame makes 'sonnet' the active model (effort seeds to its default).
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'usage', model: 'sonnet', currentTokens: 1, tokenLimit: 100 },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet 4.6/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Effort/ }));
+    fireEvent.click(
+      within(screen.getByRole('menu', { name: 'Effort' })).getByRole('menuitemradio', {
+        name: 'High',
+      }),
+    );
+
+    // The raw effort value rides along with the active model + current tier.
+    await waitFor(() =>
+      expect(window.cs.setModel).toHaveBeenCalledWith('rich-session', 'sonnet', 'high', 'default'),
+    );
+  });
+
+  it('threads the long-context tier through SetModel', async () => {
+    window.cs.listModels = vi.fn().mockResolvedValue([
+      { id: 'sonnet', name: 'Sonnet 4.6', supportedEfforts: ['low', 'high'], defaultEffort: 'low' },
+    ]);
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Model/ })).toBeEnabled());
+    expect(richFrameCallback).toBeDefined();
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'usage', model: 'sonnet', currentTokens: 1, tokenLimit: 100 },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet 4.6/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Context/ }));
+    fireEvent.click(
+      within(screen.getByRole('menu', { name: 'Context' })).getByRole('menuitemradio', {
+        name: 'Long context',
+      }),
+    );
+
+    // The model + its seeded default effort ('low') ride along with the new tier.
+    await waitFor(() =>
+      expect(window.cs.setModel).toHaveBeenCalledWith(
+        'rich-session',
+        'sonnet',
+        'low',
+        'long_context',
+      ),
+    );
   });
 
   it('leaves the Model button a disabled placeholder when no models are available', async () => {

@@ -307,8 +307,13 @@ const api = {
   // Live model selector (session-scoped, same session id as the other rich calls).
   listModels: (sessionName: string): Promise<ModelInfo[]> =>
     ipcRenderer.invoke('rich:list-models', sessionName),
-  setModel: (sessionName: string, modelId: string): Promise<void> =>
-    ipcRenderer.invoke('rich:set-model', { session: sessionName, modelId }),
+  setModel: (
+    sessionName: string,
+    modelId: string,
+    effort?: string,
+    contextTier?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:set-model', { session: sessionName, modelId, effort, contextTier }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   // Native multi-select open-file dialog for message attachments; returns the

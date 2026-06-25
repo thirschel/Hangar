@@ -3941,3 +3941,145 @@ body.is-row-resizing .center-terminal__resizer::after {
   outline: none;
   box-shadow: var(--shadow-focus);
 }
+
+/* ============================================================================
+   Agent chat composer: live model selector menu (components/Composer.tsx)
+   Appended at the END of styles.css so it never overlaps with concurrent edits.
+   A Copilot-style picker: the trigger button reads "<model>  <Effort>" and opens
+   an upward menu with a current-model row plus Effort / Context / More models
+   rows, each expanding an inline submenu of menuitemradio options. Every selector
+   is chat-composer-prefixed and uses :root tokens.
+   ============================================================================ */
+
+/* Trigger button parts: the model name truncates; the effort reads muted; the
+   caret trails (matches "Sonnet 4.6  Medium  v"). */
+.chat-composer__model-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-composer__model-effort {
+  color: var(--text-muted);
+}
+
+.chat-composer__model-caret {
+  margin-left: var(--space-1);
+  color: var(--text-muted);
+}
+
+/* Current-model header row: the active model name + a check, non-interactive. */
+.chat-composer__model-current {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.chat-composer__model-current-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chat-composer__model-check {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+/* A parent row + its inline submenu form a group (stacked vertically). */
+.chat-composer__model-group {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Parent rows (Effort / Context / More models): label on the left, the current
+   value + a disclosure caret on the right. */
+.chat-composer__model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms var(--ease);
+}
+
+.chat-composer__model-row:hover {
+  background: var(--bg-hover);
+}
+
+.chat-composer__model-row:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.chat-composer__model-row-label {
+  flex: 1;
+}
+
+.chat-composer__model-row-value {
+  color: var(--text-muted);
+}
+
+.chat-composer__model-row-caret {
+  color: var(--text-faint);
+}
+
+/* Inline submenu: the expanded options for a parent row, indented and framed by a
+   left rule so the hierarchy reads clearly. */
+.chat-composer__submenu {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0 2px var(--space-3);
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--border-strong);
+}
+
+.chat-composer__submenu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms var(--ease);
+}
+
+.chat-composer__submenu-item:hover {
+  background: var(--bg-hover);
+}
+
+.chat-composer__submenu-item:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.chat-composer__submenu-item--active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.chat-composer__submenu-item--active::after {
+  content: '\2713';
+  margin-left: auto;
+  padding-left: var(--space-2);
+}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Composer, type ComposerProps } from '../Composer';
 
@@ -98,8 +98,8 @@ describe('Composer', () => {
     expect(model).toHaveAttribute('title', 'No models available');
   });
 
-  it('opens the model menu, marks the active model and reports a selection', () => {
-    const onSelectModel = vi.fn();
+  it('opens the model menu, shows the current model with a check, and lists all via More models', () => {
+    const onApplyModel = vi.fn();
     render(
       <Composer
         {...baseProps({
@@ -108,7 +108,7 @@ describe('Composer', () => {
             { id: 'claude', name: 'Claude' },
           ],
           currentModelId: 'gpt-5',
-          onSelectModel,
+          onApplyModel,
         })}
       />,
     );
@@ -119,37 +119,182 @@ describe('Composer', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 
     fireEvent.click(modelButton);
-    expect(screen.getByRole('menu', { name: 'Select model' })).toBeInTheDocument();
+    const menu = screen.getByRole('menu', { name: 'Select model' });
+    expect(menu).toBeInTheDocument();
+    // The current model is named in the header row (a check sits beside it).
+    expect(within(menu).getByText('GPT-5')).toBeInTheDocument();
+
+    // Expand More models to see every model; the active one is checked.
+    fireEvent.click(screen.getByRole('menuitem', { name: /More models/ }));
     expect(screen.getByRole('menuitemradio', { name: 'GPT-5' })).toHaveAttribute(
       'aria-checked',
       'true',
     );
+    expect(screen.getByRole('menuitemradio', { name: 'Claude' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+  });
 
+  it('switches the model via More models, resetting effort to the model default', () => {
+    const onApplyModel = vi.fn();
+    render(
+      <Composer
+        {...baseProps({
+          models: [
+            { id: 'gpt-5', name: 'GPT-5' },
+            { id: 'claude', name: 'Claude', defaultEffort: 'high' },
+          ],
+          currentModelId: 'gpt-5',
+          onApplyModel,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /GPT-5/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /More models/ }));
     fireEvent.click(screen.getByRole('menuitemradio', { name: 'Claude' }));
-    expect(onSelectModel).toHaveBeenCalledWith('claude');
+
+    // A different model applies with that model's default effort + the current tier.
+    expect(onApplyModel).toHaveBeenCalledWith('claude', 'high', 'default');
     // Selecting closes the menu.
     expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
   });
 
-  it('falls back to the model id as the menu label when no name is provided', () => {
+  it('renders the Effort submenu for a model that supports efforts and applies a pick', () => {
+    const onApplyModel = vi.fn();
     render(
-      <Composer {...baseProps({ models: [{ id: 'bare-id' }], onSelectModel: vi.fn() })} />,
+      <Composer
+        {...baseProps({
+          models: [
+            {
+              id: 'sonnet',
+              name: 'Sonnet 4.6',
+              supportedEfforts: ['low', 'medium', 'high'],
+              defaultEffort: 'medium',
+            },
+          ],
+          currentModelId: 'sonnet',
+          currentEffort: 'medium',
+          onApplyModel,
+        })}
+      />,
     );
+
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet 4.6/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Effort/ }));
+
+    // The supported efforts render title-cased, with the active one checked.
+    const effortMenu = screen.getByRole('menu', { name: 'Effort' });
+    expect(within(effortMenu).getByRole('menuitemradio', { name: 'Low' })).toBeInTheDocument();
+    expect(within(effortMenu).getByRole('menuitemradio', { name: 'Medium' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(within(effortMenu).getByRole('menuitemradio', { name: 'High' })).toBeInTheDocument();
+
+    fireEvent.click(within(effortMenu).getByRole('menuitemradio', { name: 'High' }));
+    // An effort pick keeps the current model + context tier; the raw value is sent.
+    expect(onApplyModel).toHaveBeenCalledWith('sonnet', 'high', 'default');
+    expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
+  });
+
+  it('hides the Effort row for a model with no supported efforts', () => {
+    render(
+      <Composer
+        {...baseProps({
+          models: [{ id: 'mini', name: 'Mini' }],
+          currentModelId: 'mini',
+          onApplyModel: vi.fn(),
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Mini/ }));
+    expect(screen.queryByRole('menuitem', { name: /Effort/ })).not.toBeInTheDocument();
+    // Context + More models remain available.
+    expect(screen.getByRole('menuitem', { name: /Context/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /More models/ })).toBeInTheDocument();
+  });
+
+  it('offers Default / Long context in the Context submenu and applies a tier', () => {
+    const onApplyModel = vi.fn();
+    render(
+      <Composer
+        {...baseProps({
+          models: [
+            { id: 'sonnet', name: 'Sonnet', supportedEfforts: ['low', 'high'], defaultEffort: 'low' },
+          ],
+          currentModelId: 'sonnet',
+          currentEffort: 'high',
+          currentContextTier: 'default',
+          onApplyModel,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Context/ }));
+
+    const contextMenu = screen.getByRole('menu', { name: 'Context' });
+    expect(within(contextMenu).getByRole('menuitemradio', { name: 'Default' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+
+    fireEvent.click(within(contextMenu).getByRole('menuitemradio', { name: 'Long context' }));
+    // A context pick keeps the current model + effort; the raw tier is sent.
+    expect(onApplyModel).toHaveBeenCalledWith('sonnet', 'high', 'long_context');
+  });
+
+  it('shows the model name and the title-cased effort on the button', () => {
+    render(
+      <Composer
+        {...baseProps({
+          models: [
+            {
+              id: 'sonnet',
+              name: 'Sonnet 4.6',
+              supportedEfforts: ['low', 'medium', 'high'],
+              defaultEffort: 'medium',
+            },
+          ],
+          currentModelId: 'sonnet',
+          currentEffort: 'medium',
+          onApplyModel: vi.fn(),
+        })}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /Sonnet 4.6/ });
+    expect(button).toHaveTextContent('Sonnet 4.6');
+    expect(button).toHaveTextContent('Medium');
+  });
+
+  it('falls back to the model id as the label in More models', () => {
+    render(<Composer {...baseProps({ models: [{ id: 'bare-id' }], onApplyModel: vi.fn() })} />);
     fireEvent.click(screen.getByRole('button', { name: /Model/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /More models/ }));
     expect(screen.getByRole('menuitemradio', { name: 'bare-id' })).toBeInTheDocument();
   });
 
-  it('closes the model menu on Escape without selecting', () => {
-    const onSelectModel = vi.fn();
+  it('closes the model menu on Escape without applying', () => {
+    const onApplyModel = vi.fn();
     render(
-      <Composer {...baseProps({ models: [{ id: 'gpt-5', name: 'GPT-5' }], onSelectModel })} />,
+      <Composer
+        {...baseProps({
+          models: [{ id: 'gpt-5', name: 'GPT-5' }],
+          currentModelId: 'gpt-5',
+          onApplyModel,
+        })}
+      />,
     );
-    fireEvent.click(screen.getByRole('button', { name: /Model/ }));
+    fireEvent.click(screen.getByRole('button', { name: /GPT-5/ }));
     expect(screen.getByRole('menu', { name: 'Select model' })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('menu', { name: 'Select model' })).not.toBeInTheDocument();
-    expect(onSelectModel).not.toHaveBeenCalled();
+    expect(onApplyModel).not.toHaveBeenCalled();
   });
 
   it('renders the info slot above the box only when provided', () => {

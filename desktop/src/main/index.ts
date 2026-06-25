@@ -643,10 +643,16 @@ ipcMain.handle('rich:list-models', async (_event, session: string): Promise<Mode
   return client.listModels(session);
 });
 
-ipcMain.handle('rich:set-model', async (_event, args: { session: string; modelId: string }): Promise<void> => {
-  const client = await getControlClient();
-  await client.setModel(args.session, args.modelId);
-});
+ipcMain.handle(
+  'rich:set-model',
+  async (
+    _event,
+    args: { session: string; modelId: string; effort?: string; contextTier?: string },
+  ): Promise<void> => {
+    const client = await getControlClient();
+    await client.setModel(args.session, args.modelId, args.effort, args.contextTier);
+  },
+);
 
 ipcMain.handle(
   'cs:get-history',

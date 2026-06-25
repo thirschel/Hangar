@@ -197,7 +197,12 @@ func modelInfos(details []copilotsdk.ModelDetail) []proto.ModelInfo {
 	}
 	out := make([]proto.ModelInfo, 0, len(details))
 	for _, d := range details {
-		out = append(out, proto.ModelInfo{ID: d.ID, Name: d.Name})
+		out = append(out, proto.ModelInfo{
+			ID:               d.ID,
+			Name:             d.Name,
+			SupportedEfforts: d.SupportedEfforts,
+			DefaultEffort:    d.DefaultEffort,
+		})
 	}
 	return out
 }
@@ -326,8 +331,8 @@ func (s *sdkSession) richListModels(ctx context.Context) ([]proto.ModelInfo, err
 	return modelInfos(details), nil
 }
 
-func (s *sdkSession) richSetModel(ctx context.Context, modelID string) error {
-	return s.sess.SetModel(ctx, modelID)
+func (s *sdkSession) richSetModel(ctx context.Context, modelID, effort, contextTier string) error {
+	return s.sess.SetModel(ctx, modelID, effort, contextTier)
 }
 
 func (s *sdkSession) richTranscript(since uint64) []proto.EventFrame {
