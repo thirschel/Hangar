@@ -5,9 +5,9 @@ import type { Response } from '../../../main/host-client';
 import type { Settings } from '../../../main/settings';
 
 // Keep the standard-mode workspace grid lightweight: these panes pull in
-// terminal/stream machinery this suite does not exercise. The agent-mode shell
-// (AgentMode + ChatSidebar) is left unmocked so we can assert the real
-// `.app-mode-agent` surface the toggle swaps in.
+// terminal/stream machinery this suite does not exercise. The shared Sidebar is
+// stubbed too (the agent surface now reuses it); AgentMode is left unmocked so
+// we can assert the real `.app-mode-agent` surface the toggle swaps in.
 vi.mock('../components/Sidebar', () => ({
   Sidebar: () => <aside className="sidebar">Sidebar</aside>,
 }));
@@ -100,13 +100,13 @@ describe('App app-mode toggle', () => {
 
     fireEvent.click(modeToggle());
 
-    // Agent surface mounts and the standard workspace grid is gone.
+    // Agent surface mounts and the standard workspace grid is gone. The shared
+    // Sidebar (stubbed) is reused inside the agent surface, so `.sidebar` stays.
     expect(container.querySelector('.app-mode-agent')).toBeInTheDocument();
     expect(container.querySelector('main.workspace')).not.toBeInTheDocument();
-    expect(container.querySelector('.sidebar')).not.toBeInTheDocument();
+    expect(container.querySelector('.sidebar')).toBeInTheDocument();
 
-    // The agent shell shows the Chats list and its empty state.
-    expect(screen.getByRole('navigation', { name: 'Chats' })).toBeInTheDocument();
+    // The agent main pane shows its empty state until a chat is selected.
     expect(screen.getByText(/select a chat or start a new one/i)).toBeInTheDocument();
     expect(modeToggle()).toHaveAttribute('aria-pressed', 'true');
   });

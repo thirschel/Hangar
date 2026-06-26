@@ -454,9 +454,16 @@ export function App(): JSX.Element {
   connectionRef.current = connection;
 
   // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
-  const statusCounts = useMemo(() => countByStatus(workspaces), [workspaces]);
+  // The sidebar serves both surfaces: standard mode lists every workspace, agent
+  // mode lists only rich (Copilot SDK) chats. Switching the base list by appMode
+  // lets the same Sidebar + the same sort/search/status state drive both screens.
+  const baseWorkspaces = useMemo(
+    () => (appMode === 'agent' ? workspaces.filter((w) => w.kind === 'rich') : workspaces),
+    [appMode, workspaces],
+  );
+  const statusCounts = useMemo(() => countByStatus(baseWorkspaces), [baseWorkspaces]);
   const displayedWorkspaces = useMemo(() => {
-    let list = [...workspaces];
+    let list = [...baseWorkspaces];
 
     // Apply mode-based sorting.
     switch (sidebarMode) {
@@ -496,7 +503,7 @@ export function App(): JSX.Element {
     list = filterByStatus(list, statusFilter);
 
     return list;
-  }, [workspaces, sidebarMode, workspaceOrder, sidebarFilter, statusFilter]);
+  }, [baseWorkspaces, sidebarMode, workspaceOrder, sidebarFilter, statusFilter]);
 
   // Keep workspacesRef in sync with display order for hotkey navigation.
   workspacesRef.current = displayedWorkspaces;
@@ -562,17 +569,6 @@ export function App(): JSX.Element {
       setSelectedId(ws.id);
     },
     [refresh],
-  );
-
-  // Agent-mode "new chat": create a rich Copilot workspace for the picked repo.
-  // Rich chats are Copilot-only -- the daemon's richBackend() only marks a
-  // workspace kind:'rich' when the agent is Copilot -- so force program:'copilot'
-  // alongside rich:true. onCreate handles the post-create refresh + auto-select.
-  const onCreateChat = useCallback(
-    async (repoPath: string): Promise<void> => {
-      await onCreate({ repoPath, program: 'copilot', rich: true });
-    },
-    [onCreate],
   );
 
   const onArchive = useCallback(
@@ -769,12 +765,38 @@ export function App(): JSX.Element {
       </header>
 
       {appMode === 'agent' ? (
-        <AgentMode
-          workspaces={workspaces}
-          selectedId={selectedId}
-          onSelectChat={setSelectedId}
-          onCreateChat={onCreateChat}
-        />
+        <main className="app-mode-agent">
+          <Sidebar
+            workspaces={displayedWorkspaces}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onArchive={onArchive}
+            onSettings={onSettings}
+            onNewWorkspace={() => {
+              setCreateRepoPath(undefined);
+              setShowCreate(true);
+            }}
+            onNewAtRepo={(repoPath) => {
+              setCreateRepoPath(repoPath);
+              setShowCreate(true);
+            }}
+            onCycleMode={onCycleMode}
+            sidebarMode={sidebarMode}
+            filter={sidebarFilter}
+            onFilterChange={setSidebarFilter}
+            statusFilter={statusFilter}
+            counts={statusCounts}
+            onStatusFilterChange={(v) => {
+              localStorage.setItem(STATUS_FILTER_KEY, v);
+              setStatusFilter(v);
+            }}
+            searchInputRef={searchInputRef}
+            title="Chats"
+            noun="chat"
+            emptyHint={<p>Click + to start a Copilot chat in its own git worktree.</p>}
+          />
+          <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
+        </main>
       ) : (
       <main
         className="workspace"
@@ -866,6 +888,7 @@ export function App(): JSX.Element {
           }}
           onCreate={onCreate}
           initialRepoPath={createRepoPath}
+          rich={appMode === 'agent'}
         />
       )}
 

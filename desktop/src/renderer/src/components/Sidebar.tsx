@@ -27,6 +27,12 @@ type SidebarProps = {
   counts: StatusCounts;
   onStatusFilterChange: (value: StatusFilter) => void;
   searchInputRef?: RefObject<HTMLInputElement | null>;
+  // Optional labels so the same sidebar reads naturally for both surfaces: the
+  // standard view keeps "Workspaces", the agent view passes "Chats" / "chat".
+  // Defaults preserve the standard wording.
+  title?: string;
+  noun?: string;
+  emptyHint?: ReactNode;
   // Grid multi-select (optional so callers that don't use the grid stay simple).
   // Set of workspace ids currently chosen for the multi-agent grid view.
   gridSelectedIds?: ReadonlySet<string>;
@@ -381,6 +387,9 @@ export function Sidebar({
   counts,
   onStatusFilterChange,
   searchInputRef,
+  title = 'Workspaces',
+  noun = 'workspace',
+  emptyHint,
   gridSelectedIds,
   onToggleGridMember,
   onClearGridSelection,
@@ -392,7 +401,7 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="panel-header">
         <span className="sidebar__title">
-          Workspaces
+          {title}
           <span className="sidebar__mode-label">{MODE_LABELS[sidebarMode]}</span>
         </span>
         <div className="panel-header__actions">
@@ -407,7 +416,7 @@ export function Sidebar({
           <button
             className="icon-button"
             type="button"
-            title="New workspace (n)"
+            title={`New ${noun} (n)`}
             onClick={onNewWorkspace}
           >
             +
@@ -433,7 +442,7 @@ export function Sidebar({
           ref={inputRef}
           className="sidebar-search__input"
           type="text"
-          placeholder="Filter workspaces… (/)"
+          placeholder={`Filter ${noun}s… (/)`}
           value={filter}
           onChange={(e) => onFilterChange(e.target.value)}
           data-is-input="true"
@@ -441,21 +450,23 @@ export function Sidebar({
       </div>
       <StatusFilterBar active={statusFilter} counts={counts} onChange={onStatusFilterChange} />
 
-      <nav className="workspace-list" aria-label="Workspaces">
+      <nav className="workspace-list" aria-label={title}>
         {workspaces.length === 0 && !filter && statusFilter === 'all' && (
           <div className="empty-state">
-            <div className="empty-state__title">No workspaces yet</div>
-            <p>
-              Click + to start a parallel agent — in its own git worktree, or in-place in a folder
-              you pick.
-            </p>
+            <div className="empty-state__title">No {noun}s yet</div>
+            {emptyHint ?? (
+              <p>
+                Click + to start a parallel agent — in its own git worktree, or in-place in a folder
+                you pick.
+              </p>
+            )}
           </div>
         )}
         {workspaces.length === 0 && (filter || statusFilter !== 'all') && (
           <div className="empty-state">
             <div className="empty-state__title">No matches</div>
             <p>
-              No workspaces match
+              No {noun}s match
               {filter ? <> &ldquo;{filter}&rdquo;</> : null}
               {statusFilter !== 'all' ? ` in ${STATUS_LABELS[statusFilter].toLowerCase()}` : null}
             </p>

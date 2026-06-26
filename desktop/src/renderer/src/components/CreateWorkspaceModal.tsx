@@ -7,12 +7,19 @@ type CreateWorkspaceModalProps = {
   onClose: () => void;
   onCreate: (args: CreateWorkspaceArgs) => Promise<void>;
   initialRepoPath?: string;
+  // When true, the modal creates a rich Copilot chat instead of a terminal
+  // workspace: the Agent + Shell fields are hidden (rich is Copilot-only and
+  // SDK-backed, not a terminal) and the submit forces program:'copilot' +
+  // rich:true. The *screen* (agent vs standard) decides this, so the modal no
+  // longer carries a rich toggle.
+  rich?: boolean;
 };
 
 export function CreateWorkspaceModal({
   onClose,
   onCreate,
   initialRepoPath,
+  rich = false,
 }: CreateWorkspaceModalProps): JSX.Element {
   const [repoPath, setRepoPath] = useState(initialRepoPath ?? '');
   const [title, setTitle] = useState('');
@@ -60,10 +67,11 @@ export function CreateWorkspaceModal({
       await onCreate({
         repoPath: repoPath.trim(),
         title: title.trim() || undefined,
-        program: program.trim() || undefined,
+        program: rich ? 'copilot' : program.trim() || undefined,
         baseBranch: worktree ? baseBranch.trim() || undefined : undefined,
-        shell: shell || undefined,
+        shell: rich ? undefined : shell || undefined,
         noWorktree: worktree ? undefined : true,
+        rich: rich || undefined,
       });
       modalRef.current?.close();
     } catch (e) {
@@ -77,7 +85,7 @@ export function CreateWorkspaceModal({
     <Modal
       ref={modalRef}
       className="modal--create"
-      title="New workspace"
+      title={rich ? 'New chat' : 'New workspace'}
       onClose={onClose}
       busy={busy}
       error={error}
@@ -92,7 +100,7 @@ export function CreateWorkspaceModal({
             onClick={() => void submit()}
             disabled={busy}
           >
-            {busy ? 'Creating…' : 'Create workspace'}
+            {busy ? 'Creating…' : rich ? 'Create chat' : 'Create workspace'}
           </button>
         </>
       }
@@ -121,23 +129,27 @@ export function CreateWorkspaceModal({
             placeholder="Auto-named from your first message"
           />
         </label>
-        <label>
-          Agent <span className="hint">(must be on PATH or a PowerShell function)</span>
-          <input
-            value={program}
-            onChange={(e) => setProgram(e.target.value)}
-            placeholder={defaultProgram}
-          />
-        </label>
-        <label>
-          Shell <span className="hint">(defaults to Settings value)</span>
-          <select value={shell} onChange={(e) => setShell(e.target.value)}>
-            <option value="">Default (from Settings)</option>
-            <option value="cmd">cmd.exe</option>
-            <option value="powershell">PowerShell 5 (powershell.exe)</option>
-            <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
-          </select>
-        </label>
+        {!rich && (
+          <>
+            <label>
+              Agent <span className="hint">(must be on PATH or a PowerShell function)</span>
+              <input
+                value={program}
+                onChange={(e) => setProgram(e.target.value)}
+                placeholder={defaultProgram}
+              />
+            </label>
+            <label>
+              Shell <span className="hint">(defaults to Settings value)</span>
+              <select value={shell} onChange={(e) => setShell(e.target.value)}>
+                <option value="">Default (from Settings)</option>
+                <option value="cmd">cmd.exe</option>
+                <option value="powershell">PowerShell 5 (powershell.exe)</option>
+                <option value="pwsh">PowerShell 7 (pwsh.exe)</option>
+              </select>
+            </label>
+          </>
+        )}
         <label className="create-form__check">
           <input
             type="checkbox"

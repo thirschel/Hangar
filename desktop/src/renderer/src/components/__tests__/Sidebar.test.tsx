@@ -146,3 +146,32 @@ describe('Sidebar worktree icon', () => {
     expect(screen.getAllByLabelText('Isolated git worktree')).toHaveLength(1);
   });
 });
+
+describe('Sidebar labels', () => {
+  it('uses the standard wording by default', () => {
+    render(<Sidebar {...baseProps()} />);
+
+    expect(screen.getByText('Workspaces')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter workspaces… (/)')).toBeInTheDocument();
+    expect(screen.getByText('No workspaces yet')).toBeInTheDocument();
+  });
+
+  it('reads naturally for chats when title/noun/emptyHint are provided', () => {
+    render(
+      <Sidebar
+        {...baseProps({
+          title: 'Chats',
+          noun: 'chat',
+          emptyHint: <p>Start a Copilot chat.</p>,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Chats')).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Chats' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter chats… (/)')).toBeInTheDocument();
+    expect(screen.getByTitle('New chat (n)')).toBeInTheDocument();
+    expect(screen.getByText('No chats yet')).toBeInTheDocument();
+    expect(screen.getByText('Start a Copilot chat.')).toBeInTheDocument();
+  });
+});

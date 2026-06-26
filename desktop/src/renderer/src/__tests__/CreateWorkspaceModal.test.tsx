@@ -36,4 +36,35 @@ describe('CreateWorkspaceModal', () => {
 
     expect(screen.queryByLabelText(/Rich agent view/i)).not.toBeInTheDocument();
   });
+
+  it('hides the Agent + Shell fields and forces a rich Copilot chat when rich', async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CreateWorkspaceModal
+        onClose={() => {}}
+        onCreate={onCreate}
+        initialRepoPath="C:/repo"
+        rich
+      />,
+    );
+
+    // Rich is Copilot-only and SDK-backed, so the terminal-shaped fields are gone.
+    expect(screen.queryByPlaceholderText('copilot')).not.toBeInTheDocument();
+    expect(screen.queryByText('Shell')).not.toBeInTheDocument();
+    // The screen decides rich, so there is still no in-modal toggle.
+    expect(screen.queryByLabelText(/Rich agent view/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Create chat/i }));
+    });
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0][0]).toMatchObject({
+      repoPath: 'C:/repo',
+      program: 'copilot',
+      rich: true,
+    });
+    // No terminal shell is sent for a rich chat.
+    expect(onCreate.mock.calls[0][0].shell).toBeUndefined();
+  });
 });
