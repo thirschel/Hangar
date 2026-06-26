@@ -75,6 +75,10 @@ export function App(): JSX.Element {
   const [showRegen, setShowRegen] = useState(false);
   const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
   const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
+  // Ids whose removal is in flight. Removal is slow (esp. worktree deletion), so
+  // we mark the row "deleting" and run the archive in the background instead of
+  // blocking the whole app behind the confirm modal.
+  const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [workspaceToEdit, setWorkspaceToEdit] = useState<WorkspaceInfo | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
@@ -550,6 +554,22 @@ export function App(): JSX.Element {
     if (gridMode && gridWorkspaces.length === 0) setGridMode(false);
   }, [gridMode, gridWorkspaces.length]);
 
+  // Prune the "deleting" set once a row is actually gone (or if it reappears for
+  // some reason), so the optimistic markers never leak across refreshes.
+  useEffect(() => {
+    setDeletingIds((s) => {
+      if (s.size === 0) return s;
+      const live = new Set(workspaces.map((w) => w.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of s) {
+        if (live.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : s;
+    });
+  }, [workspaces]);
+
   useEffect(() => {
     if (!selected) setShowRegen(false);
   }, [selected]);
@@ -637,11 +657,29 @@ export function App(): JSX.Element {
     async (deleteWorktree: boolean): Promise<void> => {
       if (!workspaceToRemove) return;
       const id = workspaceToRemove.id;
-      await window.cs.archiveWorkspace(id, { deleteWorktree });
-      void window.cs.closeShell(id);
+      // Optimistically mark the row "deleting" and close the chat if it's open,
+      // then return immediately so the confirm modal closes without waiting on
+      // the slow archive RPC. The removal runs in the background below.
+      setDeletingIds((s) => new Set(s).add(id));
       setSelectedId((cur) => (cur === id ? null : cur));
-      setWorkspaceToRemove(null);
-      await refresh();
+      void (async () => {
+        try {
+          await window.cs.archiveWorkspace(id, { deleteWorktree });
+          void window.cs.closeShell(id);
+          await refresh();
+        } catch (e) {
+          // No toast surface exists; revert so the row becomes interactive again
+          // (the finally block prunes it) and the user can retry.
+          diag('archiveWorkspace failed', { id, error: e instanceof Error ? e.message : String(e) });
+        } finally {
+          setDeletingIds((s) => {
+            if (!s.has(id)) return s;
+            const next = new Set(s);
+            next.delete(id);
+            return next;
+          });
+        }
+      })();
     },
     [workspaceToRemove, refresh],
   );
@@ -794,6 +832,7 @@ export function App(): JSX.Element {
             title="Chats"
             noun="chat"
             emptyHint={<p>Click + to start a Copilot chat in its own git worktree.</p>}
+            deletingIds={deletingIds}
           />
           <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
         </main>
@@ -834,6 +873,7 @@ export function App(): JSX.Element {
           gridSelectedIds={gridSelectedIds}
           onToggleGridMember={toggleGridMember}
           onClearGridSelection={clearGridSelection}
+          deletingIds={deletingIds}
         />
         {gridMode ? (
           <GridPane

@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { memo, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { relativeTime } from '../lib/time';
@@ -40,6 +40,9 @@ type SidebarProps = {
   onToggleGridMember?: (id: string) => void;
   // Clear the entire grid selection.
   onClearGridSelection?: () => void;
+  // Ids whose removal is in flight: their rows show a "deleting" status and a
+  // click shows a "this <noun> is deleting" hint instead of selecting.
+  deletingIds?: ReadonlySet<string>;
 };
 
 type WorkspaceRowProps = {
@@ -53,6 +56,12 @@ type WorkspaceRowProps = {
   gridSelected?: boolean;
   // Provided only when grid selection is enabled; toggles this row's membership.
   onToggleGrid?: (id: string) => void;
+  // True while this row's removal is in flight: it renders a muted "Deleting…"
+  // status, hides its actions, and a click shows a transient hint instead of
+  // selecting it.
+  deleting?: boolean;
+  // Singular label used in the deleting hint ("This chat is deleting").
+  noun?: string;
 };
 
 function WorkspaceRowImpl({
@@ -64,6 +73,8 @@ function WorkspaceRowImpl({
   onSettings,
   gridSelected,
   onToggleGrid,
+  deleting = false,
+  noun = 'workspace',
 }: WorkspaceRowProps): JSX.Element {
   const status = workspaceStatus(w);
   const statusTitle =
@@ -74,16 +85,39 @@ function WorkspaceRowImpl({
         : status === 'busy'
           ? 'Working…'
           : 'Ready';
+
+  // Transient "this <noun> is deleting" hint shown when a deleting row is
+  // clicked. Ref-based timeout so repeated clicks reset the auto-hide cleanly.
+  const [hintShown, setHintShown] = useState(false);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (hintTimer.current) clearTimeout(hintTimer.current);
+    },
+    [],
+  );
+
+  const handleClick = (): void => {
+    if (deleting) {
+      setHintShown(true);
+      if (hintTimer.current) clearTimeout(hintTimer.current);
+      hintTimer.current = setTimeout(() => setHintShown(false), 1800);
+      return;
+    }
+    onSelect(w.id);
+  };
+
   return (
     <div
       className={`workspace-item${selected ? ' workspace-item--selected' : ''}${
-        onToggleGrid ? ' workspace-item--selectable' : ''
-      }`}
-      onClick={() => onSelect(w.id)}
+        onToggleGrid && !deleting ? ' workspace-item--selectable' : ''
+      }${deleting ? ' workspace-item--deleting' : ''}`}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
+      aria-disabled={deleting || undefined}
     >
-      {onToggleGrid && (
+      {onToggleGrid && !deleting && (
         <span className="workspace-item__grid-slot">
           {w.alive && (
             <input
@@ -100,7 +134,13 @@ function WorkspaceRowImpl({
           )}
         </span>
       )}
-      {status === 'busy' ? (
+      {deleting ? (
+        <span
+          className="workspace-item__spinner workspace-item__spinner--deleting"
+          title="Deleting…"
+          aria-label="Deleting…"
+        />
+      ) : status === 'busy' ? (
         <span className="workspace-item__spinner" title={statusTitle} aria-label={statusTitle} />
       ) : (
         <span
@@ -112,52 +152,65 @@ function WorkspaceRowImpl({
       <div className="workspace-item__body">
         <div className="workspace-item__name">{w.title}</div>
         <div className="workspace-item__detail">
-          <span className="workspace-item__branch">{w.branch}</span>
-          {w.hasWorktree && (
-            <span
-              className="workspace-item__worktree"
-              title="Isolated git worktree"
-              aria-label="Isolated git worktree"
-            >
-              ⎇
-            </span>
-          )}
-          {(w.added > 0 || w.removed > 0) && (
-            <span className="diffstat">
-              <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
-            </span>
-          )}
-          {relTime && (
-            <span className="workspace-item__time" title="Last agent output">
-              {relTime}
-            </span>
+          {deleting ? (
+            <span className="workspace-item__deleting-label">Deleting…</span>
+          ) : (
+            <>
+              <span className="workspace-item__branch">{w.branch}</span>
+              {w.hasWorktree && (
+                <span
+                  className="workspace-item__worktree"
+                  title="Isolated git worktree"
+                  aria-label="Isolated git worktree"
+                >
+                  ⎇
+                </span>
+              )}
+              {(w.added > 0 || w.removed > 0) && (
+                <span className="diffstat">
+                  <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
+                </span>
+              )}
+              {relTime && (
+                <span className="workspace-item__time" title="Last agent output">
+                  {relTime}
+                </span>
+              )}
+            </>
           )}
         </div>
       </div>
-      <div className="workspace-item__actions">
-        <button
-          className="icon-button archive"
-          type="button"
-          title="Archive workspace (D)"
-          onClick={(e) => {
-            e.stopPropagation();
-            void onArchive(w.id);
-          }}
-        >
-          ×
-        </button>
-        <button
-          className="icon-button workspace-settings"
-          type="button"
-          title="Workspace settings"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSettings(w.id);
-          }}
-        >
-          ⚙
-        </button>
-      </div>
+      {!deleting && (
+        <div className="workspace-item__actions">
+          <button
+            className="icon-button archive"
+            type="button"
+            title="Archive workspace (D)"
+            onClick={(e) => {
+              e.stopPropagation();
+              void onArchive(w.id);
+            }}
+          >
+            ×
+          </button>
+          <button
+            className="icon-button workspace-settings"
+            type="button"
+            title="Workspace settings"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSettings(w.id);
+            }}
+          >
+            ⚙
+          </button>
+        </div>
+      )}
+      {deleting && hintShown && (
+        <span className="workspace-item__deleting-hint" role="status">
+          This {noun} is deleting
+        </span>
+      )}
     </div>
   );
 }
@@ -178,6 +231,8 @@ const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
     prev.onSettings === next.onSettings &&
     prev.gridSelected === next.gridSelected &&
     prev.onToggleGrid === next.onToggleGrid &&
+    prev.deleting === next.deleting &&
+    prev.noun === next.noun &&
     prev.w.id === next.w.id &&
     prev.w.title === next.w.title &&
     prev.w.branch === next.w.branch &&
@@ -274,7 +329,25 @@ function buildGroupedList(
   onNewAtRepo?: (repoPath: string) => void,
   gridSelectedIds?: ReadonlySet<string>,
   onToggleGridMember?: (id: string) => void,
+  deletingIds?: ReadonlySet<string>,
+  noun?: string,
 ): ReactNode[] {
+  const renderRow = (w: WorkspaceInfo): JSX.Element => (
+    <WorkspaceRow
+      key={w.id}
+      w={w}
+      selected={w.id === selectedId}
+      relTime={rowRelTime(w)}
+      onSelect={onSelect}
+      onArchive={onArchive}
+      onSettings={onSettings}
+      gridSelected={gridSelectedIds?.has(w.id) ?? false}
+      onToggleGrid={onToggleGridMember}
+      deleting={deletingIds?.has(w.id) ?? false}
+      noun={noun}
+    />
+  );
+
   if (mode === 'group-by-repo') {
     const groups = new Map<string, WorkspaceInfo[]>();
     for (const w of workspaces) {
@@ -294,19 +367,7 @@ function buildGroupedList(
         />,
       );
       for (const w of items) {
-        nodes.push(
-          <WorkspaceRow
-            key={w.id}
-            w={w}
-            selected={w.id === selectedId}
-            relTime={rowRelTime(w)}
-            onSelect={onSelect}
-            onArchive={onArchive}
-            onSettings={onSettings}
-            gridSelected={gridSelectedIds?.has(w.id) ?? false}
-            onToggleGrid={onToggleGridMember}
-          />,
-        );
+        nodes.push(renderRow(w));
       }
     }
     return nodes;
@@ -319,56 +380,20 @@ function buildGroupedList(
     if (pending.length > 0) {
       nodes.push(<SectionHeader key="hdr-pending" label="Pending" />);
       for (const w of pending) {
-        nodes.push(
-          <WorkspaceRow
-            key={w.id}
-            w={w}
-            selected={w.id === selectedId}
-            relTime={rowRelTime(w)}
-            onSelect={onSelect}
-            onArchive={onArchive}
-            onSettings={onSettings}
-            gridSelected={gridSelectedIds?.has(w.id) ?? false}
-            onToggleGrid={onToggleGridMember}
-          />,
-        );
+        nodes.push(renderRow(w));
       }
     }
     if (rest.length > 0) {
       nodes.push(<SectionHeader key="hdr-other" label="Other" />);
       for (const w of rest) {
-        nodes.push(
-          <WorkspaceRow
-            key={w.id}
-            w={w}
-            selected={w.id === selectedId}
-            relTime={rowRelTime(w)}
-            onSelect={onSelect}
-            onArchive={onArchive}
-            onSettings={onSettings}
-            gridSelected={gridSelectedIds?.has(w.id) ?? false}
-            onToggleGrid={onToggleGridMember}
-          />,
-        );
+        nodes.push(renderRow(w));
       }
     }
     return nodes;
   }
 
   // Flat list for manual / recent-activity.
-  return workspaces.map((w) => (
-    <WorkspaceRow
-      key={w.id}
-      w={w}
-      selected={w.id === selectedId}
-      relTime={rowRelTime(w)}
-      onSelect={onSelect}
-      onArchive={onArchive}
-      onSettings={onSettings}
-      gridSelected={gridSelectedIds?.has(w.id) ?? false}
-      onToggleGrid={onToggleGridMember}
-    />
-  ));
+  return workspaces.map((w) => renderRow(w));
 }
 
 export function Sidebar({
@@ -393,6 +418,7 @@ export function Sidebar({
   gridSelectedIds,
   onToggleGridMember,
   onClearGridSelection,
+  deletingIds,
 }: SidebarProps): JSX.Element {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = searchInputRef ?? internalRef;
@@ -483,6 +509,8 @@ export function Sidebar({
             onNewAtRepo,
             gridSelectedIds,
             onToggleGridMember,
+            deletingIds,
+            noun,
           )}
       </nav>
     </aside>
