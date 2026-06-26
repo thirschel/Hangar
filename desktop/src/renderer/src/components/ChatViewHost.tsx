@@ -1503,7 +1503,7 @@ export function ChatViewHost({
 
       {activePage === 'mcp' && (
         <div className="chat-view__body chat-view__page">
-          <McpPage servers={transcript.mcpServers} />
+          <McpPage servers={transcript.mcpServers} workspace={workspace} />
         </div>
       )}
 

@@ -43,6 +43,10 @@ const mockCs = {
   pickFiles: async () => [],
   getDefaultProgram: async () => 'copilot',
   openExternal: asyncNoop,
+  mcpRead: async () => ({ servers: {}, repoEnabled: {} }),
+  mcpUpsertServer: async () => ({ servers: {}, repoEnabled: {} }),
+  mcpRemoveServer: async () => ({ servers: {}, repoEnabled: {} }),
+  mcpSetEnabled: async () => ({ servers: {}, repoEnabled: {} }),
   getAppInfo: async () => ({
     version: '0.1.0',
     appName: 'hangar-desktop',
@@ -111,6 +115,7 @@ const mockCs = {
   onRichReady: () => noop,
   onRichClosed: () => noop,
   onRichError: () => noop,
+  onMcpChanged: () => noop,
   onFocusWorkspace: () => noop,
   onPlayNotificationSound: () => noop,
   onFirstRun: () => noop,
