@@ -164,6 +164,44 @@ func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
 	}
 }
 
+func TestEmitInstructionsSnapshot(t *testing.T) {
+	s := newSDKSession("rich-instr", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitInstructionsSnapshot([]copilotsdk.InstructionDetail{
+		{
+			Label:       "Repo instructions",
+			SourcePath:  ".github/copilot-instructions.md",
+			Type:        "repository",
+			Location:    "repository",
+			Description: "House style",
+			ApplyTo:     []string{"**/*.go"},
+			Content:     "Always run gofmt.",
+		},
+	})
+
+	frames := s.richTranscript(0)
+	if len(frames) != 1 || frames[0].Kind != proto.EventKindInstructions || len(frames[0].Instructions) != 1 {
+		t.Fatalf("instructions frame = %+v", frames)
+	}
+	in := frames[0].Instructions[0]
+	if in.Label != "Repo instructions" || in.SourcePath != ".github/copilot-instructions.md" ||
+		in.Type != "repository" || in.Location != "repository" || in.Description != "House style" ||
+		in.Content != "Always run gofmt." || len(in.ApplyTo) != 1 || in.ApplyTo[0] != "**/*.go" {
+		t.Fatalf("instruction = %+v", in)
+	}
+}
+
+func TestEmitInstructionsSnapshotEmptyNoFrame(t *testing.T) {
+	s := newSDKSession("rich-instr", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitInstructionsSnapshot(nil)
+	if frames := s.richTranscript(0); len(frames) != 0 {
+		t.Fatalf("empty instructions should emit no frame, got %+v", frames)
+	}
+}
+
 // TestTranslateAndEmitPillBarUnchanged proves the additive mcp.detail emission
 // leaves the existing per-server mcp.status pill stream untouched, and that a
 // skills-loaded event routes to emitSkills (a no-op without captured skills)

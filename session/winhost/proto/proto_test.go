@@ -88,8 +88,8 @@ func TestReadFrameTruncatedBodyErrors(t *testing.T) {
 }
 
 func TestRegenerateFieldsRoundTrip(t *testing.T) {
-	if Version != 22 {
-		t.Fatalf("Version = %d, want 22", Version)
+	if Version != 23 {
+		t.Fatalf("Version = %d, want 23", Version)
 	}
 	var buf bytes.Buffer
 	req := &Request{ID: 1, Method: MethodRegenerateAgent, WorkspaceID: "ws1", Handoff: true, Cols: 100, Rows: 40}

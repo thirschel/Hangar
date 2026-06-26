@@ -4229,6 +4229,100 @@ body.is-row-resizing .center-terminal__resizer::after {
   font-size: var(--fs-xs);
 }
 
+/* Instructions page: read-only cards for each loaded custom-instruction source,
+   mirroring the Skills page with a location/type badge and a scrollable raw-content
+   block. */
+.instructions-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+}
+.instructions-page--empty {
+  align-items: center;
+  justify-content: center;
+}
+.instructions-page__empty-text {
+  margin: 0;
+  color: var(--text-muted);
+}
+.instructions-page__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.instructions-page__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.instructions-page__label {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+.instructions-page__badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.instructions-page__description {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.instructions-page__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+.instructions-page__meta-row {
+  display: flex;
+  gap: var(--space-3);
+}
+.instructions-page__meta-key {
+  flex: none;
+  width: 80px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.instructions-page__meta-val {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.instructions-page__path {
+  font-family: var(--font-mono);
+}
+.instructions-page__content {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* Errors read as a muted danger line under the card head. */
 .mcp-page__error {
   margin: 0;

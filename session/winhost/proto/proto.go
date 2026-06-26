@@ -94,7 +94,12 @@ import (
 // v22 timestamps turn completion. EventFrame gains Timestamp — the SDK event time
 // (unix ms) set on the idle frame so the desktop can show when a turn completed.
 // Additive: omitempty drops it on every frame that does not carry a time.
-const Version = 22
+// v23 adds the rich Instructions snapshot: EventKindInstructions ("instructions")
+// carries the full InstructionInfo list (the custom instructions the SDK loaded for
+// the session, pulled via RPC.Instructions.GetSources) so the desktop can show an
+// Instructions page alongside MCP servers / Skills. Additive: omitempty drops the
+// new Instructions slice on every other frame.
+const Version = 23
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -442,6 +447,10 @@ type EventFrame struct {
 	// the desktop view wholesale, populated only on its corresponding Kind.
 	MCPServers []MCPServerInfo `json:"mcpServers,omitempty"` // populated on EventKindMCPDetail
 	Skills     []SkillInfo     `json:"skills,omitempty"`     // populated on EventKindSkills
+	// Instructions snapshot (v23): the full list of custom instructions the SDK
+	// loaded for the session, populated only on EventKindInstructions and replacing
+	// the desktop's Instructions page wholesale.
+	Instructions []InstructionInfo `json:"instructions,omitempty"` // populated on EventKindInstructions
 	// Resume-restore fields (v18). Decision is "approve"|"reject" on a
 	// permission.resolved frame (the SDK permission completion). Effort/ContextTier
 	// ride with Model (above) on a model frame so the desktop restores the model
@@ -465,9 +474,10 @@ const (
 	EventKindTitle             = "title"
 	EventKindIdle              = "idle"
 	EventKindError             = "error"
-	EventKindMCPStatus         = "mcp.status" // per-server MCP connection status (MCPServer, Status, Error)
-	EventKindMCPDetail         = "mcp.detail" // full MCP server-list snapshot
-	EventKindSkills            = "skills"     // full skills-list snapshot
+	EventKindMCPStatus         = "mcp.status"   // per-server MCP connection status (MCPServer, Status, Error)
+	EventKindMCPDetail         = "mcp.detail"   // full MCP server-list snapshot
+	EventKindSkills            = "skills"       // full skills-list snapshot
+	EventKindInstructions      = "instructions" // full custom-instructions snapshot (v23)
 	// Resume-restore frames (v18): translate the SDK completion events and carry the
 	// active model so a restarted session restores its answered cards and selection.
 	EventKindPermissionResolved = "permission.resolved" // a permission request was answered (Decision)
@@ -494,6 +504,20 @@ type SkillInfo struct {
 	Enabled     bool   `json:"enabled"`
 	Source      string `json:"source,omitempty"` // project|personal-copilot|plugin|builtin
 	Path        string `json:"path,omitempty"`
+}
+
+// InstructionInfo is one loaded custom-instruction source for the rich Instructions
+// page (v23). It is display-safe: the label, on-disk path, category/location, an
+// optional description, the applies-to glob patterns, and the raw file content the
+// SDK reported via RPC.Instructions.GetSources.
+type InstructionInfo struct {
+	Label       string   `json:"label"`
+	SourcePath  string   `json:"sourcePath,omitempty"`
+	Type        string   `json:"type,omitempty"`     // category used for merge logic
+	Location    string   `json:"location,omitempty"` // where the source lives (UI grouping)
+	Description string   `json:"description,omitempty"`
+	ApplyTo     []string `json:"applyTo,omitempty"` // frontmatter globs; applies only to matching files
+	Content     string   `json:"content,omitempty"` // raw instruction file content
 }
 
 // ModelInfo is one selectable model for the rich model selector (v14), returned in

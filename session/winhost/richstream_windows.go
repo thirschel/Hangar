@@ -122,6 +122,32 @@ func (s *sdkSession) emitSkillsSnapshot(details []copilotsdk.SkillDetail) {
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindSkills, Skills: skills})
 }
 
+// emitInstructions pulls the custom-instruction sources the SDK loaded for this
+// session (RPC.Instructions.GetSources) and emits one instructions snapshot frame
+// (v23). The desktop replaces its Instructions page wholesale. Instructions arrive
+// via an RPC pull rather than an event, so this is emitted once on stream start.
+// The SDK API is experimental, so a pull failure is logged and skipped rather than
+// breaking the stream.
+func (s *sdkSession) emitInstructions(ctx context.Context) {
+	details, err := s.sess.Instructions(ctx)
+	if err != nil {
+		s.logf("SDK instructions pull failed for session %q: %v", s.name, err)
+		return
+	}
+	s.emitInstructionsSnapshot(details)
+}
+
+// emitInstructionsSnapshot maps an instructions snapshot into a single instructions
+// frame. Split from emitInstructions so the mapping is unit-testable without a live
+// copilotsdk session.
+func (s *sdkSession) emitInstructionsSnapshot(details []copilotsdk.InstructionDetail) {
+	instrs := instructionInfos(details)
+	if len(instrs) == 0 {
+		return
+	}
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindInstructions, Instructions: instrs})
+}
+
 // emitUsage emits one usage frame (v14) translating an SDK context-usage event onto
 // the rich event stream. The token counts come straight from the event, so it is
 // correct for both live events and transcript replay (which bypasses the copilotsdk
@@ -211,6 +237,25 @@ func skillInfos(details []copilotsdk.SkillDetail) []proto.SkillInfo {
 			Enabled:     d.Enabled,
 			Source:      d.Source,
 			Path:        d.Path,
+		})
+	}
+	return out
+}
+
+func instructionInfos(details []copilotsdk.InstructionDetail) []proto.InstructionInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]proto.InstructionInfo, 0, len(details))
+	for _, d := range details {
+		out = append(out, proto.InstructionInfo{
+			Label:       d.Label,
+			SourcePath:  d.SourcePath,
+			Type:        d.Type,
+			Location:    d.Location,
+			Description: d.Description,
+			ApplyTo:     append([]string(nil), d.ApplyTo...),
+			Content:     d.Content,
 		})
 	}
 	return out

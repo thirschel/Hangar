@@ -132,6 +132,9 @@ func (s *sdkSession) startResumed() error {
 		}
 		s.translateAndEmit(ev)
 	}
+	// Custom instructions arrive via an RPC pull (not the event stream), so emit a
+	// one-time snapshot on stream start so the Instructions page populates (v23).
+	s.emitInstructions(s.ctx)
 	// If the replayed transcript was interrupted before its terminal frame (e.g. the
 	// daemon was killed mid-turn), settle the dangling turn so the resumed session
 	// presents as idle instead of stuck "running".

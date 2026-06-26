@@ -2,6 +2,7 @@ import type { FormEvent, JSX } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   EventFrame,
+  InstructionInfo,
   McpServerInfo,
   ModelInfo,
   SkillInfo,
@@ -15,6 +16,7 @@ import { ReviewPanel } from './ReviewPanel';
 import { FilesPanel } from './FilesPanel';
 import { McpPage } from './McpPage';
 import { SkillsPage } from './SkillsPage';
+import { InstructionsPage } from './InstructionsPage';
 
 // ChatViewHost is the rich chat surface for the new Agent mode: a top bar (chat
 // title + AutoYes), a section nav (Chat / MCP servers / Skills / Changes / All
@@ -38,7 +40,7 @@ export type ChatViewHostProps = {
 };
 
 // --- Section navigation ----------------------------------------------------
-type ChatPage = 'chat' | 'mcp' | 'skills' | 'changes' | 'files';
+type ChatPage = 'chat' | 'mcp' | 'skills' | 'instructions' | 'changes' | 'files';
 
 type ChatNavTab = {
   id: ChatPage;
@@ -53,6 +55,7 @@ const NAV_TABS: ChatNavTab[] = [
   { id: 'chat', label: 'Chat', enabled: true },
   { id: 'mcp', label: 'MCP servers', enabled: true },
   { id: 'skills', label: 'Skills', enabled: true },
+  { id: 'instructions', label: 'Instructions', enabled: true },
   { id: 'changes', label: 'Changes', enabled: true },
   { id: 'files', label: 'All files', enabled: true },
 ];
@@ -119,6 +122,9 @@ type TranscriptModel = {
   // the pill bar (`servers`), which keeps tracking inline 'mcp.status' updates.
   mcpServers: McpServerInfo[];
   skills: SkillInfo[];
+  // Latest 'instructions' snapshot (last-write-wins): the custom instructions the
+  // SDK loaded for the session, feeding the dedicated Instructions page.
+  instructions: InstructionInfo[];
   turnInProgress: boolean;
   // Latest context-usage snapshot from a 'usage' frame (last-write-wins). Drives
   // the composer header (active model + context %). Undefined until the first
@@ -260,6 +266,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   // Full-list snapshots; the last matching frame wins (frames are seq-sorted).
   let mcpServers: McpServerInfo[] = [];
   let skills: SkillInfo[] = [];
+  let instructions: InstructionInfo[] = [];
   // Latest usage reading; last-write-wins across the seq-sorted frames.
   let usage: UsageSnapshot | undefined;
   // Latest model selection; last-write-wins across the seq-sorted frames.
@@ -565,6 +572,10 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         // Full skills list snapshot; replace wholesale (last-write-wins).
         if (frame.skills) skills = frame.skills;
         break;
+      case 'instructions':
+        // Full custom-instructions snapshot; replace wholesale (last-write-wins).
+        if (frame.instructions) instructions = frame.instructions;
+        break;
       default:
         break;
     }
@@ -581,7 +592,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
     if (label) entries[i] = { ...entry, answered: true, answerLabel: label };
   }
 
-  return { entries, servers, mcpServers, skills, turnInProgress, usage, modelState };
+  return { entries, servers, mcpServers, skills, instructions, turnInProgress, usage, modelState };
 }
 
 // Context % = currentTokens / tokenLimit, rendered as e.g. "42% context used".
@@ -1349,6 +1360,12 @@ export function ChatViewHost({
       {activePage === 'skills' && (
         <div className="chat-view__body chat-view__page">
           <SkillsPage skills={transcript.skills} />
+        </div>
+      )}
+
+      {activePage === 'instructions' && (
+        <div className="chat-view__body chat-view__page">
+          <InstructionsPage instructions={transcript.instructions} />
         </div>
       )}
     </section>

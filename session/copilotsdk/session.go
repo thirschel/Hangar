@@ -376,6 +376,32 @@ func (s *Session) ListModels(ctx context.Context) ([]ModelDetail, error) {
 	return out, nil
 }
 
+// Instructions pulls the custom-instruction sources the SDK loaded for this session
+// (RPC.Instructions.GetSources) for the rich Instructions page (v23). The SDK marks
+// this API experimental, so failures are returned to the caller (winhost logs and
+// skips) and a nil RPC surface yields no instructions rather than a panic.
+func (s *Session) Instructions(ctx context.Context) ([]InstructionDetail, error) {
+	sess := s.session()
+	if sess == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Instructions == nil {
+		return nil, nil
+	}
+	res, err := sess.RPC.Instructions.GetSources(ctx)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	out := make([]InstructionDetail, 0, len(res.Sources))
+	for _, src := range res.Sources {
+		out = append(out, instructionDetail(src))
+	}
+	return out, nil
+}
+
 // modelDetail maps an SDK ModelInfo to the display-safe ModelDetail, carrying the
 // id, name, and the model's reasoning-effort options (v16). SupportedEfforts is a
 // defensive copy so callers never alias the SDK's slice.

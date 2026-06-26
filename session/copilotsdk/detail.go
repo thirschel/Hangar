@@ -1,6 +1,9 @@
 package copilotsdk
 
-import copilot "github.com/github/copilot-sdk/go"
+import (
+	copilot "github.com/github/copilot-sdk/go"
+	csrpc "github.com/github/copilot-sdk/go/rpc"
+)
 
 // MCPServerDetail is a display-safe snapshot of one MCP server's state, captured
 // from the SDK event stream for the rich MCP page (v13). It intentionally exposes
@@ -25,6 +28,38 @@ type SkillDetail struct {
 	Enabled     bool
 	Source      string
 	Path        string
+}
+
+// InstructionDetail is a display-safe snapshot of one loaded custom-instruction
+// source, pulled from the SDK via RPC.Instructions.GetSources for the rich
+// Instructions page (v23). winhost maps it to proto.InstructionInfo.
+type InstructionDetail struct {
+	Label       string
+	SourcePath  string
+	Type        string // category used for merge logic
+	Location    string // where the source lives (UI grouping)
+	Description string
+	ApplyTo     []string // frontmatter globs; applies only to matching files
+	Content     string   // raw instruction file content
+}
+
+// instructionDetail maps one SDK InstructionSource to the display-safe
+// InstructionDetail: the string-enum Type/Location are flattened, the optional
+// Description pointer is dereferenced, and ApplyTo is defensively copied so callers
+// never alias the SDK slice.
+func instructionDetail(src csrpc.InstructionSource) InstructionDetail {
+	d := InstructionDetail{
+		Label:      src.Label,
+		SourcePath: src.SourcePath,
+		Type:       string(src.Type),
+		Location:   string(src.Location),
+		Content:    src.Content,
+		ApplyTo:    append([]string(nil), src.ApplyTo...),
+	}
+	if src.Description != nil {
+		d.Description = *src.Description
+	}
+	return d
 }
 
 // MCPServers returns a copy of the most recent full MCP server detail captured

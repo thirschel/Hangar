@@ -704,6 +704,44 @@ describe('ChatViewHost', () => {
     expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
   });
 
+  it('renders the read-only Instructions page from an instructions snapshot', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'instructions',
+          instructions: [
+            {
+              label: 'Repo instructions',
+              sourcePath: '.github/copilot-instructions.md',
+              type: 'repository',
+              location: 'repository',
+              description: 'House style',
+              applyTo: ['**/*.go'],
+              content: 'Always run gofmt.',
+            },
+            { label: 'Home instructions' },
+          ],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Instructions' }));
+
+    expect(screen.getByText('Repo instructions')).toBeInTheDocument();
+    expect(screen.getByText('House style')).toBeInTheDocument();
+    expect(screen.getByText('.github/copilot-instructions.md')).toBeInTheDocument();
+    expect(screen.getByText('Always run gofmt.')).toBeInTheDocument();
+    expect(screen.getByText('**/*.go')).toBeInTheDocument();
+    expect(screen.getByText('Home instructions')).toBeInTheDocument();
+    // Read-only page takeover: no composer is rendered.
+    expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
+  });
+
   it('shows the model + context used header from a usage frame', async () => {
     const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());

@@ -88,6 +88,19 @@ export interface SkillInfo {
   path?: string;
 }
 
+// One loaded custom-instruction source carried on a frame with kind 'instructions'
+// (proto v23). The daemon pulls the full list from the SDK and re-sends it, so the
+// renderer replaces its Instructions page wholesale (last-write-wins).
+export interface InstructionInfo {
+  label: string;
+  sourcePath?: string;
+  type?: string; // category used for merge logic
+  location?: string; // where the source lives (UI grouping)
+  description?: string;
+  applyTo?: string[]; // frontmatter globs; applies only to matching files
+  content?: string; // raw instruction file content
+}
+
 export interface EventFrame {
   seq: number;
   kind: string;
@@ -105,6 +118,7 @@ export interface EventFrame {
   error?: string;
   mcpServers?: McpServerInfo[]; // present on a frame with kind 'mcp.detail'
   skills?: SkillInfo[]; // present on a frame with kind 'skills'
+  instructions?: InstructionInfo[]; // present on a frame with kind 'instructions'
   // Context-usage snapshot carried on a frame with kind 'usage'. Context % is
   // currentTokens / tokenLimit (guard divide-by-zero / missing). `model` is the
   // active model id/name for the live model selector header.

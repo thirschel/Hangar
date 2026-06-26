@@ -6,7 +6,41 @@ import (
 	"testing"
 
 	copilot "github.com/github/copilot-sdk/go"
+	csrpc "github.com/github/copilot-sdk/go/rpc"
 )
+
+// TestInstructionDetailMapping asserts the SDK InstructionSource -> InstructionDetail
+// mapping: string-enum Type/Location are flattened, the optional Description pointer
+// is dereferenced, and ApplyTo is a defensive copy (never aliases the SDK slice).
+func TestInstructionDetailMapping(t *testing.T) {
+	desc := "House style"
+	src := csrpc.InstructionSource{
+		Label:       "Repo instructions",
+		SourcePath:  ".github/copilot-instructions.md",
+		Type:        csrpc.InstructionSourceType("repository"),
+		Location:    csrpc.InstructionSourceLocation("repository"),
+		Description: &desc,
+		ApplyTo:     []string{"**/*.go", "**/*.ts"},
+		Content:     "Always run gofmt.",
+	}
+	got := instructionDetail(src)
+	if got.Label != "Repo instructions" || got.SourcePath != ".github/copilot-instructions.md" ||
+		got.Type != "repository" || got.Location != "repository" || got.Description != "House style" ||
+		got.Content != "Always run gofmt." || len(got.ApplyTo) != 2 {
+		t.Fatalf("instructionDetail = %+v", got)
+	}
+	// ApplyTo must be a defensive copy, not an alias of the source slice.
+	src.ApplyTo[0] = "mutated"
+	if got.ApplyTo[0] != "**/*.go" {
+		t.Fatalf("ApplyTo aliased the source slice: %+v", got.ApplyTo)
+	}
+
+	// A nil Description maps to empty string rather than panicking.
+	bare := instructionDetail(csrpc.InstructionSource{Label: "Home"})
+	if bare.Description != "" || bare.Label != "Home" {
+		t.Fatalf("bare instructionDetail = %+v", bare)
+	}
+}
 
 // TestCaptureMCPServersLoadedAccessor drives a synthetic servers-loaded event
 // through handleEvent and asserts the captured detail (status/transport/source/
