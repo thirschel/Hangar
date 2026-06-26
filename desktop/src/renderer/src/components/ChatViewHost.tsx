@@ -682,6 +682,16 @@ const REVEAL_CATCHUP_DIVISOR = 28;
 const REVEAL_MIN_CHARS = 2;
 const REVEAL_MAX_CHARS = 40;
 
+// A chat created within this many seconds is treated as brand-new, so its empty
+// transcript shows the "send a message" invite rather than a restore skeleton.
+// Older chats opened for the first time may still be streaming in their history
+// (e.g. the daemon is reviving sessions after a restart) => show the skeleton
+// until the first frame arrives.
+const RESTORE_FRESH_SECONDS = 10;
+// Safety cap so a genuinely-empty older chat that never streams a frame doesn't
+// show the skeleton forever.
+const RESTORE_SKELETON_CAP_MS = 8000;
+
 // Whether to animate at all. In the Electron renderer `matchMedia` always exists,
 // so this is just the reduced-motion preference. In jsdom (vitest) `matchMedia`
 // is absent => treat as "no animation" so component tests see fully-revealed text
@@ -842,6 +852,28 @@ function ReasoningBlock({
 }
 
 
+// Placeholder shown while a pre-existing chat's transcript is still being
+// restored (before the first frame arrives). A few shimmer "bubbles" stand in
+// for the conversation; the shimmer is disabled under prefers-reduced-motion
+// (RDP-friendly) via CSS.
+function ChatRestoreSkeleton(): JSX.Element {
+  return (
+    <div className="chat-skeleton" role="status" aria-label="Restoring conversation…">
+      {[0, 1, 2, 3].map((row) => (
+        <div
+          key={row}
+          className={`chat-skeleton__row chat-skeleton__row--${row % 2 === 0 ? 'in' : 'out'}`}
+        >
+          <div className="chat-skeleton__bubble">
+            <span className="chat-skeleton__line" />
+            <span className="chat-skeleton__line chat-skeleton__line--short" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ChatViewHost({
   workspace,
   findHotkeyScope = 'global',
@@ -865,6 +897,10 @@ export function ChatViewHost({
   // Optimistic, client-side user-message frames (the backend never emits them).
   const [localUserFrames, setLocalUserFrames] = useState<EventFrame[]>([]);
   const [streamError, setStreamError] = useState<string | null>(null);
+  // True while a pre-existing chat is being restored and no frames have arrived
+  // yet (shows a skeleton instead of the empty-state invite). Cleared as soon as
+  // the first frame streams in (see the rich-stream effect) or by a safety cap.
+  const [restoring, setRestoring] = useState(false);
   const [optimisticTurn, setOptimisticTurn] = useState(false);
   const [answeredRequests, setAnsweredRequests] = useState<Set<string>>(() => new Set());
   const [answerLabels, setAnswerLabels] = useState<Map<string, string>>(() => new Map());
@@ -1105,6 +1141,9 @@ export function ChatViewHost({
         isCurrentWorkspace(workspace.id, workspace.sessionName)
       ) {
         addFrame(frame);
+        // First frame for this chat => the transcript is no longer "restoring".
+        // setState bails out when already false, so this is a no-op per frame.
+        setRestoring(false);
       }
     });
     const unsubscribeError = window.cs.onRichError(({ session, message }) => {
@@ -1133,6 +1172,25 @@ export function ChatViewHost({
       void window.cs.closeRichStream(workspace.sessionName);
     };
   }, [isCurrentWorkspace, workspace.id, workspace.sessionName]);
+
+  // Decide whether to show the restore skeleton for this chat. A freshly-created
+  // chat (recent createdUnix) or one whose frames are already cached skips it; an
+  // older chat opened cold starts in the restoring state until its first frame
+  // arrives (cleared in the rich-stream effect above) or a safety cap fires.
+  useEffect(() => {
+    const cached = richFrameCache.get(workspace.sessionName);
+    const hasCachedFrames = (cached?.size ?? 0) > 0;
+    const ageSeconds =
+      workspace.createdUnix > 0
+        ? Date.now() / 1000 - workspace.createdUnix
+        : Number.POSITIVE_INFINITY;
+    const freshlyCreated = ageSeconds < RESTORE_FRESH_SECONDS;
+    const shouldRestore = !hasCachedFrames && !freshlyCreated;
+    setRestoring(shouldRestore);
+    if (!shouldRestore) return undefined;
+    const timer = window.setTimeout(() => setRestoring(false), RESTORE_SKELETON_CAP_MS);
+    return () => window.clearTimeout(timer);
+  }, [workspace.sessionName, workspace.createdUnix]);
 
   // Fetch the selectable models for this session (live model selector). Resets
   // the list + optimistic pick when the session changes; a stale resolve from a
@@ -1424,9 +1482,13 @@ export function ChatViewHost({
             )}
             <div ref={scrollRef} className="chat-view__scroll" onScroll={onScroll}>
               <div ref={contentRef} className="chat-view__scroll-content">
-                {transcript.entries.length === 0 && !streamError && (
-                  <div className="chat-view__empty">Send a message to start the conversation.</div>
-                )}
+                {transcript.entries.length === 0 &&
+                  !streamError &&
+                  (restoring ? (
+                    <ChatRestoreSkeleton />
+                  ) : (
+                    <div className="chat-view__empty">Send a message to start the conversation.</div>
+                  ))}
                 {transcript.entries.map((entry) => {
                   const requestId =
                     entry.kind === 'permission' || entry.kind === 'input' ? entry.requestId : undefined;

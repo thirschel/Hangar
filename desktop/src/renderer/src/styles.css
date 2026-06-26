@@ -3368,6 +3368,67 @@ body.is-row-resizing .center-terminal__resizer::after {
   justify-content: center;
   color: var(--text-muted);
 }
+/* Restore skeleton: shimmer placeholder shown while a pre-existing chat's
+   transcript is still streaming in (before the first frame arrives). The
+   shimmer is disabled under prefers-reduced-motion (RDP-friendly). */
+.chat-skeleton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5) var(--space-2);
+}
+.chat-skeleton__row {
+  display: flex;
+}
+.chat-skeleton__row--in {
+  justify-content: flex-start;
+}
+.chat-skeleton__row--out {
+  justify-content: flex-end;
+}
+.chat-skeleton__bubble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(62%, 420px);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+.chat-skeleton__row--out .chat-skeleton__bubble {
+  width: min(46%, 320px);
+}
+.chat-skeleton__line {
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.05) 25%,
+    rgba(255, 255, 255, 0.12) 37%,
+    rgba(255, 255, 255, 0.05) 63%
+  );
+  background-size: 400% 100%;
+  animation: chat-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.chat-skeleton__line--short {
+  width: 60%;
+}
+@keyframes chat-skeleton-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-skeleton__line {
+    animation: none;
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
 /* Floating "scroll to bottom" button, bottom-right of the transcript viewport.
    Fades in (see --visible) once the user is >2 viewport heights above the bottom. */
 .chat-view__scroll-btn {

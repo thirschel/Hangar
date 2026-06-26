@@ -18,7 +18,10 @@ function makeWorkspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
     autoYes: false,
     added: 0,
     removed: 0,
-    createdUnix: 0,
+    // Default to a freshly-created chat so the restore skeleton is off by default
+    // (matches the pre-skeleton behavior for existing cases). The skeleton test
+    // overrides createdUnix with an older timestamp.
+    createdUnix: Math.floor(Date.now() / 1000),
     lastOutputUnix: 0,
     runCommand: '',
     running: false,
@@ -413,6 +416,35 @@ describe('ChatViewHost', () => {
     // no transcript entry is pushed (the empty-state placeholder stays visible).
     expect(screen.queryByText('Usage updated')).not.toBeInTheDocument();
     expect(screen.getByText(/Send a message to start/)).toBeInTheDocument();
+  });
+
+  it('shows a restore skeleton for a pre-existing chat until the first frame arrives', async () => {
+    // An older chat (createdUnix well in the past) with no cached frames is being
+    // restored: show the skeleton, not the "send a message" invite.
+    render(<ChatViewHost workspace={makeWorkspace({ createdUnix: 1_000 })} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    expect(await screen.findByRole('status', { name: /Restoring conversation/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Send a message to start/)).not.toBeInTheDocument();
+
+    // The first frame to arrive clears the restoring state; this usage frame adds
+    // no transcript entry, so the empty-state invite takes the skeleton's place.
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'usage', model: 'gpt-5', currentTokens: 1, tokenLimit: 100 } });
+    });
+
+    expect(screen.queryByRole('status', { name: /Restoring conversation/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Send a message to start/)).toBeInTheDocument();
+  });
+
+  it('shows the empty-state invite (no skeleton) for a freshly-created chat', async () => {
+    // A brand-new chat (recent createdUnix, the makeWorkspace default) is not
+    // "restoring": it shows the invite immediately, with no skeleton.
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    expect(await screen.findByText(/Send a message to start/)).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /Restoring conversation/ })).not.toBeInTheDocument();
   });
 
   it('sends a message and shows it optimistically as a right-aligned user bubble', async () => {
