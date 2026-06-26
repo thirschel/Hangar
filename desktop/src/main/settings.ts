@@ -81,7 +81,7 @@ const APP_DEFAULTS: AppSettings = {
   terminalRenderer: 'auto',
 };
 
-function csDir(): string {
+export function csDir(): string {
   return path.join(os.homedir(), '.hangar');
 }
 

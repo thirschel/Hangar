@@ -10,7 +10,10 @@ import type {
   Response,
   WorkspaceInfo,
 } from '../main/host-client';
+import type { McpCatalog, McpServerDef } from '../main/mcpCatalog';
 import type { Settings, ShellProfile } from '../main/settings';
+
+export type { McpCatalog, McpServerDef } from '../main/mcpCatalog';
 
 export type AppInfo = {
   version: string;
@@ -322,6 +325,13 @@ const api = {
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
+  mcpRead: (): Promise<McpCatalog> => ipcRenderer.invoke('cs:mcp-read'),
+  mcpUpsertServer: (name: string, def: McpServerDef): Promise<McpCatalog> =>
+    ipcRenderer.invoke('cs:mcp-upsert-server', name, def),
+  mcpRemoveServer: (name: string): Promise<McpCatalog> =>
+    ipcRenderer.invoke('cs:mcp-remove-server', name),
+  mcpSetEnabled: (repoKey: string, name: string, enabled: boolean): Promise<McpCatalog> =>
+    ipcRenderer.invoke('cs:mcp-set-enabled', repoKey, name, enabled),
   // RDP blank-terminal mitigations: resolved compositing state used to select the
   // terminal renderer (canvas under software compositing) and gate diagnostics.
   getRenderInfo: (): Promise<RenderInfo> => ipcRenderer.invoke('cs:get-render-info'),
@@ -368,6 +378,8 @@ const api = {
     on('cs:focus-workspace', callback),
   onPlayNotificationSound: (callback: () => void): Unsubscribe =>
     on('cs:play-notification-sound', callback),
+  onMcpChanged: (callback: (catalog: McpCatalog) => void): Unsubscribe =>
+    on('mcp:changed', callback),
   completeSetup: (opts: { autoUpdate: boolean }): Promise<void> =>
     ipcRenderer.invoke('cs:complete-setup', opts),
   sendInput: (session: string, data: string): void =>

@@ -23,6 +23,7 @@ export interface WorkspaceInfo {
   title: string;
   program: string;
   repoPath: string;
+  repoKey?: string;
   worktreePath: string;
   branch: string;
   sessionName: string;

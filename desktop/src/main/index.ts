@@ -31,6 +31,14 @@ import {
   type Settings,
   type ShellProfile,
 } from './settings';
+import {
+  readCatalog,
+  removeServer,
+  setRepoEnabled,
+  upsertServer,
+  type McpCatalog,
+  type McpServerDef,
+} from './mcpCatalog';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { isSoftwareCompositing, mergeDisableFeatures, isRemoteSession } from './render-detect';
@@ -890,6 +898,32 @@ ipcMain.handle('cs:get-settings', async (): Promise<Settings> => getSettings());
 ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Promise<Settings> => {
   return applySettings(patch);
 });
+
+ipcMain.handle('cs:mcp-read', async (): Promise<McpCatalog> => readCatalog());
+
+ipcMain.handle(
+  'cs:mcp-upsert-server',
+  async (_event, name: string, def: McpServerDef): Promise<McpCatalog> => {
+    const catalog = upsertServer(name, def);
+    sendToRenderer('mcp:changed', catalog);
+    return catalog;
+  },
+);
+
+ipcMain.handle('cs:mcp-remove-server', async (_event, name: string): Promise<McpCatalog> => {
+  const catalog = removeServer(name);
+  sendToRenderer('mcp:changed', catalog);
+  return catalog;
+});
+
+ipcMain.handle(
+  'cs:mcp-set-enabled',
+  async (_event, repoKey: string, name: string, on: boolean): Promise<McpCatalog> => {
+    const catalog = setRepoEnabled(repoKey, name, on);
+    sendToRenderer('mcp:changed', catalog);
+    return catalog;
+  },
+);
 
 ipcMain.handle('cs:detect-shells', async (): Promise<ShellProfile[]> => detectShells());
 
