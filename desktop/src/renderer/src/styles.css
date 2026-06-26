@@ -3851,6 +3851,14 @@ body.is-row-resizing .center-terminal__resizer::after {
   line-height: 1.5;
 }
 
+/* In the agent grid each tile hosts a full ChatViewHost, so start the composer
+   input at ~1 line to save vertical space. resize:vertical still lets the user
+   drag it up to max-height; the standard single-chat view keeps the taller input. */
+.grid-tile .chat-composer__input {
+  min-height: 36px;
+  height: 36px;
+}
+
 .chat-composer__input:focus {
   outline: none;
 }
