@@ -49,7 +49,7 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 		s.emitMCPDetail()
 		return
 	case *copilot.SessionSkillsLoadedData:
-		s.emitSkills()
+		s.emitSkills(s.ctx)
 		return
 	case *copilot.SessionUsageInfoData:
 		s.emitUsage(data)
@@ -105,11 +105,21 @@ func (s *sdkSession) emitMCPDetailSnapshot(details []copilotsdk.MCPServerDetail,
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindMCPDetail, MCPServers: servers})
 }
 
-// emitSkills emits one skills snapshot of the full current skills list (v13). The
-// desktop replaces its Skills page wholesale on each frame. A no-op until the SDK
-// has reported a skills-loaded event.
-func (s *sdkSession) emitSkills() {
-	s.emitSkillsSnapshot(s.sess.Skills())
+// emitSkills pulls the skills available to the session (RPC.Skills.Discover) and
+// emits one skills snapshot frame. The desktop replaces its Skills page wholesale.
+// Like instructions and agents, skills are discovered via an RPC pull rather than
+// the session-scoped skills-loaded event (which did not surface ~/.copilot/skills),
+// so this is emitted once on stream start and re-emitted when a skills-loaded event
+// signals a change. The SDK API is experimental, so a pull failure is logged and
+// skipped rather than breaking the stream.
+func (s *sdkSession) emitSkills(ctx context.Context) {
+	details, err := s.sess.DiscoverSkills(ctx)
+	if err != nil {
+		s.logf("SDK skills pull failed for session %q: %v", s.name, err)
+		return
+	}
+	s.logf("SDK skills discovered for session %q: %d skill(s)", s.name, len(details))
+	s.emitSkillsSnapshot(details)
 }
 
 // emitSkillsSnapshot maps a skills snapshot into a single skills frame. Split from

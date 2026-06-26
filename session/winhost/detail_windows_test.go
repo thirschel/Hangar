@@ -244,9 +244,9 @@ func TestEmitAgentsSnapshotEmptyNoFrame(t *testing.T) {
 
 // TestTranslateAndEmitPillBarUnchanged proves the additive mcp.detail emission
 // leaves the existing per-server mcp.status pill stream untouched, and that a
-// skills-loaded event routes to emitSkills (a no-op without captured skills)
-// rather than falling through to a generic frame. onSDKEvent is downstream of
-// copilotsdk capture, so the snapshot emitters are no-ops on this path.
+// skills-loaded event routes to emitSkills. emitSkills now pulls via
+// RPC.Skills.Discover; the unstarted test session has no client, so the pull
+// errors and emits no frame (rather than falling through to a generic frame).
 func TestTranslateAndEmitPillBarUnchanged(t *testing.T) {
 	s := newSDKSession("rich-route", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()

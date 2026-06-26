@@ -132,10 +132,12 @@ func (s *sdkSession) startResumed() error {
 		}
 		s.translateAndEmit(ev)
 	}
-	// Custom instructions and agents arrive via RPC pulls (not the event stream),
-	// so emit one-time snapshots on stream start so their pages populate (v23/v24).
+	// Custom instructions, agents, and skills arrive via RPC pulls (not the event
+	// stream), so emit one-time snapshots on stream start so their pages populate
+	// (v23/v24). Skills are additionally re-emitted on each live skills-loaded event.
 	s.emitInstructions(s.ctx)
 	s.emitAgents(s.ctx)
+	s.emitSkills(s.ctx)
 	// If the replayed transcript was interrupted before its terminal frame (e.g. the
 	// daemon was killed mid-turn), settle the dangling turn so the resumed session
 	// presents as idle instead of stuck "running".

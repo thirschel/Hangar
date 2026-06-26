@@ -444,6 +444,49 @@ func (s *Session) Agents(ctx context.Context) ([]AgentDetail, error) {
 	return out, nil
 }
 
+// DiscoverSkills enumerates the skills available to the session via the
+// server-level RPC.Skills.Discover for the rich Skills page. Like instructions
+// and agents, it uses Discover rather than the session-scoped skills-loaded event
+// because Discover surfaces the host/user-level skills (~/.copilot/skills) plus
+// plugin/built-in skills, and adds project skills under the session's WorkDir; the
+// event stream did not report the full set. ExcludeHostSkills defaults to false so
+// personal/custom/plugin/built-in skills are included. The SDK marks this API
+// experimental, so failures are returned (winhost logs and skips) and a nil RPC
+// surface yields no skills.
+func (s *Session) DiscoverSkills(ctx context.Context) ([]SkillDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if client.RPC == nil || client.RPC.Skills == nil {
+		return nil, nil
+	}
+	req := &csrpc.SkillsDiscoverRequest{}
+	if s.cfg.WorkDir != "" {
+		req.ProjectPaths = []string{s.cfg.WorkDir}
+	}
+	res, err := client.RPC.Skills.Discover(ctx, req)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	out := make([]SkillDetail, 0, len(res.Skills))
+	for _, sk := range res.Skills {
+		out = append(out, SkillDetail{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Enabled:     sk.Enabled,
+			Source:      string(sk.Source),
+			Path:        strDeref(sk.Path),
+		})
+	}
+	return out, nil
+}
+
 // modelDetail maps an SDK ModelInfo to the display-safe ModelDetail, carrying the
 // id, name, and the model's reasoning-effort options (v16). SupportedEfforts is a
 // defensive copy so callers never alias the SDK's slice.
