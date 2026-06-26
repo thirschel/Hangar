@@ -134,6 +134,12 @@ func (s *sdkSession) emitInstructions(ctx context.Context) {
 		s.logf("SDK instructions pull failed for session %q: %v", s.name, err)
 		return
 	}
+	// Diagnostic: surface exactly what the SDK discovered (count + per-source
+	// type/location/path) so an empty Instructions page is debuggable from host.log.
+	s.logf("SDK instructions discovered for session %q: %d source(s)", s.name, len(details))
+	for _, d := range details {
+		s.logf("  instruction: type=%q location=%q path=%q label=%q", d.Type, d.Location, d.SourcePath, d.Label)
+	}
 	s.emitInstructionsSnapshot(details)
 }
 

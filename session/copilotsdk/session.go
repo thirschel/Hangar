@@ -376,19 +376,28 @@ func (s *Session) ListModels(ctx context.Context) ([]ModelDetail, error) {
 	return out, nil
 }
 
-// Instructions pulls the custom-instruction sources the SDK loaded for this session
-// (RPC.Instructions.GetSources) for the rich Instructions page (v23). The SDK marks
-// this API experimental, so failures are returned to the caller (winhost logs and
-// skips) and a nil RPC surface yields no instructions rather than a panic.
+// Instructions enumerates the custom-instruction sources for the rich Instructions
+// page (v23). It uses the server-level RPC.Instructions.Discover rather than the
+// session-scoped GetSources because Discover surfaces the host/user-level files
+// (~/.copilot/copilot-instructions.md) and plugin sources, plus repository and
+// working-directory sources for the session's WorkDir; GetSources did not return
+// the user-level files. The SDK marks this API experimental, so failures are
+// returned (winhost logs and skips) and a nil RPC surface yields no instructions.
 func (s *Session) Instructions(ctx context.Context) ([]InstructionDetail, error) {
-	sess := s.session()
-	if sess == nil {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
 		return nil, fmt.Errorf("session not started")
 	}
-	if sess.RPC == nil || sess.RPC.Instructions == nil {
+	if client.RPC == nil || client.RPC.Instructions == nil {
 		return nil, nil
 	}
-	res, err := sess.RPC.Instructions.GetSources(ctx)
+	req := &csrpc.InstructionsDiscoverRequest{}
+	if s.cfg.WorkDir != "" {
+		req.ProjectPaths = []string{s.cfg.WorkDir}
+	}
+	res, err := client.RPC.Instructions.Discover(ctx, req)
 	if err != nil {
 		return nil, s.noteErr(err)
 	}
