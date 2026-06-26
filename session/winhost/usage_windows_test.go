@@ -37,9 +37,9 @@ func TestModelInfosMapping(t *testing.T) {
 // TestUsageFrameMapping asserts a context-usage event maps into one usage frame
 // carrying the model plus the token counts the desktop renders as context percent.
 func TestUsageFrameMapping(t *testing.T) {
-	frame := usageFrame(&copilot.SessionUsageInfoData{CurrentTokens: 12000, TokenLimit: 200000}, "gpt-5")
+	frame := usageFrame(12000, 200000, "gpt-5", 11.32)
 	if frame.Kind != proto.EventKindUsage || frame.Model != "gpt-5" ||
-		frame.CurrentTokens != 12000 || frame.TokenLimit != 200000 {
+		frame.CurrentTokens != 12000 || frame.TokenLimit != 200000 || frame.Aic != 11.32 {
 		t.Fatalf("usage frame = %+v", frame)
 	}
 }
@@ -50,7 +50,7 @@ func TestEmitUsageSnapshot(t *testing.T) {
 	s := newSDKSession("rich-usage", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
-	s.emitUsageSnapshot(&copilot.SessionUsageInfoData{CurrentTokens: 5000, TokenLimit: 128000}, "claude-sonnet-4.5")
+	s.emitUsageSnapshot(5000, 128000, "claude-sonnet-4.5", 2)
 
 	frames := s.richTranscript(0)
 	if len(frames) != 1 {
@@ -58,16 +58,16 @@ func TestEmitUsageSnapshot(t *testing.T) {
 	}
 	f := frames[0]
 	if f.Kind != proto.EventKindUsage || f.Model != "claude-sonnet-4.5" ||
-		f.CurrentTokens != 5000 || f.TokenLimit != 128000 {
+		f.CurrentTokens != 5000 || f.TokenLimit != 128000 || f.Aic != 2 {
 		t.Fatalf("usage frame = %+v", f)
 	}
 }
 
-func TestEmitUsageSnapshotNilNoFrame(t *testing.T) {
+func TestEmitUsageNilNoFrame(t *testing.T) {
 	s := newSDKSession("rich-usage", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
-	s.emitUsageSnapshot(nil, "gpt-5")
+	s.emitUsage(nil)
 	if frames := s.richTranscript(0); len(frames) != 0 {
 		t.Fatalf("nil usage should emit no frame, got %+v", frames)
 	}

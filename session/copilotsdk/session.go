@@ -125,6 +125,7 @@ type Session struct {
 	currentModel string
 	usageCurrent int64
 	usageLimit   int64
+	usageAicNano float64
 	usageKnown   bool
 	autoYes      atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
 	lastOutput   atomic.Int64 // unix-ms of the last output-changing event
@@ -560,6 +561,8 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 			s.captureSkillsLoaded(data)
 		case *copilot.SessionUsageInfoData:
 			s.captureUsage(data)
+		case *copilot.AssistantUsageData:
+			s.captureAssistantUsage(data)
 		case *copilot.SessionModelChangeData:
 			s.captureModelChange(data)
 		}

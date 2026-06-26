@@ -4,8 +4,10 @@ package winhost
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
+	"unsafe"
 
 	copilot "github.com/github/copilot-sdk/go"
 	"hangar/session/copilotsdk"
@@ -103,6 +105,68 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live rich frame")
 	}
+}
+
+func TestOnSDKEventAssistantUsageEmitsCachedUsageFrame(t *testing.T) {
+	s := newSDKSession("rich-aic", "copilot", t.TempDir(), "", false, "", "gpt-5", "", "", nil, nil)
+	defer s.close()
+	seedSDKUsageForTest(t, s.sess, 9000, 200000, 3e9)
+
+	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.AssistantUsageData{
+		CopilotUsage: &copilot.AssistantUsageCopilotUsage{TotalNanoAiu: 1e9},
+	}})
+
+	frames := s.richTranscript(0)
+	if len(frames) != 1 {
+		t.Fatalf("richTranscript returned %d frames, want 1", len(frames))
+	}
+	if frames[0].Kind != proto.EventKindUsage || frames[0].Model != "gpt-5" ||
+		frames[0].CurrentTokens != 9000 || frames[0].TokenLimit != 200000 || frames[0].Aic != 3 {
+		t.Fatalf("assistant usage frame = %+v", frames[0])
+	}
+}
+
+func TestOnSDKEventAssistantUsageSkipsUnknownUsage(t *testing.T) {
+	s := newSDKSession("rich-aic-unknown", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+	seedSDKUsageForTest(t, s.sess, 0, 0, 1e9)
+
+	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.AssistantUsageData{
+		CopilotUsage: &copilot.AssistantUsageCopilotUsage{TotalNanoAiu: 1e9},
+	}})
+
+	if frames := s.richTranscript(0); len(frames) != 0 {
+		t.Fatalf("assistant usage with unknown tokens should emit no frame, got %+v", frames)
+	}
+}
+
+func seedSDKUsageForTest(t *testing.T, sess *copilotsdk.Session, currentTokens, tokenLimit int64, aicNano float64) {
+	t.Helper()
+	v := reflect.ValueOf(sess).Elem()
+	setInt64FieldForTest(t, v, "usageCurrent", currentTokens)
+	setInt64FieldForTest(t, v, "usageLimit", tokenLimit)
+	setFloat64FieldForTest(t, v, "usageAicNano", aicNano)
+	if currentTokens != 0 || tokenLimit != 0 {
+		setBoolFieldForTest(t, v, "usageKnown", true)
+	}
+}
+
+func setInt64FieldForTest(t *testing.T, v reflect.Value, name string, value int64) {
+	t.Helper()
+	f := v.FieldByName(name)
+	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().SetInt(value)
+}
+
+func setFloat64FieldForTest(t *testing.T, v reflect.Value, name string, value float64) {
+	t.Helper()
+	f := v.FieldByName(name)
+	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().SetFloat(value)
+}
+
+func setBoolFieldForTest(t *testing.T, v reflect.Value, name string, value bool) {
+	t.Helper()
+	f := v.FieldByName(name)
+	reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem().SetBool(value)
 }
 
 func TestOnSDKEventMCPStatusFrames(t *testing.T) {

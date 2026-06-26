@@ -130,6 +130,7 @@ type UsageSnapshot = {
   model?: string;
   currentTokens?: number;
   tokenLimit?: number;
+  aic?: number;
 };
 
 // The session's current model selection carried on a 'model' frame: the model id
@@ -495,6 +496,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           model: frame.model,
           currentTokens: frame.currentTokens,
           tokenLimit: frame.tokenLimit,
+          aic: frame.aic,
         };
         break;
       case 'model':
@@ -570,7 +572,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   return { entries, servers, mcpServers, skills, turnInProgress, usage, modelState };
 }
 
-// Context % = currentTokens / tokenLimit, rendered as e.g. "42% context".
+// Context % = currentTokens / tokenLimit, rendered as e.g. "42% context used".
 // Returns undefined when the reading is missing or would divide by zero, so the
 // header shows nothing rather than "NaN%".
 function formatContextPercent(usage?: UsageSnapshot): string | undefined {
@@ -579,7 +581,11 @@ function formatContextPercent(usage?: UsageSnapshot): string | undefined {
   if (typeof currentTokens !== 'number' || typeof tokenLimit !== 'number' || tokenLimit <= 0) {
     return undefined;
   }
-  return `${Math.round((currentTokens / tokenLimit) * 100)}% context`;
+  return `${Math.round((currentTokens / tokenLimit) * 100)}% context used`;
+}
+
+function formatAic(units: number): string {
+  return units.toFixed(1).replace(/\.0$/, '');
 }
 
 // Per-session rich-frame cache, kept at module scope so it survives both a
@@ -852,8 +858,11 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   }
   const usageModel = transcript.usage?.model?.trim() || undefined;
   const contextLabel = formatContextPercent(transcript.usage);
+  const aic = transcript.usage?.aic;
+  const aicLabel =
+    typeof aic === 'number' && Number.isFinite(aic) && aic > 0 ? `${formatAic(aic)} AIC` : undefined;
   const composerInfo =
-    usageModel || contextLabel ? (
+    usageModel || contextLabel || aicLabel ? (
       <>
         {usageModel && <span className="chat-composer__info-model">{usageModel}</span>}
         {usageModel && contextLabel && (
@@ -862,6 +871,12 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
           </span>
         )}
         {contextLabel && <span className="chat-composer__info-context">{contextLabel}</span>}
+        {(usageModel || contextLabel) && aicLabel && (
+          <span className="chat-composer__info-sep" aria-hidden="true">
+            {'\u00B7'}
+          </span>
+        )}
+        {aicLabel && <span className="chat-composer__info-aic">{aicLabel}</span>}
       </>
     ) : undefined;
 

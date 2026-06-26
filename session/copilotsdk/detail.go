@@ -180,6 +180,14 @@ func (s *Session) Usage() (currentTokens, tokenLimit int64, known bool) {
 	return s.usageCurrent, s.usageLimit, s.usageKnown
 }
 
+// AicUnits returns the accumulated Copilot AI-unit usage reported by assistant
+// usage events, converted from nano-AI units to whole AI units.
+func (s *Session) AicUnits() float64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.usageAicNano / 1e9
+}
+
 func (s *Session) setCurrentModel(model string) {
 	if model == "" {
 		return
@@ -199,6 +207,17 @@ func (s *Session) captureUsage(data *copilot.SessionUsageInfoData) {
 	s.usageCurrent = data.CurrentTokens
 	s.usageLimit = data.TokenLimit
 	s.usageKnown = true
+	s.mu.Unlock()
+}
+
+// captureAssistantUsage adds the Copilot nano-AI-unit cost reported by an
+// AssistantUsageData event to the session's accumulated usage total.
+func (s *Session) captureAssistantUsage(data *copilot.AssistantUsageData) {
+	if data == nil || data.CopilotUsage == nil {
+		return
+	}
+	s.mu.Lock()
+	s.usageAicNano += data.CopilotUsage.TotalNanoAiu
 	s.mu.Unlock()
 }
 

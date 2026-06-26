@@ -54,6 +54,12 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 	case *copilot.SessionUsageInfoData:
 		s.emitUsage(data)
 		return
+	case *copilot.AssistantUsageData:
+		cur, lim, known := s.sess.Usage()
+		if known {
+			s.emitFrame(usageFrame(cur, lim, s.sess.CurrentModel(), s.sess.AicUnits()))
+		}
+		return
 	}
 	frame, ok := sdkEventFrame(ev)
 	if !ok {
@@ -121,24 +127,25 @@ func (s *sdkSession) emitSkillsSnapshot(details []copilotsdk.SkillDetail) {
 // correct for both live events and transcript replay (which bypasses the copilotsdk
 // capture); the Model is the session's current model, best-effort.
 func (s *sdkSession) emitUsage(data *copilot.SessionUsageInfoData) {
-	s.emitUsageSnapshot(data, s.sess.CurrentModel())
-}
-
-// emitUsageSnapshot maps a context-usage event + model into a single usage frame.
-// Split from emitUsage so the mapping is unit-testable without a live session.
-func (s *sdkSession) emitUsageSnapshot(data *copilot.SessionUsageInfoData, model string) {
 	if data == nil {
 		return
 	}
-	s.emitFrame(usageFrame(data, model))
+	s.emitUsageSnapshot(data.CurrentTokens, data.TokenLimit, s.sess.CurrentModel(), s.sess.AicUnits())
 }
 
-func usageFrame(data *copilot.SessionUsageInfoData, model string) proto.EventFrame {
+// emitUsageSnapshot maps context usage + model + AI units into a single usage frame.
+// Split from emitUsage so the mapping is unit-testable without a live session.
+func (s *sdkSession) emitUsageSnapshot(currentTokens, tokenLimit int64, model string, aic float64) {
+	s.emitFrame(usageFrame(currentTokens, tokenLimit, model, aic))
+}
+
+func usageFrame(currentTokens, tokenLimit int64, model string, aic float64) proto.EventFrame {
 	return proto.EventFrame{
 		Kind:          proto.EventKindUsage,
 		Model:         model,
-		CurrentTokens: int(data.CurrentTokens),
-		TokenLimit:    int(data.TokenLimit),
+		CurrentTokens: int(currentTokens),
+		TokenLimit:    int(tokenLimit),
+		Aic:           aic,
 	}
 }
 

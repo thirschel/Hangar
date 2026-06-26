@@ -110,6 +110,7 @@ export interface EventFrame {
   model?: string;
   currentTokens?: number;
   tokenLimit?: number;
+  aic?: number;
   // Resume-persistence frames for the rich Agent view. `decision` rides a
   // 'permission.resolved' frame ('approve' | 'reject') so an answered permission
   // replays as answered after a remount; 'input.resolved' carries only requestId.

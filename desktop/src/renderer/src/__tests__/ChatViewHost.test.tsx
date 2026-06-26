@@ -672,7 +672,7 @@ describe('ChatViewHost', () => {
     expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
   });
 
-  it('shows the model + context % header from a usage frame', async () => {
+  it('shows the model + context used header from a usage frame', async () => {
     const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
 
@@ -683,12 +683,49 @@ describe('ChatViewHost', () => {
       });
     });
 
-    // Header (above the composer box) shows the active model and 50% context.
+    // Header (above the composer box) shows the active model and 50% context used.
     // Scoped to the header because the model button also shows the active model.
     const header = container.querySelector('.chat-composer__info') as HTMLElement;
     expect(header).not.toBeNull();
     expect(within(header).getByText('gpt-5')).toBeInTheDocument();
-    expect(within(header).getByText('50% context')).toBeInTheDocument();
+    expect(within(header).getByText('50% context used')).toBeInTheDocument();
+  });
+
+  it('shows AIC used alongside model and context from a usage frame', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'usage', model: 'gpt-5', currentTokens: 5000, tokenLimit: 10000, aic: 12.3 },
+      });
+    });
+
+    const header = container.querySelector('.chat-composer__info') as HTMLElement;
+    expect(header).not.toBeNull();
+    expect(within(header).getByText('gpt-5')).toBeInTheDocument();
+    expect(within(header).getByText('50% context used')).toBeInTheDocument();
+    expect(within(header).getByText('12.3 AIC')).toBeInTheDocument();
+    expect(header.querySelector('.chat-composer__info-aic')).not.toBeNull();
+  });
+
+  it('omits AIC text when a usage frame has no AIC used', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'usage', model: 'gpt-5', currentTokens: 5000, tokenLimit: 10000 },
+      });
+    });
+
+    const header = container.querySelector('.chat-composer__info') as HTMLElement;
+    expect(header).not.toBeNull();
+    expect(within(header).getByText('50% context used')).toBeInTheDocument();
+    expect(within(header).queryByText(/AIC/)).not.toBeInTheDocument();
+    expect(header.querySelector('.chat-composer__info-aic')).toBeNull();
   });
 
   it('omits the context % when the usage reading would divide by zero', async () => {

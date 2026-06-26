@@ -46,6 +46,28 @@ func TestCaptureUsageThroughHandleEvent(t *testing.T) {
 	}
 }
 
+// TestCaptureAssistantUsageAccumulatedAicUnits asserts assistant usage events add
+// their Copilot nano-AI-unit costs and expose the sum as whole AI units.
+func TestCaptureAssistantUsageAccumulatedAicUnits(t *testing.T) {
+	s := New(Config{})
+
+	s.captureAssistantUsage(nil)
+	s.captureAssistantUsage(&copilot.AssistantUsageData{})
+	if got := s.AicUnits(); got != 0 {
+		t.Fatalf("AicUnits() after nil inputs = %v, want 0", got)
+	}
+
+	s.handleEvent(copilot.SessionEvent{Data: &copilot.AssistantUsageData{
+		CopilotUsage: &copilot.AssistantUsageCopilotUsage{TotalNanoAiu: 1e9},
+	}})
+	s.handleEvent(copilot.SessionEvent{Data: &copilot.AssistantUsageData{
+		CopilotUsage: &copilot.AssistantUsageCopilotUsage{TotalNanoAiu: 1e9},
+	}})
+	if got := s.AicUnits(); got != 2 {
+		t.Fatalf("AicUnits() = %v, want 2", got)
+	}
+}
+
 // TestCaptureModelChangeThroughHandleEvent asserts a model-change event updates the
 // tracked current model, and that an empty NewModel never clobbers it.
 func TestCaptureModelChangeThroughHandleEvent(t *testing.T) {

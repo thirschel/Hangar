@@ -87,7 +87,11 @@ import (
 // ToolCallID — the SDK tool-call id, set on tool.start / tool.complete (from the
 // ToolExecution*Data) and on permission.requested (the gated call's id, when the SDK
 // provides one). Additive: omitempty drops it for frames/permissions without a call id.
-const Version = 20
+// v21 surfaces the session's accumulated "AI units" used (the CLI's "AIC used") next to
+// the context. EventFrame gains Aic — a float on the usage frame, the running sum of the
+// SDK's AssistantUsageData CopilotUsage.TotalNanoAiu (in whole AI units). Additive:
+// omitempty drops it on every non-usage frame and on a usage frame before any request.
+const Version = 21
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -424,6 +428,10 @@ type EventFrame struct {
 	Model         string `json:"model,omitempty"`         // active model (on "usage")
 	CurrentTokens int    `json:"currentTokens,omitempty"` // context tokens used (on "usage")
 	TokenLimit    int    `json:"tokenLimit,omitempty"`    // context window size (on "usage")
+	// AI units consumed this session (v21): the running sum of AssistantUsageData
+	// CopilotUsage.TotalNanoAiu (in whole AI units), surfaced as the CLI's "AIC used".
+	// Populated only on EventKindUsage; omitempty drops it before any request.
+	Aic float64 `json:"aic,omitempty"` // accumulated AI units used (on "usage")
 	// MCP-detail + Skills snapshots (v13): each carries a full list that replaces
 	// the desktop view wholesale, populated only on its corresponding Kind.
 	MCPServers []MCPServerInfo `json:"mcpServers,omitempty"` // populated on EventKindMCPDetail
