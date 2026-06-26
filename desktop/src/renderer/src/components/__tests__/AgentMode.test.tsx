@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { WorkspaceInfo } from '../../../../main/host-client';
 import { AgentMode } from '../AgentMode';
+
+// Mock the shell dock to a sentinel: AgentMode's job is to compose it below the
+// chat; CenterTerminal's own behavior (localStorage, shell spawn) is covered by
+// CenterTerminal.test.tsx and pulls in xterm/localStorage we don't need here.
+vi.mock('../CenterTerminal', () => ({
+  CenterTerminal: () => <div data-testid="center-terminal" />,
+}));
 
 function workspace(overrides: Partial<WorkspaceInfo>): WorkspaceInfo {
   return {
@@ -45,6 +52,14 @@ describe('AgentMode', () => {
 
     // The real ChatView host mounts (section nav) once a chat is selected.
     expect(screen.getByRole('button', { name: 'Chat' })).toBeInTheDocument();
+    // The collapsible shell dock sits below the chat.
+    expect(screen.getByTestId('center-terminal')).toBeInTheDocument();
     expect(screen.queryByText(/Select a chat or start a new one/i)).not.toBeInTheDocument();
+  });
+
+  it('omits the terminal dock in the empty state', () => {
+    render(<AgentMode selectedChat={null} />);
+
+    expect(screen.queryByTestId('center-terminal')).not.toBeInTheDocument();
   });
 });
