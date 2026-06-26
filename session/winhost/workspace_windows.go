@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,10 +80,14 @@ type workspaceManager struct {
 	diffCache map[string]cachedDiff
 }
 
-// cachedDiff is a last-known added/removed line count for a workspace.
+// cachedDiff is the last-known diff result for a workspace: the added/removed
+// line totals (sidebar) and the per-file changed list (Changes tab). Both come
+// from a single `git diff --numstat` run by the background refresher, so neither
+// the ListWorkspaces nor the WorkspaceDiff request path has to spawn git. [#5]
 type cachedDiff struct {
 	added   int
 	removed int
+	files   []proto.FileDiffInfo
 }
 
 const (
@@ -539,7 +544,12 @@ func revivePlanForWorkspace(w *workspace) workspaceRevivePlan {
 	return plan
 }
 
-func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
+// toInfo builds the wire WorkspaceInfo for w. regenerating/phase are passed in
+// (rather than read from m.regens) so this can run WITHOUT holding m.mu: list
+// snapshots them under m.mu and then releases it before this per-session work. It
+// still reads live session state (host.mu via getSession), the run manager, and
+// the diff cache, each behind its own short-lived lock. [#6]
+func (m *workspaceManager) toInfo(w *workspace, regenerating bool, phase string) proto.WorkspaceInfo {
 	alive := false
 	busy, waiting := false, false
 	var lastOutMs int64
@@ -547,10 +557,6 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		alive = s.alive()
 		busy, waiting = s.agentStatus()
 		lastOutMs = s.lastOutputUnixMs()
-	}
-	regenerating, phase := false, ""
-	if regen, ok := m.regens[w.ID]; ok {
-		regenerating, phase = true, regen.phase
 	}
 	running, previewURL := m.host.runs.info(w.ID)
 	// Diff stats are served from the cache populated by the background refresher,
@@ -569,6 +575,15 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 	}
 }
 
+// regenInfoLocked reports whether a workspace is regenerating and its phase.
+// Callers must hold m.mu.
+func (m *workspaceManager) regenInfoLocked(id string) (regenerating bool, phase string) {
+	if regen, ok := m.regens[id]; ok {
+		return true, regen.phase
+	}
+	return false, ""
+}
+
 // --- diff stat cache (kept warm off the request path) ---
 
 // cachedDiffFor returns the last-known added/removed counts for a workspace, or
@@ -579,6 +594,22 @@ func (m *workspaceManager) cachedDiffFor(id string) (added, removed int) {
 	defer m.diffMu.Unlock()
 	d := m.diffCache[id]
 	return d.added, d.removed
+}
+
+// cachedFilesFor returns the last-known changed-file list for a workspace and
+// whether the refresher has computed it yet. The WorkspaceDiff handler serves
+// this so the Changes-tab poll never spawns git on the serial request path; a
+// cold miss (ok == false) tells the caller to fall back to a live compute. The
+// stored slice is replaced wholesale on each refresh and never mutated in place,
+// so returning it without copying is race-free. [#5]
+func (m *workspaceManager) cachedFilesFor(id string) (files []proto.FileDiffInfo, ok bool) {
+	m.diffMu.Lock()
+	defer m.diffMu.Unlock()
+	d, ok := m.diffCache[id]
+	if !ok {
+		return nil, false
+	}
+	return d.files, true
 }
 
 // startDiffRefresh launches the background goroutine that keeps diffCache warm.
@@ -605,8 +636,9 @@ func (m *workspaceManager) diffRefreshLoop() {
 	}
 }
 
-// refreshAllDiffs recomputes diff stats for every current workspace without
-// holding m.mu during the git work, then stores the results and drops stale keys.
+// refreshAllDiffs recomputes diff results for every current workspace without
+// holding m.mu during the git work, then prunes entries for archived workspaces,
+// so ListWorkspaces and WorkspaceDiff are always fast cache reads.
 func (m *workspaceManager) refreshAllDiffs() {
 	m.mu.Lock()
 	type job struct {
@@ -621,20 +653,47 @@ func (m *workspaceManager) refreshAllDiffs() {
 	}
 	m.mu.Unlock()
 
-	for _, j := range jobs {
-		select {
-		case <-m.host.shutdownCh:
-			return
-		default:
+	// Run the per-workspace git work in a bounded worker pool instead of strictly
+	// sequentially. Each workspace spawns git (`git add -N .` then `git diff`), and
+	// on Windows every CreateProcess is costly, so N workspaces previously cost
+	// N*(two-process latency) on every ~4s tick — serialized on this single
+	// goroutine. A small pool (half the CPUs, min 1) overlaps that I/O-bound work
+	// without oversubscribing the machine the user is also coding on. [#4a]
+	if len(jobs) > 0 {
+		workers := runtime.NumCPU() / 2
+		if workers < 1 {
+			workers = 1
 		}
-		stats := j.wt.DiffNumstatTimeout(diffComputeTimeout)
-		if stats == nil || stats.Error != nil {
-			// Keep the previous value on error/timeout rather than flapping to 0.
-			continue
+		if workers > len(jobs) {
+			workers = len(jobs)
 		}
-		m.diffMu.Lock()
-		m.diffCache[j.id] = cachedDiff{added: stats.Added, removed: stats.Removed}
-		m.diffMu.Unlock()
+		ch := make(chan job)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer recoverGoroutine("workspace.refreshDiffWorker")
+				for j := range ch {
+					select {
+					case <-m.host.shutdownCh:
+						continue // drain remaining jobs without spawning git
+					default:
+					}
+					m.refreshOneDiff(j.id, j.wt)
+				}
+			}()
+		}
+	feed:
+		for _, j := range jobs {
+			select {
+			case <-m.host.shutdownCh:
+				break feed
+			case ch <- j:
+			}
+		}
+		close(ch)
+		wg.Wait()
 	}
 
 	// Drop cache entries for workspaces that no longer exist.
@@ -647,14 +706,54 @@ func (m *workspaceManager) refreshAllDiffs() {
 	m.diffMu.Unlock()
 }
 
+// refreshOneDiff recomputes one workspace's changed files (and the derived
+// added/removed totals) from a single `git diff --numstat` and stores them in the
+// cache. On error/timeout it keeps the previous value rather than flapping to
+// zero. The totals equal parseNumstat's (binary files contribute 0), so the
+// sidebar counts are unchanged by sourcing them here. [#4a/#5]
+func (m *workspaceManager) refreshOneDiff(id string, wt *git.GitWorktree) {
+	files, err := wt.ChangedFilesTimeout(diffComputeTimeout)
+	if err != nil {
+		return
+	}
+	added, removed := 0, 0
+	infos := make([]proto.FileDiffInfo, 0, len(files))
+	for _, f := range files {
+		added += f.Added
+		removed += f.Removed
+		infos = append(infos, proto.FileDiffInfo{Path: f.Path, Added: f.Added, Removed: f.Removed})
+	}
+	m.diffMu.Lock()
+	m.diffCache[id] = cachedDiff{added: added, removed: removed, files: infos}
+	m.diffMu.Unlock()
+}
+
 // --- RPC handlers ---
 
 func (m *workspaceManager) list(req *proto.Request) *proto.Response {
+	// Snapshot a value copy of each workspace plus its regen state under m.mu, then
+	// release m.mu BEFORE the per-session work. Previously m.mu was held across every
+	// toInfo call, and each toInfo separately RLocked host.mu (getSession) and
+	// touched the run manager + diff cache — so one slow session/run/diff lookup
+	// blocked all workspace mutations (create/archive/regenerate) for the whole list.
+	// The workspace struct has only scalar fields, so the value copies are
+	// self-contained and race-free to read after the unlock. [#6]
+	type snapshot struct {
+		w            workspace
+		regenerating bool
+		phase        string
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]proto.WorkspaceInfo, 0, len(m.wss))
+	snaps := make([]snapshot, 0, len(m.wss))
 	for _, w := range m.wss {
-		out = append(out, m.toInfo(w))
+		regenerating, phase := m.regenInfoLocked(w.ID)
+		snaps = append(snaps, snapshot{w: *w, regenerating: regenerating, phase: phase})
+	}
+	m.mu.Unlock()
+
+	out := make([]proto.WorkspaceInfo, 0, len(snaps))
+	for i := range snaps {
+		out = append(out, m.toInfo(&snaps[i].w, snaps[i].regenerating, snaps[i].phase))
 	}
 	// Map iteration order is random; sort by creation time (then ID) so the list
 	// is stable across polls and the sidebar doesn't reshuffle.
@@ -669,12 +768,16 @@ func (m *workspaceManager) list(req *proto.Request) *proto.Response {
 
 func (m *workspaceManager) get(req *proto.Request) *proto.Response {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	w, ok := m.wss[req.WorkspaceID]
 	if !ok {
+		m.mu.Unlock()
 		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
 	}
-	info := m.toInfo(w)
+	// Snapshot under m.mu, then release before the per-session toInfo work. [#6]
+	wCopy := *w
+	regenerating, phase := m.regenInfoLocked(w.ID)
+	m.mu.Unlock()
+	info := m.toInfo(&wCopy, regenerating, phase)
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
 
@@ -1232,7 +1335,8 @@ func tailRows(screen string, n int) string {
 
 func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 	var oldName, newName, program, worktree, agentSessionID, shell string
-	var autoYes bool
+	var model, effort, contextTier string
+	var autoYes, rich bool
 	m.mu.Lock()
 	w := m.wss[id]
 	if m.tombstone[id] || w == nil {
@@ -1247,11 +1351,30 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 		w.AgentSessionID = ""
 	}
 	newName, program, worktree, agentSessionID, autoYes, shell = w.SessionName, w.Program, w.WorktreePath, w.AgentSessionID, w.AutoYes, w.Shell
+	rich = w.kindOrTerminal() == proto.WorkspaceKindRich
+	model, effort, contextTier = w.Model, w.ReasoningEffort, w.ContextTier
 	if shell == "" {
 		shell = "cmd"
 	}
 	m.saveLocked()
 	m.mu.Unlock()
+
+	// (Re)start using the same backend the workspace was created/revived with: the
+	// Copilot SDK ("rich") backend for a rich workspace, the ConPTY terminal backend
+	// otherwise. Previously this always used the terminal backend, so regenerating a
+	// rich workspace swapped its live session for a ConPTY one while metadata stayed
+	// Kind=rich, and the desktop's OpenRichStream then failed with "session is not a
+	// rich session" (richSession asserts *sdkSession). Regenerate is a FRESH
+	// conversation: AgentSessionID was rotated above and resume=false, so the rich
+	// path starts a new SDK session seeded with the user's persisted model selection.
+	// The closure reads newName by reference so the "session already exists" retry
+	// loop below (which rotates newName) reuses it. [#2]
+	start := func() error {
+		if rich {
+			return m.host.startSDKSession(newName, program, worktree, "", autoYes, agentSessionID, model, effort, contextTier, false)
+		}
+		return m.host.startManagedSessionWithShell(newName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+	}
 
 	oldKilled := false
 	defer func() {
@@ -1264,7 +1387,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 
 	var lastErr error
 	for attempt := 0; attempt < 8; attempt++ {
-		err := m.host.startManagedSessionWithShell(newName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+		err := start()
 		if err == nil {
 			return nil
 		}
@@ -1542,7 +1665,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	}
 	m.mu.Lock()
 	m.wss[id] = w
-	info := m.toInfo(w)
+	info := m.toInfo(w, false, "")
 	m.saveLocked()
 	m.mu.Unlock()
 
@@ -1561,46 +1684,58 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 		m.mu.Unlock()
 		return &proto.Response{ID: req.ID, OK: true, Content: "archive already in progress"}
 	}
+	// If a regeneration is in flight, signal it to stop and capture its done
+	// channel; we wait on it in the background (never inline) before tearing the
+	// session down, so the FINAL (regen-rotated) session name is the one we kill.
 	var done chan struct{}
 	if regen := m.regens[w.ID]; regen != nil {
 		m.tombstone[w.ID] = true
 		regen.closeOnce.Do(func() { close(regen.force) })
 		done = regen.done
 	}
-	m.mu.Unlock()
-
-	if done != nil {
-		select {
-		case <-done:
-		case <-time.After(60 * time.Second):
-		case <-m.host.shutdownCh:
-		}
-	}
-
-	m.mu.Lock()
-	w, ok = m.wss[req.WorkspaceID]
-	if !ok {
-		delete(m.tombstone, req.WorkspaceID)
-		m.mu.Unlock()
-		return &proto.Response{ID: req.ID, OK: true}
-	}
+	// Remove from the registry NOW so ListWorkspaces reflects the deletion on the
+	// next poll, then return immediately. The previous code waited INLINE on
+	// regen.done (up to 60s) before removing + tearing down, which stalled every
+	// other RPC on the serial control connection (see handleConn) for the whole
+	// regen wind-down. The tombstone stays set until the background teardown
+	// completes so a concurrent archive is a no-op and an in-flight regen keeps
+	// seeing the cancellation. [#3]
 	delete(m.wss, w.ID)
-	delete(m.tombstone, w.ID)
-	sessionName := w.SessionName
 	m.saveLocked()
 	m.mu.Unlock()
 
 	deleteWorktree := req.DeleteWorktree
 
 	// Tear down the agent session and (optionally) its worktree in the background.
-	// This is the slow part (process kill + RemoveAll + git), and the host handles a
-	// connection's requests serially (see handleConn), so doing it inline would block
-	// ListWorkspaces polling and AttachSession for every other chat until it finished.
-	// The workspace is already removed from the registry + persisted above, so the
-	// list reflects the deletion immediately; only the teardown is deferred. Mirrors
-	// the runAttach / runRichStream "return fast, work in a goroutine" pattern.
+	// This is the slow part (regen wind-down + process kill + RemoveAll + git), and
+	// the host handles a connection's requests serially (see handleConn), so doing
+	// it inline would block ListWorkspaces polling and AttachSession for every other
+	// chat until it finished. The workspace is already removed from the registry +
+	// persisted above, so the list reflects the deletion immediately; only the
+	// teardown is deferred. Mirrors the runAttach / runRichStream "return fast, work
+	// in a goroutine" pattern.
 	go func() {
 		defer recoverGoroutine("workspace.archiveTeardown")
+
+		// Wait for an in-flight regeneration to wind down before tearing the session
+		// down, so we kill the final (possibly rotated) session and leave no zombie.
+		// This wait used to run inline on the serial control pipe. [#3]
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(60 * time.Second):
+			case <-m.host.shutdownCh:
+			}
+		}
+
+		// Re-read the (possibly regen-rotated) session name now that the regen has
+		// stopped mutating it, and clear the tombstone. restartAgent mutates the
+		// workspace in place (never replaces the pointer), so the captured w is the
+		// same object the regen rotated.
+		m.mu.Lock()
+		sessionName := w.SessionName
+		delete(m.tombstone, w.ID)
+		m.mu.Unlock()
 
 		// Phase 1: Stop the agent session.
 		m.host.runs.stop(w.ID)
@@ -1667,6 +1802,13 @@ func (m *workspaceManager) diff(req *proto.Request) *proto.Response {
 			return proto.Errorf(req.ID, "file diff: %v", err)
 		}
 		return &proto.Response{ID: req.ID, OK: true, Diff: d}
+	}
+	// Serve the changed-files list from the cache the background refresher keeps
+	// warm, so the Changes-tab 2.5s poll never spawns git on the serial control
+	// pipe. Fall back to a live compute on a cold miss — a just-created workspace
+	// the refresher has not visited yet, or unit tests where it is not running. [#5]
+	if files, ok := m.cachedFilesFor(w.ID); ok {
+		return &proto.Response{ID: req.ID, OK: true, Files: files}
 	}
 	files, err := wt.ChangedFiles()
 	if err != nil {
@@ -1784,8 +1926,9 @@ func (m *workspaceManager) updateWorkspace(req *proto.Request) *proto.Response {
 	if req.Shell != "" {
 		w.Shell = req.Shell
 	}
+	regenerating, phase := m.regenInfoLocked(w.ID)
 	m.saveLocked()
-	info := m.toInfo(w)
+	info := m.toInfo(w, regenerating, phase)
 	m.mu.Unlock()
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
@@ -1874,10 +2017,14 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 	repoPath = absRepo
 
 	cfg := config.LoadConfig()
-	// These are Copilot sessions — always use "copilot" for the resume command
-	// (even if the user's default program is a wrapper like "cpa"). The workspace
-	// stores the user's configured program so regenerate uses their preference.
-	resumeProgram := "copilot"
+	// A browser-resumed Copilot session is a rich (Copilot SDK) chat. Start it
+	// through the SDK backend so the live session is actually a *sdkSession — the
+	// desktop then calls OpenRichStream, which asserts exactly that. Previously this
+	// started a TERMINAL ConPTY session yet persisted Kind=rich below, so
+	// host.richSession's type assertion failed with "session is not a rich session".
+	// The SDK launches copilot internally and resumes via the session id, so no
+	// resume command line is built; displayProgram is the user's configured program,
+	// kept as session metadata so a later regenerate uses their preference. [#1]
 	displayProgram := cfg.GetProgram()
 
 	shell := req.Shell
@@ -1905,8 +2052,7 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 		return proto.Errorf(req.ID, "create worktree: %v", err)
 	}
 
-	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.ResumeCommand(resumeProgram, req.SessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+	if err := m.host.startSDKSession(sessionName, displayProgram, wt.GetWorktreePath(), "", req.AutoYes, req.SessionID, "", "", "", true); err != nil {
 		_ = wt.Remove()
 		_ = wt.Prune()
 		return proto.Errorf(req.ID, "start agent: %v", err)
@@ -1926,7 +2072,7 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 	}
 	m.mu.Lock()
 	m.wss[id] = w
-	info := m.toInfo(w)
+	info := m.toInfo(w, false, "")
 	m.saveLocked()
 	m.mu.Unlock()
 

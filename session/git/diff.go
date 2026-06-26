@@ -188,6 +188,38 @@ func (g *GitWorktree) ChangedFiles() ([]FileDiffStat, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseNumstatFiles(out), nil
+}
+
+// ChangedFilesTimeout is like ChangedFiles but bounds the underlying git commands
+// with a timeout (see DiffNumstatTimeout for why `git add -N .` can hang). On
+// timeout the git process is killed and the returned error carries the deadline,
+// so callers (e.g. the background diff refresher) can keep the last known result
+// instead of blocking. The per-file numstat doubles as the source of the
+// added/removed totals, so one git invocation feeds both the sidebar counts and
+// the Changes-tab file list.
+func (g *GitWorktree) ChangedFilesTimeout(timeout time.Duration) ([]FileDiffStat, error) {
+	sha := g.GetBaseCommitSHA()
+	if err := ValidateSHA(sha); err != nil {
+		return nil, fmt.Errorf("invalid base commit SHA: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	env, cleanup, err := g.stageUntrackedForDiff(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	out, err := g.runGitCommandEnvContext(ctx, env, g.worktreePath, "--no-pager", "diff", "--numstat", sha)
+	if err != nil {
+		return nil, err
+	}
+	return parseNumstatFiles(out), nil
+}
+
+// parseNumstatFiles parses `git diff --numstat` output into per-file stats. Each
+// line is <added>\t<removed>\t<path>; binary files report "-" counts -> 0.
+func parseNumstatFiles(out string) []FileDiffStat {
 	var files []FileDiffStat
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
@@ -201,7 +233,7 @@ func (g *GitWorktree) ChangedFiles() ([]FileDiffStat, error) {
 		r, _ := strconv.Atoi(fields[1])
 		files = append(files, FileDiffStat{Path: fields[2], Added: a, Removed: r})
 	}
-	return files, nil
+	return files
 }
 
 // FileDiff returns the unified diff for a single file vs the base branch.

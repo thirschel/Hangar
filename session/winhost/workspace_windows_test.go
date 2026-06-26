@@ -400,11 +400,13 @@ func TestRevivePlanRoutesRichAndTerminal(t *testing.T) {
 }
 
 // TestResumeCopilotSessionReportsRichKind guards the session-browser "open as
-// rich" resume path: a workspace built by resumeCopilotSession must report
-// Kind == rich through toInfo so AgentMode keeps it. The struct previously
-// omitted the Kind field, so kindOrTerminal() defaulted it to "terminal" and the
-// browser-resumed rich chat was filtered out of AgentMode. A fake session
-// backend keeps this a fast unit test (no real ConPTY spawn).
+// rich" resume path: a browser-resumed Copilot session must (a) start through the
+// SDK ("rich") backend so the live session is a *sdkSession the desktop can attach
+// to via OpenRichStream, and (b) report Kind == rich through toInfo so AgentMode
+// keeps it. Previously this path started a TERMINAL ConPTY session yet persisted
+// Kind=rich, so OpenRichStream's *sdkSession assertion failed and AgentMode still
+// worked only by luck of the Kind tag. The SDK hook keeps this a fast unit test
+// (no real copilot CLI spawn) and records the resume routing. [#1]
 func TestResumeCopilotSessionReportsRichKind(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -413,7 +415,20 @@ func TestResumeCopilotSessionReportsRichKind(t *testing.T) {
 	repo := initTempRepo(t)
 
 	h := newHost(io.Discard, time.Minute)
-	h.newSession = newFake // in-memory session: no real ConPTY process
+	// Resume routes through the rich SDK backend, not the ConPTY factory, so stub
+	// startSDKSession: record the resume flag/session id and register a fake live
+	// session under the workspace name (no real copilot CLI).
+	var gotResume bool
+	var gotSessionID, gotName string
+	h.startSDKSessionHook = func(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error {
+		gotResume = resume
+		gotSessionID = sessionID
+		gotName = name
+		h.mu.Lock()
+		h.sessions[name] = &fakeSession{name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true}
+		h.mu.Unlock()
+		return nil
+	}
 	m := h.workspaces
 
 	const validID = "123e4567-e89b-12d3-a456-426614174000"
@@ -434,6 +449,17 @@ func TestResumeCopilotSessionReportsRichKind(t *testing.T) {
 	}
 	if got := resp.Workspace.Kind; got != proto.WorkspaceKindRich {
 		t.Fatalf("resumed workspace Kind = %q, want %q", got, proto.WorkspaceKindRich)
+	}
+	// The bug was the live session being terminal, not just the metadata tag: assert
+	// the resume actually went through the SDK backend with resume=true.
+	if !gotResume {
+		t.Fatalf("resume did not route through the SDK backend with resume=true")
+	}
+	if gotSessionID != validID {
+		t.Fatalf("SDK resume session id = %q, want %q", gotSessionID, validID)
+	}
+	if gotName != resp.Workspace.SessionName {
+		t.Fatalf("SDK session name = %q, want workspace session name %q", gotName, resp.Workspace.SessionName)
 	}
 }
 
@@ -725,12 +751,12 @@ func TestToInfoMapsLastOutput(t *testing.T) {
 	h.sessions[sessName] = &fakeSession{name: sessName, aliveFlag: true, lastOutputMs: lastMs}
 	h.mu.Unlock()
 
-	if got, want := m.toInfo(&workspace{ID: "ws1", SessionName: sessName}).LastOutputUnix, lastMs/1000; got != want {
+	if got, want := m.toInfo(&workspace{ID: "ws1", SessionName: sessName}, false, "").LastOutputUnix, lastMs/1000; got != want {
 		t.Fatalf("LastOutputUnix = %d, want %d", got, want)
 	}
 
 	// No live session for this workspace -> 0 (unknown).
-	if got := m.toInfo(&workspace{ID: "ws2", SessionName: "missing"}).LastOutputUnix; got != 0 {
+	if got := m.toInfo(&workspace{ID: "ws2", SessionName: "missing"}, false, "").LastOutputUnix; got != 0 {
 		t.Fatalf("LastOutputUnix (no session) = %d, want 0", got)
 	}
 }
@@ -767,10 +793,10 @@ func TestToInfoHasWorktree(t *testing.T) {
 	h := newHost(io.Discard, time.Minute)
 	m := h.workspaces
 
-	if !m.toInfo(&workspace{ID: "w1", SessionName: "s1"}).HasWorktree {
+	if !m.toInfo(&workspace{ID: "w1", SessionName: "s1"}, false, "").HasWorktree {
 		t.Fatalf("worktree-backed workspace should report HasWorktree=true")
 	}
-	if m.toInfo(&workspace{ID: "w2", SessionName: "s2", NoWorktree: true}).HasWorktree {
+	if m.toInfo(&workspace{ID: "w2", SessionName: "s2", NoWorktree: true}, false, "").HasWorktree {
 		t.Fatalf("in-place workspace should report HasWorktree=false")
 	}
 }

@@ -64,12 +64,19 @@ type managedSession interface {
 }
 
 type host struct {
-	mu          sync.RWMutex
-	sessions    map[string]managedSession
-	newSession  func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
-	activeConns int
-	lastActive  time.Time
-	idleTimeout time.Duration
+	mu         sync.RWMutex
+	sessions   map[string]managedSession
+	newSession func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
+	// startSDKSessionHook, when non-nil, replaces the real rich (Copilot SDK)
+	// backend in startSDKSession. Production leaves it nil; unit tests set it to
+	// register a fake session and record the call (e.g. the resume flag), so the
+	// rich create/resume/regenerate routing can be tested without launching a real
+	// copilot CLI (startSDKSession otherwise calls newSDKSession directly, with no
+	// factory seam like newSession).
+	startSDKSessionHook func(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error
+	activeConns         int
+	lastActive          time.Time
+	idleTimeout         time.Duration
 
 	ln           net.Listener
 	logger       *log.Logger
@@ -406,6 +413,11 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 // ("" = default). model/effort/contextTier (v18) seed the SDK model selection so a
 // revived session restores the user's choice ("" = a fresh chat / the SDK default).
 func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error {
+	// Test seam: bypass the real SDK backend (which spawns a copilot CLI) so the
+	// rich create/resume/regenerate routing is unit-testable. Nil in production.
+	if h.startSDKSessionHook != nil {
+		return h.startSDKSessionHook(name, program, workDir, baseDir, autoYes, sessionID, model, effort, contextTier, resume)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.sessions[name]; exists {

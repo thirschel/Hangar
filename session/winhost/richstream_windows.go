@@ -52,7 +52,13 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 		s.emitMCPDetail()
 		return
 	case *copilot.SessionSkillsLoadedData:
-		s.emitSkills(s.ctx)
+		// Dispatch off the SDK's single serial event goroutine: emitSkills makes a
+		// blocking DiscoverSkills RPC, and the read loop that delivers that RPC's
+		// response is the SAME goroutine running this handler. Calling it inline
+		// stalls all further event delivery and can deadlock if the SDK's event
+		// queue fills during the round-trip. Mirrors refreshResumedSessionState,
+		// which already offloads its blocking pulls to a goroutine. [#7]
+		go s.emitSkills(s.ctx)
 		return
 	case *copilot.SessionUsageInfoData:
 		s.emitUsage(data)

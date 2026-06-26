@@ -92,8 +92,13 @@ type Config struct {
 	MCPConfigPath string
 	DisableMCP    bool
 
-	// OnEvent receives every SDK event (after internal status tracking). A nil
-	// sink is tolerated (events are dropped) but yields no UI.
+	// OnEvent receives every SDK event (after internal status tracking). It is
+	// invoked on the SDK's single, serial event-delivery goroutine — the same
+	// goroutine that also delivers session RPC responses — so the callback MUST
+	// NOT block or call back into a session RPC (e.g. DiscoverSkills, MCPServers).
+	// Doing so stalls all further event delivery and can deadlock once the SDK's
+	// event queue fills during the round-trip; offload any such work to its own
+	// goroutine. A nil sink is tolerated (events are dropped) but yields no UI.
 	OnEvent func(copilot.SessionEvent)
 	// OnPrompt receives SDK handler prompts that are not emitted as SDK events
 	// (ask_user / elicitation). The handler then blocks until RespondUserInput.
