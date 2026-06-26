@@ -154,9 +154,24 @@ describe('McpPage', () => {
 
     fireEvent.click(within(githubRow as HTMLElement).getByRole('button', { name: 'Delete' }));
 
+    // Deleting now requires confirming in the modal — the API is not called yet.
+    expect(window.cs.mcpRemoveServer).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete server' }));
+
     await waitFor(() => {
       expect(window.cs.mcpRemoveServer).toHaveBeenCalledWith('github');
     });
+  });
+
+  it('cancels deletion without calling the remove API', async () => {
+    render(<McpPage servers={[]} workspace={makeWorkspace()} />);
+
+    const githubRow = (await screen.findByText('github')).closest('.mcp-page__catalog-row');
+    fireEvent.click(within(githubRow as HTMLElement).getByRole('button', { name: 'Delete' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    expect(window.cs.mcpRemoveServer).not.toHaveBeenCalled();
   });
 
   it('hides per-repo toggles in global-only mode', async () => {

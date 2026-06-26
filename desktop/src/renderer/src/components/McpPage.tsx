@@ -1,7 +1,8 @@
 import type { FormEvent, JSX } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { McpServerInfo, WorkspaceInfo } from '../../../main/host-client';
 import type { McpCatalog, McpServerDef } from '../../../preload';
+import { Modal, type ModalHandle } from './Modal';
 import { RegenerateModal } from './RegenerateModal';
 
 // MCP servers page. It combines the daemon-reported live status snapshot with
@@ -143,6 +144,12 @@ export function McpPage({ servers, workspace }: McpPageProps): JSX.Element {
   const [showRegen, setShowRegen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Server name pending deletion (drives the confirmation modal), plus its own
+  // busy/error so a failed delete keeps the modal open with the message.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteModalRef = useRef<ModalHandle>(null);
 
   const repoKey = workspace.repoKey?.trim() ?? '';
   const catalogRows = useMemo(
@@ -229,15 +236,17 @@ export function McpPage({ servers, workspace }: McpPageProps): JSX.Element {
     }
   };
 
-  const removeServer = async (name: string): Promise<void> => {
+  const confirmDelete = async (): Promise<void> => {
+    if (!pendingDelete) return;
     try {
-      setBusy(`remove:${name}`);
-      setCatalog(await window.cs.mcpRemoveServer(name));
-      setError(null);
+      setDeleteBusy(true);
+      setDeleteError(null);
+      setCatalog(await window.cs.mcpRemoveServer(pendingDelete));
+      deleteModalRef.current?.close();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(null);
+      setDeleteBusy(false);
     }
   };
 
@@ -410,8 +419,7 @@ export function McpPage({ servers, workspace }: McpPageProps): JSX.Element {
                     <button
                       type="button"
                       className="mcp-page__button mcp-page__button--danger"
-                      disabled={busy === `remove:${name}`}
-                      onClick={() => void removeServer(name)}
+                      onClick={() => setPendingDelete(name)}
                     >
                       Delete
                     </button>
@@ -561,6 +569,44 @@ export function McpPage({ servers, workspace }: McpPageProps): JSX.Element {
           }}
           onClose={() => setShowRegen(false)}
         />
+      )}
+
+      {pendingDelete && (
+        <Modal
+          ref={deleteModalRef}
+          title="Delete MCP server?"
+          onClose={() => {
+            setPendingDelete(null);
+            setDeleteError(null);
+          }}
+          error={deleteError}
+          busy={deleteBusy}
+          className="modal--confirm"
+          footer={
+            <>
+              <button
+                type="button"
+                onClick={() => deleteModalRef.current?.close()}
+                disabled={deleteBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button--primary"
+                onClick={() => void confirmDelete()}
+                disabled={deleteBusy}
+              >
+                {deleteBusy ? 'Deleting…' : 'Delete server'}
+              </button>
+            </>
+          }
+        >
+          <p>
+            Delete the MCP server <strong>"{pendingDelete}"</strong> from the catalog? This removes
+            it for all repositories and cannot be undone.
+          </p>
+        </Modal>
       )}
     </div>
   );
