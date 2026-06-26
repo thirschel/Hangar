@@ -2788,6 +2788,13 @@ body.is-row-resizing .center-terminal__resizer::after {
   min-height: 0;
   position: relative;
   padding: var(--space-1);
+  /* Lay the tile body out as a flex column so a fill-the-tile child sizes itself
+     from it: TermView (.agent-terminal, height:100%) and ChatViewHost (.chat-view,
+     flex:1) both need a definite-height parent, and the rich chat additionally
+     needs a flex-column parent so its transcript scrolls and the composer pins to
+     the bottom (mirrors .app-mode-agent__main). */
+  display: flex;
+  flex-direction: column;
 }
 .grid-tile__header[draggable='true'] {
   cursor: grab;
