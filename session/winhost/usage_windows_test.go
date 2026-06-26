@@ -47,7 +47,7 @@ func TestUsageFrameMapping(t *testing.T) {
 // TestEmitUsageSnapshot drives the usage emitter and asserts a single usage frame
 // lands on the rich event stream.
 func TestEmitUsageSnapshot(t *testing.T) {
-	s := newSDKSession("rich-usage", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-usage", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitUsageSnapshot(5000, 128000, "claude-sonnet-4.5", 2)
@@ -64,7 +64,7 @@ func TestEmitUsageSnapshot(t *testing.T) {
 }
 
 func TestEmitUsageNilNoFrame(t *testing.T) {
-	s := newSDKSession("rich-usage", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-usage", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitUsage(nil)
@@ -77,7 +77,7 @@ func TestEmitUsageNilNoFrame(t *testing.T) {
 // through onSDKEvent emits exactly one usage frame on the rich event stream. The
 // model is empty here because onSDKEvent is downstream of copilotsdk capture.
 func TestTranslateAndEmitUsageFrame(t *testing.T) {
-	s := newSDKSession("rich-usage-route", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-usage-route", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.SessionUsageInfoData{CurrentTokens: 9000, TokenLimit: 200000}})
@@ -128,7 +128,7 @@ func TestModelMethodsRouteToRichSession(t *testing.T) {
 	_, h, cleanup := startTestHostWithHandle(t)
 	defer cleanup()
 
-	rich := newSDKSession("rich-route", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	rich := newSDKSession(sdkSessionParams{name: "rich-route", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer rich.close()
 	h.mu.Lock()
 	h.sessions["rich-route"] = rich
@@ -154,7 +154,7 @@ func TestSetModelRoutesEffortAndTier(t *testing.T) {
 	_, h, cleanup := startTestHostWithHandle(t)
 	defer cleanup()
 
-	rich := newSDKSession("rich-effort", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	rich := newSDKSession(sdkSessionParams{name: "rich-effort", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer rich.close()
 	h.mu.Lock()
 	h.sessions["rich-effort"] = rich

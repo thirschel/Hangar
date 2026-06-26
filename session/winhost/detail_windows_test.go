@@ -84,7 +84,7 @@ func TestSkillInfosMapping(t *testing.T) {
 // TestEmitMCPDetailSnapshot asserts captured detail maps into a single mcp.detail
 // frame carrying the full server list (the desktop replaces its page wholesale).
 func TestEmitMCPDetailSnapshot(t *testing.T) {
-	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-detail", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitMCPDetailSnapshot([]copilotsdk.MCPServerDetail{
@@ -112,7 +112,7 @@ func TestEmitMCPDetailSnapshot(t *testing.T) {
 // TestEmitMCPDetailSnapshotPendingFallback asserts the startup/resume fallback:
 // with nothing captured yet, the configured names become a pending snapshot.
 func TestEmitMCPDetailSnapshotPendingFallback(t *testing.T) {
-	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-detail", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitMCPDetailSnapshot(nil, []string{"github", "", "docs"})
@@ -127,7 +127,7 @@ func TestEmitMCPDetailSnapshotPendingFallback(t *testing.T) {
 }
 
 func TestEmitMCPDetailSnapshotEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-detail", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-detail", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitMCPDetailSnapshot(nil, nil)
@@ -137,7 +137,7 @@ func TestEmitMCPDetailSnapshotEmptyNoFrame(t *testing.T) {
 }
 
 func TestEmitSkillsSnapshot(t *testing.T) {
-	s := newSDKSession("rich-skills", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-skills", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitSkillsSnapshot([]copilotsdk.SkillDetail{
@@ -155,7 +155,7 @@ func TestEmitSkillsSnapshot(t *testing.T) {
 }
 
 func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-skills", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-skills", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitSkillsSnapshot(nil)
@@ -168,7 +168,7 @@ func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
 // via RPC into a per-server status pill plus one mcp.detail snapshot (the path that
 // replaces "pending" with real status on resume).
 func TestEmitMCPStatusFrames(t *testing.T) {
-	s := newSDKSession("rich-resume-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-resume-mcp", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitMCPStatusFrames([]copilotsdk.MCPServerDetail{
@@ -196,7 +196,7 @@ func TestEmitMCPStatusFrames(t *testing.T) {
 
 // TestEmitMCPStatusFramesEmptyNoFrame asserts an empty status list emits nothing.
 func TestEmitMCPStatusFramesEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-resume-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-resume-mcp", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitMCPStatusFrames(nil)
@@ -221,7 +221,7 @@ func TestMCPStatusSignature(t *testing.T) {
 }
 
 func TestEmitInstructionsSnapshot(t *testing.T) {
-	s := newSDKSession("rich-instr", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-instr", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitInstructionsSnapshot([]copilotsdk.InstructionDetail{
@@ -249,7 +249,7 @@ func TestEmitInstructionsSnapshot(t *testing.T) {
 }
 
 func TestEmitInstructionsSnapshotEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-instr", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-instr", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitInstructionsSnapshot(nil)
@@ -259,7 +259,7 @@ func TestEmitInstructionsSnapshotEmptyNoFrame(t *testing.T) {
 }
 
 func TestEmitAgentsSnapshot(t *testing.T) {
-	s := newSDKSession("rich-agents", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-agents", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitAgentsSnapshot([]copilotsdk.AgentDetail{
@@ -289,7 +289,7 @@ func TestEmitAgentsSnapshot(t *testing.T) {
 }
 
 func TestEmitAgentsSnapshotEmptyNoFrame(t *testing.T) {
-	s := newSDKSession("rich-agents", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-agents", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitAgentsSnapshot(nil)
@@ -304,7 +304,7 @@ func TestEmitAgentsSnapshotEmptyNoFrame(t *testing.T) {
 // RPC.Skills.Discover; the unstarted test session has no client, so the pull
 // errors and emits no frame (rather than falling through to a generic frame).
 func TestTranslateAndEmitPillBarUnchanged(t *testing.T) {
-	s := newSDKSession("rich-route", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-route", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServersLoadedData{Servers: []copilot.MCPServersLoadedServer{

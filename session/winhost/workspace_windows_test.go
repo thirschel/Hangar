@@ -420,12 +420,12 @@ func TestResumeCopilotSessionReportsRichKind(t *testing.T) {
 	// session under the workspace name (no real copilot CLI).
 	var gotResume bool
 	var gotSessionID, gotName string
-	h.startSDKSessionHook = func(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error {
-		gotResume = resume
-		gotSessionID = sessionID
-		gotName = name
+	h.startSDKSessionHook = func(p sdkSessionParams) error {
+		gotResume = p.resume
+		gotSessionID = p.sessionID
+		gotName = p.name
 		h.mu.Lock()
-		h.sessions[name] = &fakeSession{name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true}
+		h.sessions[p.name] = &fakeSession{name: p.name, program: p.program, workDir: p.workDir, autoYes: p.autoYes, aliveFlag: true}
 		h.mu.Unlock()
 		return nil
 	}

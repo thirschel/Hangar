@@ -330,6 +330,13 @@ type WorkspaceInfo struct {
 	// does not affect the version handshake, so Version is intentionally not bumped
 	// for it. Empty/absent means "terminal".
 	Kind string `json:"kind,omitempty"`
+	// RepoKey is the canonicalized repo path (lowercased, forward-slash, cleaned)
+	// used as the per-repo key for the Hangar MCP catalog (~/.hangar/mcp.json). It
+	// is daemon-owned and lets a client enable/disable catalog servers for this
+	// workspace's repo without re-deriving the canonical form. Additive, optional
+	// response field — does not affect the version handshake, so Version is
+	// intentionally not bumped for it. Empty/absent when RepoPath is unknown.
+	RepoKey string `json:"repoKey,omitempty"`
 }
 
 // Workspace session backends (WorkspaceInfo.Kind).

@@ -112,6 +112,72 @@ func TestMCPServerNamesAccessor(t *testing.T) {
 	}
 }
 
+// TestExtraMCPServersOverlay proves the Hangar catalog (Config.ExtraMCPServers) is
+// unioned on top of the CLI's mcp-config.json base set, and that on a name
+// collision the CATALOG WINS (replaces the base entry). Both contribute to
+// MCPServerNames().
+func TestExtraMCPServersOverlay(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "mcp-config.json")
+	// Base CLI config: "base" (http) and "shared" (http) — "shared" collides with
+	// a catalog entry below.
+	content := `{"mcpServers":{
+		"base":{"type":"http","url":"https://example.com/base"},
+		"shared":{"type":"http","url":"https://example.com/cli-shared"}
+	}}`
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	extra := map[string]copilot.MCPServerConfig{
+		// Collides with the base "shared": the catalog (stdio) entry must win.
+		"shared":      copilot.MCPStdioServerConfig{Command: "catalog-cmd", Tools: []string{"*"}},
+		"catalogonly": copilot.MCPStdioServerConfig{Command: "only", Tools: []string{"*"}},
+	}
+	s := New(Config{MCPConfigPath: p, ExtraMCPServers: extra})
+	cfg := s.sessionConfig()
+
+	// Union: base + shared + catalogonly = 3 (shared de-duplicated).
+	if len(cfg.MCPServers) != 3 {
+		t.Fatalf("sessionConfig MCPServers len = %d, want 3 (union)", len(cfg.MCPServers))
+	}
+	// Collision: "shared" is the catalog stdio entry, NOT the base http one.
+	shared, ok := cfg.MCPServers["shared"].(copilot.MCPStdioServerConfig)
+	if !ok {
+		t.Fatalf("shared: catalog should win, want MCPStdioServerConfig, got %T", cfg.MCPServers["shared"])
+	}
+	if shared.Command != "catalog-cmd" {
+		t.Errorf("shared command = %q, want catalog-cmd (catalog must override base)", shared.Command)
+	}
+	// The non-colliding base server is preserved.
+	if _, ok := cfg.MCPServers["base"].(copilot.MCPHTTPServerConfig); !ok {
+		t.Errorf("base server should be preserved as MCPHTTPServerConfig, got %T", cfg.MCPServers["base"])
+	}
+
+	// All three appear (sorted) in MCPServerNames().
+	names := s.MCPServerNames()
+	if len(names) != 3 || names[0] != "base" || names[1] != "catalogonly" || names[2] != "shared" {
+		t.Fatalf("MCPServerNames = %v, want [base catalogonly shared]", names)
+	}
+}
+
+// TestExtraMCPServersNoBaseConfig proves the catalog still forwards when there is
+// no CLI mcp-config.json at all (the base load yields a nil map).
+func TestExtraMCPServersNoBaseConfig(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nope.json")
+	extra := map[string]copilot.MCPServerConfig{
+		"catalogonly": copilot.MCPStdioServerConfig{Command: "only", Tools: []string{"*"}},
+	}
+	s := New(Config{MCPConfigPath: missing, ExtraMCPServers: extra})
+	cfg := s.sessionConfig()
+	if len(cfg.MCPServers) != 1 {
+		t.Fatalf("sessionConfig MCPServers len = %d, want 1 (catalog only)", len(cfg.MCPServers))
+	}
+	if got := s.MCPServerNames(); len(got) != 1 || got[0] != "catalogonly" {
+		t.Fatalf("MCPServerNames = %v, want [catalogonly]", got)
+	}
+}
+
 func TestStatusString(t *testing.T) {
 	cases := map[Status]string{
 		StatusLoading: "loading",

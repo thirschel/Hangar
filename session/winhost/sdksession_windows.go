@@ -55,18 +55,44 @@ type sdkSession struct {
 	exitedNoted bool // true once the agent-process-exit error frame has been emitted
 }
 
-// newSDKSession builds a rich SDK-backed session. workDir is the git worktree;
-// baseDir overrides COPILOT_HOME (empty = default). model/effort/contextTier (v18)
-// seed the Copilot SDK model selection so a (re)created session restores the user's
-// choice (empty = the SDK default, a fresh chat). onEvent (optional) receives the
-// structured event stream for the eventual rich-view pipe.
-func newSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
+// sdkSessionParams bundles the inputs needed to (re)create a rich (Copilot SDK)
+// session. It is shared by newSDKSession and host.startSDKSession so the rich
+// create / revive / regenerate / resume paths thread the same fields — including
+// the per-repo Hangar MCP catalog overlay (extraMCP) — through one options struct
+// instead of a long positional argument list. resume selects start vs
+// startResumed and is consumed by startSDKSession, not newSDKSession.
+type sdkSessionParams struct {
+	name        string
+	program     string
+	workDir     string // the git worktree (ClientOptions.WorkingDirectory)
+	baseDir     string // COPILOT_HOME override; "" = default
+	autoYes     bool
+	sessionID   string
+	model       string
+	effort      string
+	contextTier string
+	resume      bool
+	// extraMCP are the Hangar MCP catalog servers enabled for this workspace's repo
+	// (session/winhost.enabledMCPFor). They are forwarded on top of the copilot
+	// CLI's mcp-config.json in copilotsdk.forwardedMCPServers, where the catalog
+	// wins on a name collision. nil = none.
+	extraMCP map[string]copilot.MCPServerConfig
+}
+
+// newSDKSession builds a rich SDK-backed session from p. p.workDir is the git
+// worktree; p.baseDir overrides COPILOT_HOME (empty = default). p.model/effort/
+// contextTier (v18) seed the Copilot SDK model selection so a (re)created session
+// restores the user's choice (empty = the SDK default, a fresh chat). p.extraMCP
+// are the per-repo Hangar MCP catalog servers, forwarded alongside the CLI's
+// mcp-config.json. onEvent (optional) receives the structured event stream for the
+// rich-view pipe. p.resume is not consumed here (startSDKSession uses it).
+func newSDKSession(p sdkSessionParams, onEvent func(copilot.SessionEvent), logger *stdlog.Logger) *sdkSession {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &sdkSession{
-		name:        name,
-		program:     program,
-		effort:      effort,
-		contextTier: contextTier,
+		name:        p.name,
+		program:     p.program,
+		effort:      p.effort,
+		contextTier: p.contextTier,
 		logger:      logger,
 		ctx:         ctx,
 		cancel:      cancel,
@@ -74,13 +100,14 @@ func newSDKSession(name, program, workDir, baseDir string, autoYes bool, session
 		richSubs:    make(map[*richSub]struct{}),
 	}
 	s.sess = copilotsdk.New(copilotsdk.Config{
-		WorkDir:         workDir,
-		BaseDir:         baseDir,
-		SessionID:       sessionID,
-		Model:           model,
-		ReasoningEffort: effort,
-		ContextTier:     contextTier,
-		AutoYes:         autoYes,
+		WorkDir:         p.workDir,
+		BaseDir:         p.baseDir,
+		SessionID:       p.sessionID,
+		Model:           p.model,
+		ReasoningEffort: p.effort,
+		ContextTier:     p.contextTier,
+		AutoYes:         p.autoYes,
+		ExtraMCPServers: p.extraMCP,
 		OnEvent: func(ev copilot.SessionEvent) {
 			s.onSDKEvent(ev)
 			if onEvent != nil {

@@ -73,7 +73,7 @@ type host struct {
 	// rich create/resume/regenerate routing can be tested without launching a real
 	// copilot CLI (startSDKSession otherwise calls newSDKSession directly, with no
 	// factory seam like newSession).
-	startSDKSessionHook func(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error
+	startSDKSessionHook func(p sdkSessionParams) error
 	activeConns         int
 	lastActive          time.Time
 	idleTimeout         time.Duration
@@ -408,24 +408,26 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 
 // startSDKSession creates, starts/resumes and registers a Copilot SDK-backed
 // "rich" session (the opt-in structured backend, parallel to
-// startManagedSessionWithShell). sessionID seeds or resumes the SDK session id so
-// a later resume continues the same conversation; baseDir overrides COPILOT_HOME
-// ("" = default). model/effort/contextTier (v18) seed the SDK model selection so a
+// startManagedSessionWithShell). p.sessionID seeds or resumes the SDK session id so
+// a later resume continues the same conversation; p.baseDir overrides COPILOT_HOME
+// ("" = default). p.model/effort/contextTier (v18) seed the SDK model selection so a
 // revived session restores the user's choice ("" = a fresh chat / the SDK default).
-func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error {
+// p.extraMCP are the per-repo Hangar MCP catalog servers (resolved by the caller via
+// enabledMCPFor). p.resume selects resume vs fresh start.
+func (h *host) startSDKSession(p sdkSessionParams) error {
 	// Test seam: bypass the real SDK backend (which spawns a copilot CLI) so the
 	// rich create/resume/regenerate routing is unit-testable. Nil in production.
 	if h.startSDKSessionHook != nil {
-		return h.startSDKSessionHook(name, program, workDir, baseDir, autoYes, sessionID, model, effort, contextTier, resume)
+		return h.startSDKSessionHook(p)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if _, exists := h.sessions[name]; exists {
-		return fmt.Errorf("session already exists: %s", name)
+	if _, exists := h.sessions[p.name]; exists {
+		return fmt.Errorf("session already exists: %s", p.name)
 	}
-	s := newSDKSession(name, program, workDir, baseDir, autoYes, sessionID, model, effort, contextTier, nil, h.logger)
+	s := newSDKSession(p, nil, h.logger)
 	var err error
-	if resume {
+	if p.resume {
 		err = s.startResumed()
 	} else {
 		err = s.start()
@@ -437,9 +439,9 @@ func (h *host) startSDKSession(name, program, workDir, baseDir string, autoYes b
 	// (re)attaching desktop restores the model selector (v18). A no-op for a fresh
 	// chat with no selection yet.
 	s.emitModelFrame()
-	h.sessions[name] = s
+	h.sessions[p.name] = s
 	h.lastActive = time.Now()
-	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", name, filepath.Base(program), workDir, resume)
+	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", p.name, filepath.Base(p.program), p.workDir, p.resume)
 	return nil
 }
 

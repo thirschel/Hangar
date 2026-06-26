@@ -572,6 +572,7 @@ func (m *workspaceManager) toInfo(w *workspace, regenerating bool, phase string)
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 		HasWorktree: !w.NoWorktree,
 		Kind:        w.kindOrTerminal(),
+		RepoKey:     canonRepoKey(w.RepoPath),
 	}
 }
 
@@ -826,7 +827,13 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 		m.host.logger.Printf("workspace %s: missing persisted AgentSessionID; launching without resume", w.ID)
 	}
 	if plan.rich {
-		if err := m.host.startSDKSession(w.SessionName, plan.program, w.WorktreePath, "", w.AutoYes, plan.agentSessionID, w.Model, w.ReasoningEffort, w.ContextTier, plan.resume); err != nil {
+		extraMCP := m.enabledMCPFor(w.RepoPath)
+		if err := m.host.startSDKSession(sdkSessionParams{
+			name: w.SessionName, program: plan.program, workDir: w.WorktreePath,
+			autoYes: w.AutoYes, sessionID: plan.agentSessionID,
+			model: w.Model, effort: w.ReasoningEffort, contextTier: w.ContextTier,
+			resume: plan.resume, extraMCP: extraMCP,
+		}); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -1334,7 +1341,7 @@ func tailRows(screen string, n int) string {
 }
 
 func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
-	var oldName, newName, program, worktree, agentSessionID, shell string
+	var oldName, newName, program, worktree, agentSessionID, shell, repoPath string
 	var model, effort, contextTier string
 	var autoYes, rich bool
 	m.mu.Lock()
@@ -1353,6 +1360,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 	newName, program, worktree, agentSessionID, autoYes, shell = w.SessionName, w.Program, w.WorktreePath, w.AgentSessionID, w.AutoYes, w.Shell
 	rich = w.kindOrTerminal() == proto.WorkspaceKindRich
 	model, effort, contextTier = w.Model, w.ReasoningEffort, w.ContextTier
+	repoPath = w.RepoPath
 	if shell == "" {
 		shell = "cmd"
 	}
@@ -1369,9 +1377,18 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 	// path starts a new SDK session seeded with the user's persisted model selection.
 	// The closure reads newName by reference so the "session already exists" retry
 	// loop below (which rotates newName) reuses it. [#2]
+	// extraMCP is the per-repo Hangar MCP catalog overlay; repoPath was captured
+	// under the lock above and the catalog read is lock-free, so computing it once
+	// here (and reusing it across the retry loop) is safe. [#2]
+	extraMCP := m.enabledMCPFor(repoPath)
 	start := func() error {
 		if rich {
-			return m.host.startSDKSession(newName, program, worktree, "", autoYes, agentSessionID, model, effort, contextTier, false)
+			return m.host.startSDKSession(sdkSessionParams{
+				name: newName, program: program, workDir: worktree,
+				autoYes: autoYes, sessionID: agentSessionID,
+				model: model, effort: effort, contextTier: contextTier,
+				resume: false, extraMCP: extraMCP,
+			})
 		}
 		return m.host.startManagedSessionWithShell(newName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
 	}
@@ -1506,11 +1523,17 @@ func richBackend(reqRich, cfgEnabled, copilotAgent bool) bool {
 
 // startWorkspaceSession starts a workspace's agent session using the rich (Copilot
 // SDK) backend when rich is set, or the default ConPTY terminal backend otherwise.
-func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string, resume bool) error {
+// repoPath is the workspace's repo root, used to resolve the per-repo Hangar MCP
+// catalog overlay for the rich backend (ignored by the terminal backend).
+func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string, resume bool, repoPath string) error {
 	if rich {
 		// A fresh chat has no persisted model selection yet; pass empty model/effort/
 		// tier so the SDK uses its default. Revive threads the stored selection (v18).
-		return m.host.startSDKSession(sessionName, program, worktree, "", autoYes, agentSessionID, "", "", "", resume)
+		return m.host.startSDKSession(sdkSessionParams{
+			name: sessionName, program: program, workDir: worktree,
+			autoYes: autoYes, sessionID: agentSessionID, resume: resume,
+			extraMCP: m.enabledMCPFor(repoPath),
+		})
 	}
 	return m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, cols, rows, autoYes)
 }
@@ -1620,7 +1643,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 			repoPath = dir
 		}
 		phase("resolve-folder")
-		if err := m.startWorkspaceSession(rich, sessionName, program, worktreePath, shell, cols, rows, req.AutoYes, agentSessionID, false); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, worktreePath, shell, cols, rows, req.AutoYes, agentSessionID, false, repoPath); err != nil {
 			return proto.Errorf(req.ID, "start agent: %v", err)
 		}
 		phase("start-agent")
@@ -1644,7 +1667,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		}
 		phase("setup-worktree")
 
-		if err := m.startWorkspaceSession(rich, sessionName, program, wt.GetWorktreePath(), shell, cols, rows, req.AutoYes, agentSessionID, false); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, wt.GetWorktreePath(), shell, cols, rows, req.AutoYes, agentSessionID, false, wt.GetRepoPath()); err != nil {
 			// Roll back the worktree so a failed create leaves no orphan.
 			_ = wt.Remove()
 			_ = wt.Prune()
@@ -2052,7 +2075,11 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 		return proto.Errorf(req.ID, "create worktree: %v", err)
 	}
 
-	if err := m.host.startSDKSession(sessionName, displayProgram, wt.GetWorktreePath(), "", req.AutoYes, req.SessionID, "", "", "", true); err != nil {
+	extraMCP := m.enabledMCPFor(wt.GetRepoPath())
+	if err := m.host.startSDKSession(sdkSessionParams{
+		name: sessionName, program: displayProgram, workDir: wt.GetWorktreePath(),
+		autoYes: req.AutoYes, sessionID: req.SessionID, resume: true, extraMCP: extraMCP,
+	}); err != nil {
 		_ = wt.Remove()
 		_ = wt.Prune()
 		return proto.Errorf(req.ID, "start agent: %v", err)

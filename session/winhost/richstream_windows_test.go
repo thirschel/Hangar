@@ -15,7 +15,7 @@ import (
 )
 
 func TestSDKSessionRichEventsAndReplay(t *testing.T) {
-	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich1", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	mcpServer := "github"
@@ -136,7 +136,7 @@ func TestSDKEventFrameIdleTimestamp(t *testing.T) {
 }
 
 func TestOnSDKEventAssistantUsageEmitsCachedUsageFrame(t *testing.T) {
-	s := newSDKSession("rich-aic", "copilot", t.TempDir(), "", false, "", "gpt-5", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-aic", program: "copilot", workDir: t.TempDir(), model: "gpt-5"}, nil, nil)
 	defer s.close()
 	seedSDKUsageForTest(t, s.sess, 9000, 200000, 3e9)
 
@@ -155,7 +155,7 @@ func TestOnSDKEventAssistantUsageEmitsCachedUsageFrame(t *testing.T) {
 }
 
 func TestOnSDKEventAssistantUsageSkipsUnknownUsage(t *testing.T) {
-	s := newSDKSession("rich-aic-unknown", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-aic-unknown", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 	seedSDKUsageForTest(t, s.sess, 0, 0, 1e9)
 
@@ -198,7 +198,7 @@ func setBoolFieldForTest(t *testing.T, v reflect.Value, name string, value bool)
 }
 
 func TestOnSDKEventMCPStatusFrames(t *testing.T) {
-	s := newSDKSession("rich-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-mcp", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	failed := "boom"
@@ -256,7 +256,7 @@ func TestPermissionFrameIncludesQuestionAndTool(t *testing.T) {
 }
 
 func TestSDKPromptEmitsUserInputFrame(t *testing.T) {
-	s := newSDKSession("rich1", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich1", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	_, sub := s.richSubscribe(0)
@@ -368,7 +368,7 @@ func TestSDKEventFrameModelChange(t *testing.T) {
 // onSDKEvent (the live and resume-replay path) onto resolution frames, so an
 // answered permission/input is dismissed on resume instead of re-prompting.
 func TestTranslateAndEmitResolutionFrames(t *testing.T) {
-	s := newSDKSession("rich-resolve", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-resolve", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.onSDKEvent(copilot.SessionEvent{Data: &copilot.PermissionCompletedData{RequestID: "perm-1", Result: copilot.PermissionApproved{}}})
@@ -390,7 +390,7 @@ func TestTranslateAndEmitResolutionFrames(t *testing.T) {
 // session's current model (seeded from the v18 newSDKSession params) plus the
 // persisted effort and tier, and is a no-op when no model is known (a fresh chat).
 func TestEmitModelFrame(t *testing.T) {
-	s := newSDKSession("rich-model", "copilot", t.TempDir(), "", false, "", "gpt-5", "high", "long_context", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-model", program: "copilot", workDir: t.TempDir(), model: "gpt-5", effort: "high", contextTier: "long_context"}, nil, nil)
 	defer s.close()
 
 	s.emitModelFrame()
@@ -402,7 +402,7 @@ func TestEmitModelFrame(t *testing.T) {
 		t.Fatalf("model frame = %+v", f)
 	}
 
-	bare := newSDKSession("rich-bare", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	bare := newSDKSession(sdkSessionParams{name: "rich-bare", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer bare.close()
 	bare.emitModelFrame()
 	if got := bare.richTranscript(0); len(got) != 0 {
@@ -466,7 +466,7 @@ func TestTurnDangling(t *testing.T) {
 // TestEmitIdleIfDanglingAppendsIdle asserts a revived session whose log ends mid-turn
 // gets a synthetic, timestamp-less idle frame so the desktop resets turnInProgress.
 func TestEmitIdleIfDanglingAppendsIdle(t *testing.T) {
-	s := newSDKSession("rich-dangle", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-dangle", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindToolStart, ToolName: "bash"})
@@ -484,7 +484,7 @@ func TestEmitIdleIfDanglingAppendsIdle(t *testing.T) {
 // TestEmitIdleIfDanglingNoopWhenTerminal asserts no synthetic idle is added when the
 // replayed log already ended cleanly (no duplicate marker).
 func TestEmitIdleIfDanglingNoopWhenTerminal(t *testing.T) {
-	s := newSDKSession("rich-clean", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	s := newSDKSession(sdkSessionParams{name: "rich-clean", program: "copilot", workDir: t.TempDir()}, nil, nil)
 	defer s.close()
 
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindToolStart, ToolName: "bash"})

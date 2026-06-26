@@ -433,11 +433,11 @@ func TestRestartAgentRichRoutesToSDK(t *testing.T) {
 	var calls int
 	var gotResume bool
 	var gotName, gotModel string
-	h.startSDKSessionHook = func(name, program, workDir, baseDir string, autoYes bool, sessionID, model, effort, contextTier string, resume bool) error {
+	h.startSDKSessionHook = func(p sdkSessionParams) error {
 		calls++
-		gotResume, gotName, gotModel = resume, name, model
+		gotResume, gotName, gotModel = p.resume, p.name, p.model
 		h.mu.Lock()
-		h.sessions[name] = &fakeSession{name: name, program: program, workDir: workDir, autoYes: autoYes, aliveFlag: true}
+		h.sessions[p.name] = &fakeSession{name: p.name, program: p.program, workDir: p.workDir, autoYes: p.autoYes, aliveFlag: true}
 		h.mu.Unlock()
 		return nil
 	}

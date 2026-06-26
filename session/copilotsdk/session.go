@@ -92,6 +92,14 @@ type Config struct {
 	MCPConfigPath string
 	DisableMCP    bool
 
+	// ExtraMCPServers are additional MCP servers to forward on top of the copilot
+	// CLI's mcp-config.json — the Hangar-owned catalog (~/.hangar/mcp.json) resolved
+	// per repo by the daemon (session/winhost). They are overlaid in
+	// forwardedMCPServers AFTER the base set, so on a name collision the catalog
+	// server WINS (replaces the CLI one). nil = none. DisableMCP suppresses both
+	// the base set and this overlay.
+	ExtraMCPServers map[string]copilot.MCPServerConfig
+
 	// OnEvent receives every SDK event (after internal status tracking). It is
 	// invoked on the SDK's single, serial event-delivery goroutine — the same
 	// goroutine that also delivers session RPC responses — so the callback MUST
@@ -717,6 +725,20 @@ func (s *Session) forwardedMCPServers() map[string]copilot.MCPServerConfig {
 		s.setMCPServerNames(nil)
 		s.setMCPTools(nil)
 		return nil
+	}
+	// Overlay the Hangar MCP catalog (~/.hangar/mcp.json, resolved per repo by the
+	// daemon and threaded in as Config.ExtraMCPServers) on top of the copilot CLI's
+	// mcp-config.json base set. The overlay is applied AFTER the base set, so on a
+	// name collision the catalog server WINS (it replaces the CLI-configured one).
+	// This also lets the catalog forward servers when there is no CLI config at all
+	// (servers is nil from loadMCPServers).
+	if len(s.cfg.ExtraMCPServers) > 0 {
+		if servers == nil {
+			servers = make(map[string]copilot.MCPServerConfig, len(s.cfg.ExtraMCPServers))
+		}
+		for name, cfg := range s.cfg.ExtraMCPServers {
+			servers[name] = cfg
+		}
 	}
 	s.setMCPServerNames(sortedMCPServerNames(servers))
 	s.setMCPTools(mcpConfiguredTools(s.mcpConfigPath()))

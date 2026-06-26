@@ -47,6 +47,43 @@ agent is Copilot. Anything else falls back to the terminal backend.
 - **Crash handling:** if the Copilot child process dies, the session is marked not‑alive
   and the next stream open revives it.
 
+## MCP servers (Hangar catalog)
+
+Beyond the Copilot CLI's own `~/.copilot/mcp-config.json`, Hangar keeps a **global MCP
+catalog** with **per‑repo enablement** at **`~/.hangar/mcp.json`** (`config.GetConfigDir()`).
+It applies to the **rich backend only** — terminal sessions are unaffected.
+
+```jsonc
+{
+  "servers": {
+    "my-stdio": { "type": "local", "command": "agency.exe", "args": ["serve"],
+                  "env": { "TOKEN": "…" }, "cwd": "C:/tools", "tools": ["*"], "timeout": 60 },
+    "my-http":  { "type": "http",  "url": "https://example/mcp",
+                  "headers": { "Authorization": "Bearer …" } }
+  },
+  "repoEnabled": { "c:/users/me/code/myrepo": ["my-stdio"] }
+}
+```
+
+- **Per‑repo scope:** a server is forwarded to a session only if its name is listed under
+  the session repo's key in `repoEnabled`. Keys are canonicalized with
+  **`canonRepoKey(p) = ToLower(ToSlash(Clean(p)))`** so the various stored repo‑path forms
+  (forward‑slash from `git rev-parse`, back‑slash from `filepath.Clean`) reconcile to one key.
+- **Types:** `type` is `"local"` (stdio) or `"http"`; **`"sse"` is accepted and treated as
+  `http`**. If `type` is omitted it's inferred (`url` ⇒ http, `command` ⇒ stdio). `tools`
+  defaults to `["*"]`; `timeout` is in **seconds** (`0` = unset, clamped to `0…600`); stdio
+  `cwd` maps to the SDK's working directory.
+- **Precedence — catalog wins:** the catalog overlay is applied **after** the CLI
+  `mcp-config.json`, so on a name collision the Hangar catalog entry **overrides** the CLI
+  one. The merged set is re‑read fresh on every session **Start/Resume**.
+- **Windows command note:** stdio `command` is launched directly (no shell), so give the
+  executable's real name **including extension** (e.g. `agency.exe`, `npx.cmd`); bare names
+  relying on `PATHEXT`/shell resolution may not start.
+
+Code map: `session/winhost/mcpcatalog_windows.go` (catalog load + `canonRepoKey` +
+per‑repo resolution), threaded into session start via `sdkSessionParams.extraMCP` and
+overlaid in `copilotsdk.Session.forwardedMCPServers()`.
+
 ## Architecture (how it fits)
 
 - The rich backend is a **sibling** to the ConPTY terminal backend behind the host's
@@ -75,7 +112,7 @@ event pipeline), `session/winhost/proto/` (the wire contract),
 - Windows‑only and Copilot‑only; the terminal backend stays the default everywhere else.
 - Unlike the terminal backend, the rich view does **not** inherit your interactive
   shell's environment/tools — it relies on the Copilot CLI's own auth/config plus the
-  forwarded MCP config.
+  forwarded MCP config (the CLI's `mcp-config.json` **and** the Hangar catalog above).
 - Distribution of the Copilot CLI (PATH vs bundling vs `COPILOT_CLI_PATH`) and the
   associated AGPL/licensing considerations are an open project decision.
 - Some hardening items (hard‑crash orphan reconcile, a ~10‑session load test, a
