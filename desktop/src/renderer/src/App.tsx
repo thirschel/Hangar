@@ -1,5 +1,6 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
@@ -142,6 +143,11 @@ export function App(): JSX.Element {
   const connectionRef = useRef<ConnectionState>('connecting');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const refreshInFlightRef = useRef<Promise<WorkspaceInfo[]> | null>(null);
+  // Dirty-check refs: prevWorkspacesRef tracks the last list committed to state so
+  // no-op polls skip setWorkspaces; rawWorkspacesRef tracks the unfiltered workspace
+  // list for mode-switch selection normalisation.
+  const prevWorkspacesRef = useRef<WorkspaceInfo[]>([]);
+  const rawWorkspacesRef = useRef<WorkspaceInfo[]>([]);
 
   const refreshOnce = useCallback(async (): Promise<WorkspaceInfo[]> => {
     try {
@@ -189,7 +195,38 @@ export function App(): JSX.Element {
       sessionNameRef.current = nextSessionName;
       regeneratingRef.current = nextRegenerating;
       waitingRef.current = nextWaiting;
-      setWorkspaces(list);
+
+      // Dirty-check: compare every UI-relevant field before committing to state so
+      // a no-op poll (same data returned by the daemon) doesn't replace the array
+      // reference and invalidate downstream useMemos / Sidebar memo.
+      const prev = prevWorkspacesRef.current;
+      const listChanged =
+        prev.length !== list.length ||
+        list.some((n, i) => {
+          const p = prev[i];
+          return (
+            p.id !== n.id ||
+            p.title !== n.title ||
+            p.branch !== n.branch ||
+            p.sessionName !== n.sessionName ||
+            p.alive !== n.alive ||
+            p.autoYes !== n.autoYes ||
+            p.added !== n.added ||
+            p.removed !== n.removed ||
+            p.lastOutputUnix !== n.lastOutputUnix ||
+            p.running !== n.running ||
+            p.busy !== n.busy ||
+            p.waiting !== n.waiting ||
+            p.regenerating !== n.regenerating ||
+            p.regenPhase !== n.regenPhase ||
+            p.kind !== n.kind ||
+            p.hasWorktree !== n.hasWorktree
+          );
+        });
+      if (listChanged) {
+        prevWorkspacesRef.current = list;
+        setWorkspaces(list);
+      }
       // Recover the status banner if a previous poll had errored (e.g. the daemon
       // restarted and the control pipe reconnected).
       if (connectionRef.current !== 'connected') {
@@ -456,6 +493,7 @@ export function App(): JSX.Element {
   }, [selectedId, sidebarMode]);
 
   workspacesRef.current = workspaces;
+  rawWorkspacesRef.current = workspaces;
   connectionRef.current = connection;
 
   // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
@@ -559,9 +597,17 @@ export function App(): JSX.Element {
   // the same grid (standard tiles a TermView, agent tiles a ChatViewHost), and the
   // standard list includes rich chats — so a selection carried across the surface
   // toggle could mount the wrong tile type. Reset the grid whenever appMode flips.
+  // Also normalise selectedId: in agent mode only 'rich' workspaces are shown, so
+  // a standard workspace that was selected before the switch must be cleared.
   useEffect(() => {
     setGridMode(false);
     setGridSelectedIds(new Set());
+    setSelectedId((cur) => {
+      if (!cur) return cur;
+      const all = rawWorkspacesRef.current;
+      const visible = appMode === 'agent' ? all.filter((w) => w.kind === 'rich') : all;
+      return visible.some((w) => w.id === cur) ? cur : null;
+    });
   }, [appMode]);
 
   // Prune the "deleting" set once a row is actually gone (or if it reappears for
@@ -662,6 +708,31 @@ export function App(): JSX.Element {
     setGridRowHeights(heights);
     localStorage.setItem(GRID_ROW_HEIGHTS_KEY, JSON.stringify(heights));
   }, []);
+
+  // Stable handlers for Sidebar props that were previously inline lambdas. These
+  // only call stable setState dispatchers so they never need to be recreated, which
+  // allows the Sidebar React.memo comparator to skip re-renders on no-op polls.
+  const onNewWorkspace = useCallback((): void => {
+    setCreateRepoPath(undefined);
+    setShowCreate(true);
+  }, []);
+
+  const onNewAtRepo = useCallback((repoPath: string): void => {
+    setCreateRepoPath(repoPath);
+    setShowCreate(true);
+  }, []);
+
+  const onStatusFilterChange = useCallback((v: StatusFilter): void => {
+    localStorage.setItem(STATUS_FILTER_KEY, v);
+    setStatusFilter(v);
+  }, []);
+
+  // Stable tile renderer for the agent-mode GridPane. Defined once so GridPane
+  // prop identity is preserved across polls.
+  const renderTile = useCallback(
+    (w: WorkspaceInfo) => <ChatViewHost key={w.id} workspace={w} findHotkeyScope="active" />,
+    [],
+  );
 
   const onConfirmRemove = useCallback(
     async (deleteWorktree: boolean): Promise<void> => {
@@ -820,24 +891,15 @@ export function App(): JSX.Element {
             onSelect={setSelectedId}
             onArchive={onArchive}
             onSettings={onSettings}
-            onNewWorkspace={() => {
-              setCreateRepoPath(undefined);
-              setShowCreate(true);
-            }}
-            onNewAtRepo={(repoPath) => {
-              setCreateRepoPath(repoPath);
-              setShowCreate(true);
-            }}
+            onNewWorkspace={onNewWorkspace}
+            onNewAtRepo={onNewAtRepo}
             onCycleMode={onCycleMode}
             sidebarMode={sidebarMode}
             filter={sidebarFilter}
             onFilterChange={setSidebarFilter}
             statusFilter={statusFilter}
             counts={statusCounts}
-            onStatusFilterChange={(v) => {
-              localStorage.setItem(STATUS_FILTER_KEY, v);
-              setStatusFilter(v);
-            }}
+            onStatusFilterChange={onStatusFilterChange}
             searchInputRef={searchInputRef}
             title="Chats"
             noun="chat"
@@ -856,7 +918,7 @@ export function App(): JSX.Element {
               rowHeights={gridRowHeights}
               onRowHeightsChange={onGridRowHeightsChange}
               onLeave={() => setGridMode(false)}
-              renderTile={(w) => <ChatViewHost key={w.id} workspace={w} findHotkeyScope="active" />}
+              renderTile={renderTile}
             />
           ) : (
             <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
@@ -877,24 +939,15 @@ export function App(): JSX.Element {
           onSelect={setSelectedId}
           onArchive={onArchive}
           onSettings={onSettings}
-          onNewWorkspace={() => {
-            setCreateRepoPath(undefined);
-            setShowCreate(true);
-          }}
-          onNewAtRepo={(repoPath) => {
-            setCreateRepoPath(repoPath);
-            setShowCreate(true);
-          }}
+          onNewWorkspace={onNewWorkspace}
+          onNewAtRepo={onNewAtRepo}
           onCycleMode={onCycleMode}
           sidebarMode={sidebarMode}
           filter={sidebarFilter}
           onFilterChange={setSidebarFilter}
           statusFilter={statusFilter}
           counts={statusCounts}
-          onStatusFilterChange={(v) => {
-            localStorage.setItem(STATUS_FILTER_KEY, v);
-            setStatusFilter(v);
-          }}
+          onStatusFilterChange={onStatusFilterChange}
           searchInputRef={searchInputRef}
           gridSelectedIds={gridSelectedIds}
           onToggleGridMember={toggleGridMember}

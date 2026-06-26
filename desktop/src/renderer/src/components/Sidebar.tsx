@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { relativeTime } from '../lib/time';
@@ -396,7 +396,7 @@ function buildGroupedList(
   return workspaces.map((w) => renderRow(w));
 }
 
-export function Sidebar({
+function SidebarImpl({
   workspaces,
   selectedId,
   onSelect,
@@ -422,6 +422,41 @@ export function Sidebar({
 }: SidebarProps): JSX.Element {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = searchInputRef ?? internalRef;
+
+  // Build the sorted/grouped row elements once and cache until a relevant prop
+  // changes. This memo + the React.memo wrapper on Sidebar itself prevent the
+  // full row list from being rebuilt on every 2s poll when nothing changed.
+  const groupedList = useMemo(
+    () =>
+      workspaces.length > 0
+        ? buildGroupedList(
+            workspaces,
+            sidebarMode,
+            selectedId,
+            onSelect,
+            onArchive,
+            onSettings,
+            onNewAtRepo,
+            gridSelectedIds,
+            onToggleGridMember,
+            deletingIds,
+            noun,
+          )
+        : null,
+    [
+      workspaces,
+      sidebarMode,
+      selectedId,
+      onSelect,
+      onArchive,
+      onSettings,
+      onNewAtRepo,
+      gridSelectedIds,
+      onToggleGridMember,
+      deletingIds,
+      noun,
+    ],
+  );
 
   return (
     <aside className="sidebar">
@@ -498,21 +533,60 @@ export function Sidebar({
             </p>
           </div>
         )}
-        {workspaces.length > 0 &&
-          buildGroupedList(
-            workspaces,
-            sidebarMode,
-            selectedId,
-            onSelect,
-            onArchive,
-            onSettings,
-            onNewAtRepo,
-            gridSelectedIds,
-            onToggleGridMember,
-            deletingIds,
-            noun,
-          )}
+        {workspaces.length > 0 && groupedList}
       </nav>
     </aside>
   );
 }
+
+/**
+ * Element-wise comparison of the workspace array on the fields that Sidebar
+ * actually renders. WorkspaceInfo objects are replaced wholesale each poll, so
+ * default reference equality always fails; this comparator lets Sidebar skip
+ * re-rendering when nothing changed.
+ */
+function workspacesEqualForMemo(a: WorkspaceInfo[], b: WorkspaceInfo[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i];
+    const n = b[i];
+    if (
+      p.id !== n.id ||
+      p.title !== n.title ||
+      p.alive !== n.alive ||
+      p.busy !== n.busy ||
+      p.waiting !== n.waiting ||
+      p.added !== n.added ||
+      p.removed !== n.removed ||
+      p.regenerating !== n.regenerating ||
+      p.lastOutputUnix !== n.lastOutputUnix
+    )
+      return false;
+  }
+  return true;
+}
+
+export const Sidebar = memo(
+  SidebarImpl,
+  (prev, next) =>
+    workspacesEqualForMemo(prev.workspaces, next.workspaces) &&
+    prev.selectedId === next.selectedId &&
+    prev.filter === next.filter &&
+    prev.statusFilter === next.statusFilter &&
+    prev.sidebarMode === next.sidebarMode &&
+    prev.counts === next.counts &&
+    prev.gridSelectedIds === next.gridSelectedIds &&
+    prev.deletingIds === next.deletingIds &&
+    prev.title === next.title &&
+    prev.noun === next.noun &&
+    prev.onSelect === next.onSelect &&
+    prev.onArchive === next.onArchive &&
+    prev.onSettings === next.onSettings &&
+    prev.onNewWorkspace === next.onNewWorkspace &&
+    prev.onNewAtRepo === next.onNewAtRepo &&
+    prev.onCycleMode === next.onCycleMode &&
+    prev.onFilterChange === next.onFilterChange &&
+    prev.onStatusFilterChange === next.onStatusFilterChange &&
+    prev.onToggleGridMember === next.onToggleGridMember &&
+    prev.onClearGridSelection === next.onClearGridSelection,
+);

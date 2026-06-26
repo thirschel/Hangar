@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Response } from '../../../main/host-client';
+import type { WorkspaceInfo } from '../../../main/host-client';
 import type { Settings } from '../../../main/settings';
+import { PROTO_VERSION } from '../../../shared/proto-version';
 
 // Keep the standard-mode workspace grid lightweight: these panes pull in
 // terminal/stream machinery this suite does not exercise. The shared Sidebar is
@@ -145,5 +147,119 @@ describe('App app-mode toggle', () => {
 
     // Still reachable after switching to agent mode.
     expect(modeToggle()).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix 5: selection normalisation on mode switch
+// ---------------------------------------------------------------------------
+
+function makeWorkspace(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
+  return {
+    id: 'ws-a',
+    title: 'Standard WS',
+    program: 'copilot',
+    repoPath: 'C:\\repo',
+    worktreePath: 'C:\\repo\\.wt',
+    branch: 'main',
+    sessionName: 'ws_a',
+    alive: true,
+    autoYes: false,
+    added: 0,
+    removed: 0,
+    createdUnix: 0,
+    lastOutputUnix: 0,
+    runCommand: '',
+    running: false,
+    previewUrl: '',
+    busy: false,
+    waiting: false,
+    regenerating: false,
+    shell: 'pwsh',
+    hasWorktree: true,
+    ...overrides,
+  };
+}
+
+describe('App mode-switch selection normalisation', () => {
+  // Override the connection mock so workspaces actually load in these tests.
+  beforeEach(() => {
+    window.cs.call = vi.fn(async () => ({ hostVersion: PROTO_VERSION }) as never);
+    window.cs.listWorkspaces = vi.fn(async () => []);
+  });
+
+  it('clears selectedId when switching to agent mode if selected workspace is not rich', async () => {
+    const std = makeWorkspace({ id: 'ws-std', title: 'Standard WS' }); // no kind → not rich
+    window.cs.listWorkspaces = vi.fn(async () => [std]);
+
+    let focusCb: ((id: string) => void) | undefined;
+    window.cs.onFocusWorkspace = vi.fn((cb: (id: string) => void) => {
+      focusCb = cb;
+      return () => {};
+    });
+
+    const { container } = await renderApp();
+    // Wait for the workspace to load (footer count changes from 0 to 1)
+    await waitFor(() => {
+      expect(container.querySelector('footer')?.textContent).toContain('1 workspace');
+    });
+
+    // Select the standard workspace via the focus callback
+    await act(async () => { focusCb?.('ws-std'); });
+    expect(container.querySelector('.breadcrumb')?.textContent).toContain('Standard WS');
+
+    // Switch to agent mode — standard workspace is not rich so selection must clear
+    await act(async () => { fireEvent.click(modeToggle()); });
+    expect(container.querySelector('.breadcrumb')?.textContent).not.toContain('Standard WS');
+    // Breadcrumb falls back to the placeholder text when nothing is selected
+    expect(container.querySelector('.breadcrumb')?.textContent).toContain('Workspaces');
+  });
+
+  it('keeps selectedId when switching to agent mode if the selected workspace is rich', async () => {
+    const rich = makeWorkspace({ id: 'ws-rich', title: 'Rich Chat', kind: 'rich' });
+    window.cs.listWorkspaces = vi.fn(async () => [rich]);
+
+    let focusCb: ((id: string) => void) | undefined;
+    window.cs.onFocusWorkspace = vi.fn((cb: (id: string) => void) => {
+      focusCb = cb;
+      return () => {};
+    });
+
+    const { container } = await renderApp();
+    await waitFor(() => {
+      expect(container.querySelector('footer')?.textContent).toContain('1 workspace');
+    });
+
+    await act(async () => { focusCb?.('ws-rich'); });
+    expect(container.querySelector('.breadcrumb')?.textContent).toContain('Rich Chat');
+
+    // Switch to agent mode — rich workspace IS visible in agent mode, keep selection
+    await act(async () => { fireEvent.click(modeToggle()); });
+    expect(container.querySelector('.breadcrumb')?.textContent).toContain('Rich Chat');
+  });
+
+  it('keeps selectedId when switching back to standard mode', async () => {
+    // Start in agent mode with a rich workspace selected
+    localStorage.setItem('cs.appMode', 'agent');
+    const rich = makeWorkspace({ id: 'ws-rich', title: 'Rich Chat', kind: 'rich' });
+    window.cs.listWorkspaces = vi.fn(async () => [rich]);
+
+    let focusCb: ((id: string) => void) | undefined;
+    window.cs.onFocusWorkspace = vi.fn((cb: (id: string) => void) => {
+      focusCb = cb;
+      return () => {};
+    });
+
+    const { container } = await renderApp();
+    await waitFor(() => {
+      expect(container.querySelector('footer')?.textContent).toContain('1 workspace');
+    });
+
+    await act(async () => { focusCb?.('ws-rich'); });
+    expect(container.querySelector('.breadcrumb')?.textContent).toContain('Rich Chat');
+
+    // Switch back to standard mode — rich workspace is visible in standard mode too
+    await act(async () => { fireEvent.click(modeToggle()); });
+    expect(container.querySelector('.breadcrumb')?.textContent).toContain('Rich Chat');
   });
 });

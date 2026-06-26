@@ -79,12 +79,19 @@ export function GridPane({
     const update = (): void => setWidth(el.clientWidth);
     update();
     let observer: ResizeObserver | undefined;
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
     if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(update);
+      // Debounce the ResizeObserver callback (~50ms) so rapid container
+      // resize events (e.g. window drag) don't re-render N tiles per frame.
+      observer = new ResizeObserver(() => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(update, 50);
+      });
       observer.observe(el);
     }
     window.addEventListener('resize', update);
     return () => {
+      clearTimeout(debounceTimer);
       observer?.disconnect();
       window.removeEventListener('resize', update);
     };
@@ -106,10 +113,26 @@ export function GridPane({
 
     const compute = (clientY: number): number[] =>
       withRowHeight(base, rowCount, rowIndex, startHeight + (clientY - startY));
-    const onMove = (ev: MouseEvent): void => setLiveHeights(compute(ev.clientY));
+
+    // rAF-throttle onMove so rapid mousemove events (one per vsync) don't
+    // setState and re-render N tiles on every pixel of drag.
+    let lastClientY = startY;
+    let rafId: number | null = null;
+    const onMove = (ev: MouseEvent): void => {
+      lastClientY = ev.clientY;
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        setLiveHeights(compute(lastClientY));
+      });
+    };
     const onUp = (ev: MouseEvent): void => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       document.body.style.userSelect = prevUserSelect;
       const finalHeights = compute(ev.clientY);
       setLiveHeights(null);
