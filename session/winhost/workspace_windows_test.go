@@ -116,13 +116,24 @@ func TestWorkspaceLifecycle(t *testing.T) {
 		t.Fatalf("ListWorkspaces: err=%v list=%+v", err, list)
 	}
 
-	// Archive removes the worktree and the agent session.
+	// Archive removes the worktree and the agent session. The teardown (kill +
+	// RemoveAll + git) now runs in the background so the control pipe isn't blocked,
+	// so poll for the worktree to disappear instead of expecting it synchronously.
 	if err := c.ArchiveWorkspace(ws.ID, true); err != nil {
 		t.Fatalf("ArchiveWorkspace: %v", err)
 	}
-	if _, err := os.Stat(ws.WorktreePath); !os.IsNotExist(err) {
-		t.Fatalf("expected worktree removed after archive, stat err=%v", err)
+	removed := false
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(ws.WorktreePath); os.IsNotExist(err) {
+			removed = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
+	if !removed {
+		t.Fatalf("expected worktree removed after archive (waited 5s), path still present: %s", ws.WorktreePath)
+	}
+	// The registry removal is synchronous, so the list is empty immediately.
 	list, err = c.ListWorkspaces()
 	if err != nil || len(list) != 0 {
 		t.Fatalf("expected empty list after archive, got err=%v list=%+v", err, list)

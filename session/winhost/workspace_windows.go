@@ -1590,56 +1590,65 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 	m.saveLocked()
 	m.mu.Unlock()
 
-	// Three-phase archive:
-	// 1. Stop agent: remove from manager + stop run + kill session
-	// 2. Optional filesystem cleanup (if DeleteWorktree == true)
-	// 3. Persist state
+	deleteWorktree := req.DeleteWorktree
 
-	// Phase 1: Stop the agent session
-	m.host.runs.stop(w.ID)
-	m.host.killSession(sessionName)
+	// Tear down the agent session and (optionally) its worktree in the background.
+	// This is the slow part (process kill + RemoveAll + git), and the host handles a
+	// connection's requests serially (see handleConn), so doing it inline would block
+	// ListWorkspaces polling and AttachSession for every other chat until it finished.
+	// The workspace is already removed from the registry + persisted above, so the
+	// list reflects the deletion immediately; only the teardown is deferred. Mirrors
+	// the runAttach / runRichStream "return fast, work in a goroutine" pattern.
+	go func() {
+		defer recoverGoroutine("workspace.archiveTeardown")
 
-	// Phase 2: Optional worktree/branch deletion. An in-place session never owns
-	// a managed worktree or branch (WorktreePath is the user's folder), so we must
-	// never delete anything for it — archiving only stops the agent.
-	switch {
-	case w.NoWorktree:
-		m.host.logger.Printf("archived in-place workspace %q (%s) - left folder %s untouched", w.Title, w.ID, w.WorktreePath)
-	case req.DeleteWorktree:
-		wt := w.worktreeFor()
+		// Phase 1: Stop the agent session.
+		m.host.runs.stop(w.ID)
+		m.host.killSession(sessionName)
 
-		// Refuse to delete a worktree path that is not contained within the
-		// managed worktrees directory. workspaces.json is untrusted on-disk
-		// state, so a poisoned worktreePath must never reach a destructive
-		// `git worktree remove`/RemoveAll here (F-09).
-		if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
-			m.host.logger.Printf("SECURITY: refusing to delete uncontained worktree %q for workspace %s: %v", w.WorktreePath, w.ID, err)
-			return proto.Errorf(req.ID, "refusing to delete unsafe worktree path: %v", err)
-		}
+		// Phase 2: Optional worktree/branch deletion. An in-place session never owns
+		// a managed worktree or branch (WorktreePath is the user's folder), so we must
+		// never delete anything for it — archiving only stops the agent.
+		switch {
+		case w.NoWorktree:
+			m.host.logger.Printf("archived in-place workspace %q (%s) - left folder %s untouched", w.Title, w.ID, w.WorktreePath)
+		case deleteWorktree:
+			wt := w.worktreeFor()
 
-		// Remove worktree directory (retry loop for Windows handle release)
-		for i := 0; i < 10; i++ {
-			if err := wt.Remove(); err == nil {
-				break
+			// Refuse to delete a worktree path that is not contained within the
+			// managed worktrees directory. workspaces.json is untrusted on-disk
+			// state, so a poisoned worktreePath must never reach a destructive
+			// `git worktree remove`/RemoveAll here (F-09). We have already returned
+			// OK to the client, so log and skip rather than surfacing an RPC error.
+			if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
+				m.host.logger.Printf("SECURITY: refusing to delete uncontained worktree %q for workspace %s: %v", w.WorktreePath, w.ID, err)
+				return
 			}
-			time.Sleep(150 * time.Millisecond)
+
+			// Remove worktree directory (retry loop for Windows handle release)
+			for i := 0; i < 10; i++ {
+				if err := wt.Remove(); err == nil {
+					break
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+
+			// Prune worktree references
+			_ = wt.Prune()
+
+			// Best-effort branch deletion (local only, non-fatal if fails)
+			// We use git CLI directly here instead of worktree methods
+			cmd := exec.Command("git", "-C", w.RepoPath, "branch", "-D", w.Branch)
+			_ = cmd.Run() // Ignore errors - branch might not exist locally
+
+			m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
+		default:
+			// Keep worktree and branch - just prune references
+			wt := w.worktreeFor()
+			_ = wt.Prune()
+			m.host.logger.Printf("archived workspace %q (%s) - kept worktree and branch %s", w.Title, w.ID, w.Branch)
 		}
-
-		// Prune worktree references
-		_ = wt.Prune()
-
-		// Best-effort branch deletion (local only, non-fatal if fails)
-		// We use git CLI directly here instead of worktree methods
-		cmd := exec.Command("git", "-C", w.RepoPath, "branch", "-D", w.Branch)
-		_ = cmd.Run() // Ignore errors - branch might not exist locally
-
-		m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
-	default:
-		// Keep worktree and branch - just prune references
-		wt := w.worktreeFor()
-		_ = wt.Prune()
-		m.host.logger.Printf("archived workspace %q (%s) - kept worktree and branch %s", w.Title, w.ID, w.Branch)
-	}
+	}()
 
 	return &proto.Response{ID: req.ID, OK: true}
 }

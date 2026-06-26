@@ -322,12 +322,26 @@ func TestArchiveDuringRegenerateNoZombie(t *testing.T) {
 	if stillWorkspace || stillRegen {
 		t.Fatalf("workspace/regeneration still present: workspace=%v regen=%v", stillWorkspace, stillRegen)
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for name := range h.sessions {
-		if strings.Contains(name, w.ID) {
-			t.Fatalf("zombie session remains: %s", name)
+	// killSession now runs in the archive teardown goroutine, so poll for the
+	// session to disappear rather than expecting it synchronously.
+	zombie := ""
+	for i := 0; i < 60; i++ {
+		zombie = ""
+		h.mu.RLock()
+		for name := range h.sessions {
+			if strings.Contains(name, w.ID) {
+				zombie = name
+				break
+			}
 		}
+		h.mu.RUnlock()
+		if zombie == "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if zombie != "" {
+		t.Fatalf("zombie session remains after archive (waited 3s): %s", zombie)
 	}
 }
 
