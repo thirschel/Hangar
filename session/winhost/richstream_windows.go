@@ -105,6 +105,29 @@ func (s *sdkSession) emitMCPDetailSnapshot(details []copilotsdk.MCPServerDetail,
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindMCPDetail, MCPServers: servers})
 }
 
+// emitResumedMCPStatus emits the last-known MCP server status reconstructed from a
+// resumed session's transcript (via CaptureReplayedEvent): one status pill per
+// server plus a full mcp.detail snapshot, mirroring how a live servers-loaded event
+// is translated. The copilot CLI does not reconnect MCP servers until the first
+// turn, so without this the MCP page would stay "pending" on resume until a message
+// is sent. A no-op when the transcript carried no MCP status (nothing captured).
+func (s *sdkSession) emitResumedMCPStatus() {
+	details := s.sess.MCPServers()
+	if len(details) == 0 {
+		return
+	}
+	s.logf("SDK resumed MCP status for session %q: %d server(s)", s.name, len(details))
+	for _, d := range details {
+		s.emitFrame(proto.EventFrame{
+			Kind:      proto.EventKindMCPStatus,
+			MCPServer: d.Name,
+			Status:    d.Status,
+			Error:     d.Error,
+		})
+	}
+	s.emitMCPDetail()
+}
+
 // emitSkills pulls the skills available to the session (RPC.Skills.Discover) and
 // emits one skills snapshot frame. The desktop replaces its Skills page wholesale.
 // Like instructions and agents, skills are discovered via an RPC pull rather than

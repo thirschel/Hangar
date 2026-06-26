@@ -164,6 +164,54 @@ func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
 	}
 }
 
+// TestEmitResumedMCPStatus asserts the resume seed emits real last-known MCP status
+// (a per-server status pill plus one mcp.detail snapshot) reconstructed from the
+// transcript via CaptureReplayedEvent, instead of leaving the page "pending".
+func TestEmitResumedMCPStatus(t *testing.T) {
+	s := newSDKSession("rich-resume-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	transport := copilot.MCPServerTransportStdio
+	source := copilot.MCPServerSourceUser
+	s.sess.CaptureReplayedEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServersLoadedData{
+		Servers: []copilot.MCPServersLoadedServer{
+			{Name: "github", Status: copilot.MCPServerStatusConnected, Transport: &transport, Source: &source},
+		},
+	}})
+
+	s.emitResumedMCPStatus()
+
+	frames := s.richTranscript(0)
+	var pill, detail *proto.EventFrame
+	for i := range frames {
+		switch frames[i].Kind {
+		case proto.EventKindMCPStatus:
+			pill = &frames[i]
+		case proto.EventKindMCPDetail:
+			detail = &frames[i]
+		}
+	}
+	if pill == nil || pill.MCPServer != "github" || pill.Status != "connected" {
+		t.Fatalf("expected a connected mcp.status pill, got %+v", frames)
+	}
+	if detail == nil || len(detail.MCPServers) != 1 || detail.MCPServers[0].Name != "github" ||
+		detail.MCPServers[0].Status != "connected" {
+		t.Fatalf("expected a connected mcp.detail snapshot, got %+v", frames)
+	}
+}
+
+// TestEmitResumedMCPStatusEmptyNoFrame asserts the seed is a no-op when the resumed
+// transcript carried no MCP status (the pending fallback elsewhere is unchanged).
+func TestEmitResumedMCPStatusEmptyNoFrame(t *testing.T) {
+	s := newSDKSession("rich-resume-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitResumedMCPStatus()
+	if frames := s.richTranscript(0); len(frames) != 0 {
+		t.Fatalf("no captured MCP should emit no frame, got %+v", frames)
+	}
+}
+
 func TestEmitInstructionsSnapshot(t *testing.T) {
 	s := newSDKSession("rich-instr", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()

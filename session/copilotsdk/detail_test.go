@@ -155,6 +155,53 @@ func TestCaptureMCPServerStatusChanged(t *testing.T) {
 	}
 }
 
+// TestCaptureReplayedEventMCP asserts CaptureReplayedEvent feeds MCP servers-loaded
+// and status-changed events from a resumed transcript into the same capture state as
+// the live path, while ignoring non-MCP events. This backs the resume seed that keeps
+// the MCP page from showing "pending" until the first turn.
+func TestCaptureReplayedEventMCP(t *testing.T) {
+	s := New(Config{})
+	s.setMCPTools(map[string][]string{"github": {"read_issue"}})
+
+	transport := copilot.MCPServerTransportStdio
+	source := copilot.MCPServerSourceUser
+	s.CaptureReplayedEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServersLoadedData{
+		Servers: []copilot.MCPServersLoadedServer{
+			{Name: "github", Status: copilot.MCPServerStatusConnected, Transport: &transport, Source: &source},
+			{Name: "docs", Status: copilot.MCPServerStatusPending},
+		},
+	}})
+	// A non-MCP replayed event must not alter the captured MCP state.
+	s.CaptureReplayedEvent(copilot.SessionEvent{Data: &copilot.AssistantMessageData{}})
+
+	errMsg := "auth required"
+	s.CaptureReplayedEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServerStatusChangedData{
+		ServerName: "docs", Status: copilot.MCPServerStatusNeedsAuth, Error: &errMsg,
+	}})
+
+	got := s.MCPServers()
+	if len(got) != 2 {
+		t.Fatalf("MCPServers len = %d, want 2", len(got))
+	}
+	if got[0].Name != "github" || got[0].Status != "connected" || got[0].Transport != "stdio" ||
+		got[0].Source != "user" || len(got[0].Tools) != 1 || got[0].Tools[0] != "read_issue" {
+		t.Fatalf("github detail = %+v", got[0])
+	}
+	if got[1].Name != "docs" || got[1].Status != "needs-auth" || got[1].Error != "auth required" {
+		t.Fatalf("docs detail = %+v", got[1])
+	}
+}
+
+// TestCaptureReplayedEventIgnoresNonMCP asserts a non-MCP replayed event leaves the
+// capture state nil, so the resume seed is a no-op when the transcript had no MCP.
+func TestCaptureReplayedEventIgnoresNonMCP(t *testing.T) {
+	s := New(Config{})
+	s.CaptureReplayedEvent(copilot.SessionEvent{Data: &copilot.AssistantMessageData{}})
+	if s.MCPServers() != nil {
+		t.Fatalf("non-MCP replayed event should not capture MCP state, got %+v", s.MCPServers())
+	}
+}
+
 // TestCaptureSkillsLoadedAccessor drives a synthetic skills-loaded event and
 // asserts the captured skill detail (UserInvocable is intentionally dropped).
 func TestCaptureSkillsLoadedAccessor(t *testing.T) {

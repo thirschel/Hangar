@@ -686,6 +686,21 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 	}
 }
 
+// CaptureReplayedEvent ingests a single event from a resumed session's persisted
+// transcript into the MCP capture state, WITHOUT forwarding it to OnEvent or
+// touching status. It lets winhost rebuild the last-known MCP server status on
+// resume: the copilot CLI does not reconnect MCP servers until the first turn, so
+// the live servers-loaded events are otherwise unavailable until then. Only MCP
+// events carry meaningful state here; all other event types are ignored.
+func (s *Session) CaptureReplayedEvent(ev copilot.SessionEvent) {
+	switch data := ev.Data.(type) {
+	case *copilot.SessionMCPServersLoadedData:
+		s.captureMCPServersLoaded(data)
+	case *copilot.SessionMCPServerStatusChangedData:
+		s.captureMCPServerStatusChanged(data)
+	}
+}
+
 // onPermission is the deadlock-free permission policy: it returns immediately,
 // either auto-approving or declining-to-pending (NoResult) so a (re)attaching
 // client can answer. It NEVER blocks on an IPC round-trip.
