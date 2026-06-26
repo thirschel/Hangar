@@ -412,7 +412,7 @@ describe('ChatViewHost', () => {
     // The CLI shows no inline usage row: the snapshot only drives the header, so
     // no transcript entry is pushed (the empty-state placeholder stays visible).
     expect(screen.queryByText('Usage updated')).not.toBeInTheDocument();
-    expect(screen.getByText(/Waiting for the agent/)).toBeInTheDocument();
+    expect(screen.getByText(/Send a message to start/)).toBeInTheDocument();
   });
 
   it('sends a message and shows it optimistically as a right-aligned user bubble', async () => {

@@ -56,7 +56,7 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 		// blocking DiscoverSkills RPC, and the read loop that delivers that RPC's
 		// response is the SAME goroutine running this handler. Calling it inline
 		// stalls all further event delivery and can deadlock if the SDK's event
-		// queue fills during the round-trip. Mirrors refreshResumedSessionState,
+		// queue fills during the round-trip. Mirrors refreshSessionState,
 		// which already offloads its blocking pulls to a goroutine. [#7]
 		go s.emitSkills(s.ctx)
 		return
@@ -133,54 +133,54 @@ func (s *sdkSession) emitMCPStatusFrames(details []copilotsdk.MCPServerDetail) {
 	s.emitMCPDetailSnapshot(details, nil)
 }
 
-// refreshResumedSessionState proactively pulls live session state after a resume so the
-// MCP / context / AIC panes populate without waiting for the first turn. The SDK
-// replays only the conversation transcript on resume; MCP connections, accumulated AIC,
-// and the context window are not carried, and the copilot CLI connects MCP servers and
-// computes context lazily/asynchronously. So this seeds usage immediately and polls the
-// MCP server list (the same approach the SDK's own e2e uses) until every server settles.
-// Runs in its own goroutine, cancelable via the session ctx.
-func (s *sdkSession) refreshResumedSessionState() {
+// refreshSessionState proactively pulls live session state so the MCP / context / AIC
+// panes populate without waiting for the first turn — on both a fresh start and a
+// resume. The copilot CLI connects MCP servers and computes context lazily/
+// asynchronously (and on resume the replayed transcript doesn't carry them), so this
+// seeds usage immediately and polls the MCP server list (the same approach the SDK's
+// own e2e uses) until every server settles. Runs in its own goroutine, cancelable via
+// the session ctx.
+func (s *sdkSession) refreshSessionState() {
 	go func() {
 		ctx := s.ctx
 		// AIC is persisted and available immediately; the context window may be null
 		// until the runtime initializes (then the first turn's usage_info event fills it).
-		s.emitResumedUsage(ctx)
-		s.pollResumedMCP(ctx)
+		s.emitSessionUsage(ctx)
+		s.pollMCPStatus(ctx)
 	}()
 }
 
-// emitResumedUsage pulls accumulated AIC + the current context window and emits one
-// usage frame, so AIC (and context, when available) show on resume. A no-op when
+// emitSessionUsage pulls accumulated AIC + the current context window and emits one
+// usage frame, so AIC (and context, when available) show without a turn. A no-op when
 // neither is available (the desktop guards a zero token limit / zero AIC).
-func (s *sdkSession) emitResumedUsage(ctx context.Context) {
+func (s *sdkSession) emitSessionUsage(ctx context.Context) {
 	aic, aicKnown, err := s.sess.UsageMetrics(ctx)
 	if err != nil {
-		s.logf("SDK resumed usage pull failed for session %q: %v", s.name, err)
+		s.logf("SDK usage pull failed for session %q: %v", s.name, err)
 	}
 	cur, limit, ctxKnown, err := s.sess.ContextWindow(ctx)
 	if err != nil {
-		s.logf("SDK resumed context pull failed for session %q: %v", s.name, err)
+		s.logf("SDK context pull failed for session %q: %v", s.name, err)
 	}
 	if !aicKnown && !ctxKnown {
 		return
 	}
-	s.logf("SDK resumed usage for session %q: aic=%.4f tokens=%d/%d ctxKnown=%v", s.name, aic, cur, limit, ctxKnown)
+	s.logf("SDK usage for session %q: aic=%.4f tokens=%d/%d ctxKnown=%v", s.name, aic, cur, limit, ctxKnown)
 	s.emitUsageSnapshot(cur, limit, s.sess.CurrentModel(), aic)
 }
 
-// pollResumedMCP polls RPC.MCP.List until every server reaches a terminal status (or a
+// pollMCPStatus polls RPC.MCP.List until every server reaches a terminal status (or a
 // bounded deadline / session cancel), emitting an MCP snapshot whenever the status set
-// changes. MCP servers connect asynchronously after resume, so a single pull would
+// changes. MCP servers connect asynchronously after start/resume, so a single pull would
 // still show "pending"; polling flips the page to connected without a turn.
-func (s *sdkSession) pollResumedMCP(ctx context.Context) {
+func (s *sdkSession) pollMCPStatus(ctx context.Context) {
 	const (
 		interval = 1500 * time.Millisecond
 		maxWait  = 45 * time.Second
 	)
 	deadline := time.Now().Add(maxWait)
 	for {
-		if s.refreshResumedMCP(ctx) || time.Now().After(deadline) {
+		if s.refreshMCPStatus(ctx) || time.Now().After(deadline) {
 			return
 		}
 		select {
@@ -191,13 +191,13 @@ func (s *sdkSession) pollResumedMCP(ctx context.Context) {
 	}
 }
 
-// refreshResumedMCP pulls the live MCP status once, emits it when it changed since the
+// refreshMCPStatus pulls the live MCP status once, emits it when it changed since the
 // last emit, and reports whether every server has settled (no server still "pending").
 // A pull error or a nil/empty list counts as settled so polling does not spin forever.
-func (s *sdkSession) refreshResumedMCP(ctx context.Context) (settled bool) {
+func (s *sdkSession) refreshMCPStatus(ctx context.Context) (settled bool) {
 	details, err := s.sess.MCPStatus(ctx)
 	if err != nil {
-		s.logf("SDK resumed MCP status pull failed for session %q: %v", s.name, err)
+		s.logf("SDK MCP status pull failed for session %q: %v", s.name, err)
 		return true
 	}
 	if len(details) == 0 {
@@ -205,7 +205,7 @@ func (s *sdkSession) refreshResumedMCP(ctx context.Context) (settled bool) {
 	}
 	if sig := mcpStatusSignature(details); sig != s.lastMCPSig {
 		s.lastMCPSig = sig
-		s.logf("SDK resumed MCP status for session %q: %d server(s)", s.name, len(details))
+		s.logf("SDK MCP status for session %q: %d server(s)", s.name, len(details))
 		s.emitMCPStatusFrames(details)
 	}
 	for _, d := range details {

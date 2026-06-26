@@ -128,6 +128,10 @@ func (s *sdkSession) start() error {
 	}
 	s.emitConfiguredMCPServersPending()
 	s.flushMCPStartupBuffer()
+	// A fresh session is already StatusReady and the CLI connects MCP servers at
+	// create — proactively poll live MCP/usage state so the panes populate without
+	// waiting for the first message (the page would otherwise sit on "pending").
+	s.refreshSessionState()
 	return nil
 }
 
@@ -163,7 +167,7 @@ func (s *sdkSession) startResumed() error {
 	}
 	// Proactively refresh live session state (MCP status, AIC, context window) that the
 	// transcript replay does not carry, so those panes populate without the first turn.
-	s.refreshResumedSessionState()
+	s.refreshSessionState()
 	// Custom instructions, agents, and skills arrive via RPC pulls (not the event
 	// stream), so emit one-time snapshots on stream start so their pages populate
 	// (v23/v24). Skills are additionally re-emitted on each live skills-loaded event.

@@ -1425,7 +1425,7 @@ export function ChatViewHost({
             <div ref={scrollRef} className="chat-view__scroll" onScroll={onScroll}>
               <div ref={contentRef} className="chat-view__scroll-content">
                 {transcript.entries.length === 0 && !streamError && (
-                  <div className="chat-view__empty">Waiting for the agent…</div>
+                  <div className="chat-view__empty">Send a message to start the conversation.</div>
                 )}
                 {transcript.entries.map((entry) => {
                   const requestId =
