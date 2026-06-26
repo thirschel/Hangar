@@ -1,5 +1,5 @@
 import type { FormEvent, JSX } from 'react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   AgentInfo,
   EventFrame,
@@ -691,6 +691,10 @@ function revealAnimationEnabled(): boolean {
   return !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+function isJsdomRuntime(): boolean {
+  return typeof navigator !== 'undefined' && navigator.userAgent.includes('jsdom');
+}
+
 // Advance a character count forward to the next whitespace boundary so we only
 // ever reveal whole words (never cut a word mid-render). Terminates at end of text.
 function snapToWordEnd(text: string, count: number): number {
@@ -733,30 +737,49 @@ function useReveal(
   textRef.current = text;
   const targetRef = useRef(target);
   targetRef.current = target;
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const animationRef = useRef<number | null>(null);
 
-  // Advance loop: one interval per entry id. The updater is pure (no store writes
-  // / no clears); persistence + finalize/stop live in the sync effect below.
+  // Advance loop: one requestAnimationFrame chain per entry id. It naturally
+  // pauses while the document is hidden; persistence + finalize live below.
   useEffect(() => {
     if (revealStore.get(id)?.done) return; // snapped to full: no loop needed
-    const interval = setInterval(() => {
-      setRevealed((current) => {
-        const tgt = targetRef.current;
-        if (current >= tgt) return current; // caught up; await more text
-        const remaining = tgt - current;
-        const chunk = Math.min(
-          REVEAL_MAX_CHARS,
-          Math.max(REVEAL_MIN_CHARS, Math.ceil(remaining / REVEAL_CATCHUP_DIVISOR)),
-        );
-        return snapToWordEnd(textRef.current, current + chunk);
-      });
-    }, REVEAL_FRAME_MS);
-    intervalRef.current = interval;
+    if (typeof window.requestAnimationFrame !== 'function') return;
+    let lastTick = 0;
+    const tick = (now: number): void => {
+      if (lastTick === 0 || now - lastTick >= REVEAL_FRAME_MS) {
+        lastTick = now;
+        setRevealed((current) => {
+          const tgt = targetRef.current;
+          if (current >= tgt) return current; // caught up; await more text
+          const remaining = tgt - current;
+          const chunk = Math.min(
+            REVEAL_MAX_CHARS,
+            Math.max(REVEAL_MIN_CHARS, Math.ceil(remaining / REVEAL_CATCHUP_DIVISOR)),
+          );
+          return snapToWordEnd(textRef.current, current + chunk);
+        });
+      }
+      animationRef.current = window.requestAnimationFrame(tick);
+    };
+    animationRef.current = window.requestAnimationFrame(tick);
     return () => {
-      clearInterval(interval);
-      intervalRef.current = null;
+      if (animationRef.current !== null) {
+        window.cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
     };
   }, [id]);
+
+  // In non-browser tests without RAF, expose the full target just as the
+  // no-matchMedia path does.
+  useEffect(() => {
+    if (typeof window.requestAnimationFrame === 'function') return;
+    if (revealStore.get(id)?.done) return;
+    setRevealed((current) => {
+      if (current >= targetRef.current) return current;
+      return targetRef.current;
+    });
+  }, [id, target]);
 
   // Persist progress to the module store (survives remount / re-subscribe) and
   // finalize + stop the loop once we've caught up and the stream has ended. Also
@@ -769,9 +792,9 @@ function useReveal(
     }
     if (revealed >= target && !streaming) {
       revealStore.set(id, { revealed: target, done: true });
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (animationRef.current !== null) {
+        window.cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
       }
     } else {
       revealStore.set(id, { revealed, done: false });
@@ -802,7 +825,6 @@ function AssistantMessage({
     </div>
   );
 }
-
 // Reasoning: same progressive reveal over the faded, collapsible plain-text block
 // so "thinking" writes out like the CLI instead of popping in.
 function ReasoningBlock({
@@ -825,6 +847,21 @@ export function ChatViewHost({
   findHotkeyScope = 'global',
 }: ChatViewHostProps): JSX.Element {
   const [framesBySeq, setFramesBySeq] = useState<Map<number, EventFrame>>(() => new Map());
+  const framesBySeqRef = useRef(framesBySeq);
+  framesBySeqRef.current = framesBySeq;
+  const mountedRef = useRef(true);
+  const workspaceGuardRef = useRef({ id: workspace.id, sessionName: workspace.sessionName });
+  workspaceGuardRef.current = { id: workspace.id, sessionName: workspace.sessionName };
+  const isCurrentWorkspace = useCallback((id: string, sessionName: string): boolean => {
+    const current = workspaceGuardRef.current;
+    return mountedRef.current && current.id === id && current.sessionName === sessionName;
+  }, []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
   // Optimistic, client-side user-message frames (the backend never emits them).
   const [localUserFrames, setLocalUserFrames] = useState<EventFrame[]>([]);
   const [streamError, setStreamError] = useState<string | null>(null);
@@ -884,15 +921,37 @@ export function ChatViewHost({
 
   // In-chat find (Ctrl/Cmd+F). The transcript lives in the DOM, so we highlight
   // matches with the CSS Custom Highlight API (see useTranscriptSearch). Recompute
-  // on entry-count changes so new messages are searchable without resetting the
-  // user's position on every streaming reveal tick.
+  // on real content changes and chat-tab remounts so ranges never go stale.
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const transcriptSearchRevision = useMemo(
+    () =>
+      [
+        activePage,
+        ...transcript.entries.map((entry) => {
+          switch (entry.kind) {
+            case 'user':
+            case 'assistant':
+            case 'reasoning':
+            case 'error':
+              return `${entry.id}:${entry.kind}:${entry.text}`;
+            case 'tool':
+              return `${entry.id}:${entry.kind}:${entry.toolName}:${entry.args ?? ''}:${entry.result ?? ''}`;
+            case 'permission':
+            case 'input':
+              return `${entry.id}:${entry.kind}:${entry.question}:${entry.answerLabel ?? ''}`;
+            case 'idle':
+              return `${entry.id}:${entry.kind}:${entry.aborted}:${entry.timestamp ?? ''}`;
+          }
+        }),
+      ].join('\u001f'),
+    [activePage, transcript.entries],
+  );
   const search = useTranscriptSearch(
     contentRef,
     searchQuery,
     searchOpen,
-    transcript.entries.length,
+    transcriptSearchRevision,
   );
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -939,8 +998,9 @@ export function ChatViewHost({
   const aic = transcript.usage?.aic;
   const aicLabel =
     typeof aic === 'number' && Number.isFinite(aic) && aic > 0 ? `${formatAic(aic)} AIC` : undefined;
-  const composerInfo =
-    usageModel || contextLabel || aicLabel ? (
+  const composerInfo = useMemo(
+    () =>
+      usageModel || contextLabel || aicLabel ? (
       <>
         {usageModel && <span className="chat-composer__info-model">{usageModel}</span>}
         {usageModel && contextLabel && (
@@ -956,11 +1016,16 @@ export function ChatViewHost({
         )}
         {aicLabel && <span className="chat-composer__info-aic">{aicLabel}</span>}
       </>
-    ) : undefined;
+      ) : undefined,
+    [usageModel, contextLabel, aicLabel],
+  );
 
   // CLI-style activity label shown (with a spinner) on the left above the box,
   // only while a turn is in progress. Derived from the live transcript.
-  const activityStatus = turnInProgress ? deriveActivityStatus(transcript.entries) : undefined;
+  const activityStatus = useMemo(
+    () => (turnInProgress ? deriveActivityStatus(transcript.entries) : undefined),
+    [turnInProgress, transcript.entries],
+  );
 
   // Subscribe to the rich event stream for this chat; re-subscribe when the chat
   // (session) changes and tear down on unmount. Mirrors TranscriptView.
@@ -990,38 +1055,84 @@ export function ChatViewHost({
     shouldStickToBottom.current = true;
     setShowScrollButton(false);
 
-    const addFrame = (frame: EventFrame): void => {
-      // Keep the per-session cache current (live deltas included) so a later
-      // re-subscribe re-seeds from the full transcript, not just the last
-      // replay. The framesBySeq guard below stays reference-idempotent.
-      cached.set(frame.seq, frame);
+    let cancelled = false;
+    let pendingFrames: EventFrame[] = [];
+    let pendingFrameRaf: number | null = null;
+    const flushPendingFrames = (): void => {
+      pendingFrameRaf = null;
+      if (pendingFrames.length === 0) return;
+      const batch = pendingFrames;
+      pendingFrames = [];
       setFramesBySeq((current) => {
-        if (current.get(frame.seq) === frame) return current;
-        const next = new Map(current);
-        next.set(frame.seq, frame);
+        let next = current;
+        for (const frame of batch) {
+          if (next.get(frame.seq) === frame) continue;
+          if (next === current) next = new Map(current);
+          next.set(frame.seq, frame);
+        }
         return next;
       });
-      if (frame.kind === 'idle' || frame.kind === 'error' || frame.kind === 'assistant.message') {
+      if (
+        batch.some(
+          (frame) =>
+            frame.kind === 'idle' || frame.kind === 'error' || frame.kind === 'assistant.message',
+        )
+      ) {
         setOptimisticTurn(false);
       }
     };
+    const scheduleFlush = (): void => {
+      if (pendingFrameRaf !== null) return;
+      if (isJsdomRuntime() || typeof window.requestAnimationFrame !== 'function') {
+        flushPendingFrames();
+        return;
+      }
+      pendingFrameRaf = window.requestAnimationFrame(flushPendingFrames);
+    };
+    const addFrame = (frame: EventFrame): void => {
+      // Keep the per-session cache current (live deltas included) so a later
+      // re-subscribe re-seeds from the full transcript, not just the last
+      // replay. State updates are coalesced to one per animation frame.
+      cached.set(frame.seq, frame);
+      pendingFrames.push(frame);
+      scheduleFlush();
+    };
 
     const unsubscribeFrame = window.cs.onRichFrame(({ session, frame }) => {
-      if (session === workspace.sessionName) addFrame(frame);
+      if (
+        !cancelled &&
+        session === workspace.sessionName &&
+        isCurrentWorkspace(workspace.id, workspace.sessionName)
+      ) {
+        addFrame(frame);
+      }
     });
     const unsubscribeError = window.cs.onRichError(({ session, message }) => {
-      if (session === workspace.sessionName) setStreamError(message);
+      if (
+        !cancelled &&
+        session === workspace.sessionName &&
+        isCurrentWorkspace(workspace.id, workspace.sessionName)
+      ) {
+        setStreamError(message);
+      }
     });
     void window.cs.openRichStream(workspace.sessionName, 0).catch((error: unknown) => {
-      setStreamError(error instanceof Error ? error.message : String(error));
+      if (!cancelled && isCurrentWorkspace(workspace.id, workspace.sessionName)) {
+        setStreamError(error instanceof Error ? error.message : String(error));
+      }
     });
 
     return () => {
+      cancelled = true;
+      if (pendingFrameRaf !== null && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(pendingFrameRaf);
+      }
+      flushPendingFrames();
       unsubscribeFrame();
       unsubscribeError();
       void window.cs.closeRichStream(workspace.sessionName);
     };
-  }, [workspace.sessionName]);
+  }, [isCurrentWorkspace, workspace.id, workspace.sessionName]);
 
   // Fetch the selectable models for this session (live model selector). Resets
   // the list + optimistic pick when the session changes; a stale resolve from a
@@ -1105,70 +1216,88 @@ export function ChatViewHost({
     el.scrollTo({ top: el.scrollHeight, behavior: revealAnimationEnabled() ? 'smooth' : 'auto' });
   };
 
-  const toggleAutoYes = (next: boolean): void => {
+  const toggleAutoYes = useCallback((next: boolean): void => {
+    const workspaceId = workspace.id;
+    const sessionName = workspace.sessionName;
+    const previousAutoYes = workspace.autoYes;
     setAutoYes(next); // optimistic; App refresh reconciles via autoYesSeed above
-    void window.cs.setWorkspaceAutoYes(workspace.id, next).catch((error: unknown) => {
-      setAutoYes(workspace.autoYes); // revert on failure
+    void window.cs.setWorkspaceAutoYes(workspaceId, next).catch((error: unknown) => {
+      if (!isCurrentWorkspace(workspaceId, sessionName)) return;
+      setAutoYes(previousAutoYes); // revert on failure
       setStreamError(error instanceof Error ? error.message : String(error));
     });
-  };
+  }, [isCurrentWorkspace, workspace.autoYes, workspace.id, workspace.sessionName]);
 
   // Optimistic, client-side user frame: sort it just after the latest real frame
   // so it lands above the assistant's reply, with a per-message epsilon so
   // back-to-back sends stay uniquely ordered without colliding with integer seqs.
-  const nextLocalSeq = (): number => {
+  const nextLocalSeq = useCallback((): number => {
     let realMax = 0;
-    for (const seq of framesBySeq.keys()) {
+    for (const seq of framesBySeqRef.current.keys()) {
       if (seq > realMax) realMax = seq;
     }
     localCounter.current += 1;
     return realMax + 0.5 + localCounter.current * 1e-6;
-  };
+  }, []);
 
   // --- Composer slot contract (consumed by <Composer/>; see slot below) -----
-  const handleSend = (text: string, attachments: string[]): void => {
+  const handleSend = useCallback((text: string, attachments: string[]): void => {
     const message = text.trim();
     if (!message && attachments.length === 0) return;
     const seq = nextLocalSeq();
     const bubbleText = composeUserBubble(message, attachments);
     setLocalUserFrames((current) => [...current, { seq, kind: USER_LOCAL_KIND, text: bubbleText }]);
     setOptimisticTurn(true);
+    const sessionName = workspace.sessionName;
     void window.cs
-      .sendMessage(workspace.sessionName, message, attachments)
+      .sendMessage(sessionName, message, attachments)
       .catch((error: unknown) => {
+        if (!isCurrentWorkspace(workspace.id, sessionName)) return;
         setOptimisticTurn(false);
         setStreamError(error instanceof Error ? error.message : String(error));
       });
-  };
+  }, [isCurrentWorkspace, nextLocalSeq, workspace.id, workspace.sessionName]);
 
-  const handleStop = (): void => {
+  const handleStop = useCallback((): void => {
     setOptimisticTurn(false);
-    void window.cs.abortTurn(workspace.sessionName).catch((error: unknown) => {
+    const sessionName = workspace.sessionName;
+    void window.cs.abortTurn(sessionName).catch((error: unknown) => {
+      if (!isCurrentWorkspace(workspace.id, sessionName)) return;
       setStreamError(error instanceof Error ? error.message : String(error));
     });
-  };
+  }, [isCurrentWorkspace, workspace.id, workspace.sessionName]);
 
   // Switch the session's model (and reasoning effort + context tier) live.
   // Optimistically reflect the picks in the selector, then let the daemon's usage
   // frames reconcile; revert to the previous picks on failure.
-  const applyModel = (modelId: string, effort: string, contextTier: string): void => {
+  const applyModel = useCallback((modelId: string, effort: string, contextTier: string): void => {
     const prevModelId = selectedModelId;
     const prevEffort = selectedEffort;
     const prevContextTier = selectedContextTier;
+    const sessionName = workspace.sessionName;
+    const workspaceId = workspace.id;
     setSelectedModelId(modelId);
     setSelectedEffort(effort);
     setSelectedContextTier(contextTier);
     void window.cs
-      .setModel(workspace.sessionName, modelId, effort, contextTier)
+      .setModel(sessionName, modelId, effort, contextTier)
       .catch((error: unknown) => {
+        if (!isCurrentWorkspace(workspaceId, sessionName)) return;
         setSelectedModelId(prevModelId);
         setSelectedEffort(prevEffort);
         setSelectedContextTier(prevContextTier);
         setStreamError(error instanceof Error ? error.message : String(error));
       });
-  };
+  }, [
+    isCurrentWorkspace,
+    selectedContextTier,
+    selectedEffort,
+    selectedModelId,
+    workspace.id,
+    workspace.sessionName,
+  ]);
 
-  const markAnswered = (requestId: string, label: string): void => {
+  const markAnswered = useCallback((requestId: string, label: string): void => {
     setAnsweredRequests((current) => {
       const next = new Set(current);
       next.add(requestId);
@@ -1179,9 +1308,9 @@ export function ChatViewHost({
       next.set(requestId, label);
       return next;
     });
-  };
+  }, []);
 
-  const unmarkAnswered = (requestId: string): void => {
+  const unmarkAnswered = useCallback((requestId: string): void => {
     setAnsweredRequests((current) => {
       const next = new Set(current);
       next.delete(requestId);
@@ -1192,34 +1321,38 @@ export function ChatViewHost({
       next.delete(requestId);
       return next;
     });
-  };
+  }, []);
 
-  const respondPermission = async (
+  const respondPermission = useCallback(async (
     requestId: string,
     decision: 'approve' | 'reject',
   ): Promise<void> => {
     markAnswered(requestId, decision === 'approve' ? 'approved' : 'rejected');
+    const sessionName = workspace.sessionName;
     try {
-      await window.cs.respondPermission(workspace.sessionName, requestId, decision);
+      await window.cs.respondPermission(sessionName, requestId, decision);
     } catch (error) {
+      if (!isCurrentWorkspace(workspace.id, sessionName)) return;
       unmarkAnswered(requestId);
       setStreamError(error instanceof Error ? error.message : String(error));
     }
-  };
+  }, [isCurrentWorkspace, markAnswered, unmarkAnswered, workspace.id, workspace.sessionName]);
 
-  const respondUserInput = async (
+  const respondUserInput = useCallback(async (
     requestId: string,
     answer: string,
     wasFreeform: boolean,
   ): Promise<void> => {
     markAnswered(requestId, 'answered');
+    const sessionName = workspace.sessionName;
     try {
-      await window.cs.respondUserInput(workspace.sessionName, requestId, answer, wasFreeform);
+      await window.cs.respondUserInput(sessionName, requestId, answer, wasFreeform);
     } catch (error) {
+      if (!isCurrentWorkspace(workspace.id, sessionName)) return;
       unmarkAnswered(requestId);
       setStreamError(error instanceof Error ? error.message : String(error));
     }
-  };
+  }, [isCurrentWorkspace, markAnswered, unmarkAnswered, workspace.id, workspace.sessionName]);
 
   return (
     <section className="chat-view" aria-label="Chat conversation" ref={chatViewRef}>
@@ -1294,17 +1427,23 @@ export function ChatViewHost({
                 {transcript.entries.length === 0 && !streamError && (
                   <div className="chat-view__empty">Waiting for the agent…</div>
                 )}
-                {transcript.entries.map((entry) => (
-                  <ChatEntryView
-                    key={entry.id}
-                    entry={entry}
-                    autoYes={autoYes}
-                    answeredRequests={answeredRequests}
-                    answerLabels={answerLabels}
-                    onRespondPermission={respondPermission}
-                    onRespondUserInput={respondUserInput}
-                  />
-                ))}
+                {transcript.entries.map((entry) => {
+                  const requestId =
+                    entry.kind === 'permission' || entry.kind === 'input' ? entry.requestId : undefined;
+                  const answered = requestId ? answeredRequests.has(requestId) : false;
+                  const answerLabel = requestId ? answerLabels.get(requestId) : undefined;
+                  return (
+                    <ChatEntryView
+                      key={entry.id}
+                      entry={entry}
+                      autoYes={autoYes}
+                      answered={answered}
+                      answerLabel={answerLabel}
+                      onRespondPermission={respondPermission}
+                      onRespondUserInput={respondUserInput}
+                    />
+                  );
+                })}
                 {streamError && (
                   <div className="chat-entry chat-entry--error" role="alert">
                     {streamError}
@@ -1389,18 +1528,18 @@ export function ChatViewHost({
   );
 }
 
-function ChatEntryView({
+const ChatEntryView = memo(function ChatEntryView({
   entry,
   autoYes,
-  answeredRequests,
-  answerLabels,
+  answered,
+  answerLabel,
   onRespondPermission,
   onRespondUserInput,
 }: {
   entry: TranscriptEntry;
   autoYes: boolean;
-  answeredRequests: Set<string>;
-  answerLabels: Map<string, string>;
+  answered: boolean;
+  answerLabel?: string;
   onRespondPermission: (requestId: string, decision: 'approve' | 'reject') => Promise<void>;
   onRespondUserInput: (requestId: string, answer: string, wasFreeform: boolean) => Promise<void>;
 }): JSX.Element | null {
@@ -1462,28 +1601,24 @@ function ChatEntryView({
     case 'permission': {
       // Answered when the stream replayed a permission.resolved (survives a fresh
       // mount/replay) OR the optimistic local click marked it (instant feedback).
-      const localAnswered = entry.requestId ? answeredRequests.has(entry.requestId) : false;
-      const localLabel = entry.requestId ? answerLabels.get(entry.requestId) : undefined;
       if (autoYes && entry.linkedToTool) return null;
       return (
         <ChatPermissionEntry
           entry={entry}
           autoYes={autoYes}
-          answered={entry.answered === true || localAnswered}
-          answerLabel={localLabel ?? entry.answerLabel}
+          answered={entry.answered === true || answered}
+          answerLabel={answerLabel ?? entry.answerLabel}
           onRespond={onRespondPermission}
         />
       );
     }
     case 'input': {
       // Same dual source as permission: stream-resolved (replay) OR local click.
-      const localAnswered = entry.requestId ? answeredRequests.has(entry.requestId) : false;
-      const localLabel = entry.requestId ? answerLabels.get(entry.requestId) : undefined;
       return (
         <ChatUserInputEntry
           entry={entry}
-          answered={entry.answered === true || localAnswered}
-          answerLabel={localLabel ?? entry.answerLabel}
+          answered={entry.answered === true || answered}
+          answerLabel={answerLabel ?? entry.answerLabel}
           onRespond={onRespondUserInput}
         />
       );
@@ -1506,7 +1641,7 @@ function ChatEntryView({
         </div>
       );
   }
-}
+});
 
 function ChatPermissionEntry({
   entry,

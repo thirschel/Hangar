@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
-// CSS Custom Highlight API registry names. Two highlights: every match (subtle)
-// and the active match (strong). They are document-global, but only the focused
-// chat's search populates them at any time (others contribute no ranges), so the
-// highlighting is effectively scoped to the active transcript.
+// CSS Custom Highlight API registry names. Keep these stable because styles.css
+// owns the ::highlight(...) selectors; isolation is handled by per-hook owners.
 const HL_ALL = 'chat-search';
 const HL_CURRENT = 'chat-search-current';
+let nextHighlightOwner = 1;
+const highlightOwners = new Map<number, { ranges: Range[]; activeIndex: number }>();
+let currentHighlightOwner: number | null = null;
 
 // The CSS Custom Highlight API is available in Electron's Chromium but not in
 // jsdom, so every use is feature-detected and the matching logic stays pure.
@@ -44,18 +45,31 @@ export function findMatchRanges(root: HTMLElement, query: string): Range[] {
   return ranges;
 }
 
-function registerHighlights(ranges: Range[], activeIndex: number): void {
+function syncHighlights(): void {
   if (!highlightApiAvailable()) return;
-  CSS.highlights.set(HL_ALL, new Highlight(...ranges));
-  const active = ranges[activeIndex];
+  const allRanges = Array.from(highlightOwners.values()).flatMap((owner) => owner.ranges);
+  if (allRanges.length > 0) CSS.highlights.set(HL_ALL, new Highlight(...allRanges));
+  else CSS.highlights.delete(HL_ALL);
+
+  const currentOwner =
+    currentHighlightOwner === null ? undefined : highlightOwners.get(currentHighlightOwner);
+  const active = currentOwner?.ranges[currentOwner.activeIndex];
   if (active) CSS.highlights.set(HL_CURRENT, new Highlight(active));
   else CSS.highlights.delete(HL_CURRENT);
 }
 
-function clearHighlights(): void {
-  if (!highlightApiAvailable()) return;
-  CSS.highlights.delete(HL_ALL);
-  CSS.highlights.delete(HL_CURRENT);
+function registerHighlights(ownerId: number, ranges: Range[], activeIndex: number): void {
+  highlightOwners.set(ownerId, { ranges, activeIndex });
+  currentHighlightOwner = ownerId;
+  syncHighlights();
+}
+
+function clearHighlights(ownerId: number): void {
+  highlightOwners.delete(ownerId);
+  if (currentHighlightOwner === ownerId) {
+    currentHighlightOwner = highlightOwners.size > 0 ? Array.from(highlightOwners.keys()).at(-1) ?? null : null;
+  }
+  syncHighlights();
 }
 
 function scrollRangeIntoView(range: Range | undefined): void {
@@ -84,19 +98,20 @@ export type TranscriptSearch = {
  * registration and scrolling are feature-detected, so under jsdom the hook still
  * counts/navigates matches but performs no DOM-engine side effects.
  *
- * `revision` should change on structural transcript changes (e.g. entry count)
- * so matches refresh as new messages arrive, without resetting the user's
- * position on every streaming reveal tick.
+ * `revision` should change on real transcript/content changes and when the chat
+ * transcript remounts, so ranges never point at detached DOM nodes.
  */
 export function useTranscriptSearch(
-  contentRef: RefObject<HTMLElement | null>,
-  query: string,
-  enabled: boolean,
-  revision: number,
+ contentRef: RefObject<HTMLElement | null>,
+ query: string,
+ enabled: boolean,
+ revision: unknown,
 ): TranscriptSearch {
-  const [matchCount, setMatchCount] = useState(0);
-  const [activeIndex, setActiveIndex] = useState(0);
-  const rangesRef = useRef<Range[]>([]);
+ const [matchCount, setMatchCount] = useState(0);
+ const [activeIndex, setActiveIndex] = useState(0);
+ const rangesRef = useRef<Range[]>([]);
+ const ownerIdRef = useRef<number>(0);
+ if (ownerIdRef.current === 0) ownerIdRef.current = nextHighlightOwner++;
 
   // Recompute ranges + the all-matches highlight, and jump to the first match.
   useEffect(() => {
@@ -105,14 +120,14 @@ export function useTranscriptSearch(
       rangesRef.current = [];
       setMatchCount(0);
       setActiveIndex(0);
-      clearHighlights();
+      clearHighlights(ownerIdRef.current);
       return;
     }
     const ranges = findMatchRanges(root, query);
     rangesRef.current = ranges;
     setMatchCount(ranges.length);
     setActiveIndex(0);
-    registerHighlights(ranges, 0);
+    registerHighlights(ownerIdRef.current, ranges, 0);
     scrollRangeIntoView(ranges[0]);
   }, [contentRef, query, enabled, revision]);
 
@@ -120,12 +135,12 @@ export function useTranscriptSearch(
   useEffect(() => {
     const ranges = rangesRef.current;
     if (ranges.length === 0) return;
-    registerHighlights(ranges, activeIndex);
+    registerHighlights(ownerIdRef.current, ranges, activeIndex);
     scrollRangeIntoView(ranges[activeIndex]);
   }, [activeIndex]);
 
-  // Always clear the global highlights when the chat unmounts.
-  useEffect(() => () => clearHighlights(), []);
+  // Remove only this hook's ranges; other chat tiles keep their highlights.
+  useEffect(() => () => clearHighlights(ownerIdRef.current), []);
 
   const next = useCallback(() => {
     setActiveIndex((i) => {
