@@ -3656,6 +3656,86 @@ body.is-row-resizing .center-terminal__resizer::after {
   color: var(--text-muted);
   font-size: var(--fs-xs);
 }
+/* Row above the box: activity status (left) + model/context info (right). */
+.chat-composer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 16px;
+}
+.chat-composer__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.chat-composer__status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* sk-cube-grid spinner, downsized + themed for the inline status line. */
+.chat-status-spinner {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 1px;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+.chat-status-spinner .sk-cube {
+  width: 100%;
+  height: 100%;
+  background-color: var(--accent);
+  animation: sk-cubeGridScaleDelay 1.3s infinite ease-in-out;
+}
+.chat-status-spinner .sk-cube1 {
+  animation-delay: 0.2s;
+}
+.chat-status-spinner .sk-cube2 {
+  animation-delay: 0.3s;
+}
+.chat-status-spinner .sk-cube3 {
+  animation-delay: 0.4s;
+}
+.chat-status-spinner .sk-cube4 {
+  animation-delay: 0.1s;
+}
+.chat-status-spinner .sk-cube5 {
+  animation-delay: 0.2s;
+}
+.chat-status-spinner .sk-cube6 {
+  animation-delay: 0.3s;
+}
+.chat-status-spinner .sk-cube7 {
+  animation-delay: 0s;
+}
+.chat-status-spinner .sk-cube8 {
+  animation-delay: 0.1s;
+}
+.chat-status-spinner .sk-cube9 {
+  animation-delay: 0.2s;
+}
+@keyframes sk-cubeGridScaleDelay {
+  0%,
+  70%,
+  100% {
+    transform: scale3D(1, 1, 1);
+  }
+  35% {
+    transform: scale3D(0, 0, 1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-status-spinner .sk-cube {
+    animation: none;
+    opacity: 0.5;
+  }
+}
 
 /* Elevated, rounded container grouping the textarea + actions row. */
 .chat-composer__box {

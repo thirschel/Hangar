@@ -257,6 +257,73 @@ describe('ChatViewHost', () => {
     expect(screen.getByRole('button', { name: 'Reject' })).toBeEnabled();
   });
 
+  it('shows a "Searching" status with a spinner while a grep tool runs', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'tool.start', toolName: 'grep', toolCallId: 'g1' },
+      });
+    });
+
+    expect(container.querySelector('.chat-composer__status-label')?.textContent).toBe('Searching');
+    expect(container.querySelector('.chat-status-spinner')).not.toBeNull();
+  });
+
+  it('derives the status verb from the running tool (view -> Reading)', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'tool.start', toolName: 'view', toolCallId: 'v1' },
+      });
+    });
+
+    expect(container.querySelector('.chat-composer__status-label')?.textContent).toBe('Reading');
+  });
+
+  it('shows "Thinking" while reasoning streams', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'assistant.reasoning.delta', text: 'Considering ' },
+      });
+    });
+
+    expect(container.querySelector('.chat-composer__status-label')?.textContent).toBe('Thinking');
+  });
+
+  it('clears the status (and spinner) once the turn completes (idle)', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'tool.start', toolName: 'bash', toolCallId: 'b1' },
+      });
+    });
+    expect(container.querySelector('.chat-composer__status-label')?.textContent).toBe('Running');
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 2, kind: 'tool.complete', toolCallId: 'b1' },
+      });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 3, kind: 'idle' } });
+    });
+
+    expect(container.querySelector('.chat-composer__status-label')).toBeNull();
+    expect(container.querySelector('.chat-status-spinner')).toBeNull();
+  });
+
   it('renders reasoning as faded text inside an expanded <details> (no bubble)', async () => {
     const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());

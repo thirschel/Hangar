@@ -194,6 +194,44 @@ function requestDetail(question: string, genericLabel: string, toolName?: string
   return [toolName?.trim(), nonGenericQuestion].filter(Boolean).join(': ');
 }
 
+// --- Activity status (CLI-style "Working" / "Searching…" line) --------------
+// The SDK's AssistantIntentData proved unreliable (it did not fire for a real
+// multi-step task), so the status is derived from the live transcript instead --
+// model-independent and grounded in events we already render.
+const TOOL_STATUS_VERBS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/grep|search|find|lookup/, 'Searching'],
+  [/view|read|cat|open|list|ls/, 'Reading'],
+  [/bash|shell|run|exec|terminal|powershell|cmd|command/, 'Running'],
+  [/write|edit|create|replace|apply|patch|insert|delete/, 'Editing'],
+  [/fetch|web|url|http|browse|download|curl/, 'Fetching'],
+];
+
+function toolStatusVerb(toolName: string): string {
+  const name = toolName.toLowerCase();
+  for (const [pattern, verb] of TOOL_STATUS_VERBS) {
+    if (pattern.test(name)) return verb;
+  }
+  return `Using ${toolName}`;
+}
+
+// Derive a short status label for the most recent activity in the current turn.
+// Callers gate on turnInProgress, so this only runs while the agent is busy.
+function deriveActivityStatus(entries: TranscriptEntry[]): string {
+  // A currently-running tool is the most specific "what is it doing now"; scan
+  // back only within the latest turn segment (stop at the previous idle marker).
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.kind === 'idle') break;
+    if (entry.kind === 'tool' && entry.status === 'running') {
+      return toolStatusVerb(entry.toolName);
+    }
+  }
+  const last = entries[entries.length - 1];
+  if (last?.kind === 'reasoning') return 'Thinking';
+  if (last?.kind === 'assistant' && last.streaming) return 'Responding';
+  return 'Working';
+}
+
 function buildTranscript(frames: EventFrame[]): TranscriptModel {
   const entries: TranscriptEntry[] = [];
   const servers = new Map<string, { status: string; error?: string }>();
@@ -827,6 +865,10 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
       </>
     ) : undefined;
 
+  // CLI-style activity label shown (with a spinner) on the left above the box,
+  // only while a turn is in progress. Derived from the live transcript.
+  const activityStatus = turnInProgress ? deriveActivityStatus(transcript.entries) : undefined;
+
   // Subscribe to the rich event stream for this chat; re-subscribe when the chat
   // (session) changes and tear down on unmount. Mirrors TranscriptView.
   useEffect(() => {
@@ -1192,6 +1234,7 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
               turnInProgress={turnInProgress}
               onSend={handleSend}
               onStop={handleStop}
+              status={activityStatus}
               info={composerInfo}
               models={models}
               currentModelId={currentModelId}

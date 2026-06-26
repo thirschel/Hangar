@@ -36,6 +36,12 @@ export type ComposerProps = {
   /** Right-aligned info shown ABOVE the box (model name + context %). */
   info?: ReactNode;
   /**
+   * Left-aligned activity status shown ABOVE the box while a turn is in progress
+   * (e.g. "Searching", "Reading", "Working"). When set, a small spinner is shown
+   * next to it. Omit/undefined to hide the status (and spinner).
+   */
+  status?: string;
+  /**
    * Models for the live selector. When empty/undefined (or no `onApplyModel`),
    * the Model button is a disabled placeholder.
    */
@@ -87,11 +93,24 @@ function basename(filePath: string): string {
   return segments[segments.length - 1] || filePath;
 }
 
+// A tiny 3x3 "cube grid" spinner (sk-cube-grid) shown next to the activity status
+// while a turn streams. Pure CSS animation; honors prefers-reduced-motion.
+function StatusSpinner(): JSX.Element {
+  return (
+    <span className="chat-status-spinner" aria-hidden="true">
+      {Array.from({ length: 9 }, (_, i) => (
+        <span key={i} className={`sk-cube sk-cube${i + 1}`} />
+      ))}
+    </span>
+  );
+}
+
 function ComposerView({
   turnInProgress,
   disabledSend = false,
   onSend,
   onStop,
+  status,
   info,
   models,
   currentModelId,
@@ -229,7 +248,19 @@ function ComposerView({
 
   return (
     <form className="chat-composer" onSubmit={onSubmit}>
-      {info !== undefined && <div className="chat-composer__info">{info}</div>}
+      {(status !== undefined || info !== undefined) && (
+        <div className="chat-composer__header">
+          {status !== undefined ? (
+            <div className="chat-composer__status">
+              <StatusSpinner />
+              <span className="chat-composer__status-label">{status}</span>
+            </div>
+          ) : (
+            <span />
+          )}
+          {info !== undefined ? <div className="chat-composer__info">{info}</div> : <span />}
+        </div>
+      )}
       <div className="chat-composer__box">
         {attachments.length > 0 && (
           <ul className="chat-composer__attachments" aria-label="Attachments">
