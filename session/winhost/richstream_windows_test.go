@@ -107,6 +107,34 @@ func TestSDKSessionRichEventsAndReplay(t *testing.T) {
 	}
 }
 
+func TestSDKEventFrameIdleTimestamp(t *testing.T) {
+	fixedTime := time.Date(2026, time.June, 25, 20, 18, 49, 563000000, time.UTC)
+	frame, ok := sdkEventFrame(copilot.SessionEvent{
+		Timestamp: fixedTime,
+		Data:      &copilot.SessionIdleData{},
+	})
+	if !ok {
+		t.Fatal("sdkEventFrame did not map SessionIdleData")
+	}
+	if frame.Kind != proto.EventKindIdle {
+		t.Fatalf("idle frame Kind = %q, want %q", frame.Kind, proto.EventKindIdle)
+	}
+	if frame.Timestamp != fixedTime.UnixMilli() {
+		t.Fatalf("idle frame Timestamp = %d, want %d", frame.Timestamp, fixedTime.UnixMilli())
+	}
+
+	zero, ok := sdkEventFrame(copilot.SessionEvent{Data: &copilot.SessionIdleData{}})
+	if !ok {
+		t.Fatal("sdkEventFrame did not map zero-timestamp SessionIdleData")
+	}
+	if zero.Kind != proto.EventKindIdle {
+		t.Fatalf("zero-timestamp idle frame Kind = %q, want %q", zero.Kind, proto.EventKindIdle)
+	}
+	if zero.Timestamp != 0 {
+		t.Fatalf("zero-timestamp idle frame Timestamp = %d, want 0", zero.Timestamp)
+	}
+}
+
 func TestOnSDKEventAssistantUsageEmitsCachedUsageFrame(t *testing.T) {
 	s := newSDKSession("rich-aic", "copilot", t.TempDir(), "", false, "", "gpt-5", "", "", nil, nil)
 	defer s.close()

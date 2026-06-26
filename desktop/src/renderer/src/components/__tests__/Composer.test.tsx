@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { Composer, type ComposerProps } from '../Composer';
 
@@ -55,27 +55,78 @@ describe('Composer', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
   });
 
-  it('submits on Ctrl+Enter and clears the box', () => {
+  it('submits on Enter and clears the box', () => {
     const onSend = vi.fn();
     render(<Composer {...baseProps({ onSend })} />);
 
     const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
-    fireEvent.change(textbox, { target: { value: 'via shortcut' } });
-    fireEvent.keyDown(textbox, { key: 'Enter', ctrlKey: true });
+    fireEvent.change(textbox, { target: { value: 'via enter' } });
+    fireEvent.keyDown(textbox, { key: 'Enter' });
 
-    expect(onSend).toHaveBeenCalledWith('via shortcut', []);
+    expect(onSend).toHaveBeenCalledWith('via enter', []);
     expect(textbox.value).toBe('');
   });
 
-  it('does not submit on Enter without a modifier', () => {
+  it('does not submit on Shift+Enter', () => {
     const onSend = vi.fn();
     render(<Composer {...baseProps({ onSend })} />);
 
     const textbox = screen.getByRole('textbox');
     fireEvent.change(textbox, { target: { value: 'no send' } });
-    fireEvent.keyDown(textbox, { key: 'Enter' });
+    fireEvent.keyDown(textbox, { key: 'Enter', shiftKey: true });
 
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('arms Escape once before canceling an in-progress turn on the second press', () => {
+    vi.useFakeTimers();
+    try {
+      const onStop = vi.fn();
+      render(<Composer {...baseProps({ turnInProgress: true, onStop, status: 'Working' })} />);
+
+      const textbox = screen.getByRole('textbox');
+      fireEvent.keyDown(textbox, { key: 'Escape' });
+
+      expect(screen.getByText('hit esc one more time to cancel')).toBeInTheDocument();
+      expect(onStop).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(textbox, { key: 'Escape' });
+
+      expect(onStop).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('hit esc one more time to cancel')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disarms the Escape cancel hint after two seconds', () => {
+    vi.useFakeTimers();
+    try {
+      const onStop = vi.fn();
+      render(<Composer {...baseProps({ turnInProgress: true, onStop, status: 'Working' })} />);
+
+      fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+      expect(screen.getByText('hit esc one more time to cancel')).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+
+      expect(screen.queryByText('hit esc one more time to cancel')).not.toBeInTheDocument();
+      expect(onStop).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores Escape when no turn is in progress', () => {
+    const onStop = vi.fn();
+    render(<Composer {...baseProps({ onStop })} />);
+
+    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Escape' });
+
+    expect(screen.queryByText('hit esc one more time to cancel')).not.toBeInTheDocument();
+    expect(onStop).not.toHaveBeenCalled();
   });
 
   it('shows Stop only while a turn is in progress and calls onStop', () => {

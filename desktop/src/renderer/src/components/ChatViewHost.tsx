@@ -100,7 +100,7 @@ type TranscriptEntry =
       answered?: boolean;
       answerLabel?: string;
     }
-  | { id: string; kind: 'idle'; aborted: boolean }
+  | { id: string; kind: 'idle'; aborted: boolean; timestamp?: number }
   | { id: string; kind: 'error'; text: string };
 
 type TranscriptModel = {
@@ -534,7 +534,12 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           pendingReasoningSeq = null;
         }
         turnInProgress = false;
-        entries.push({ id: `idle-${frame.seq}`, kind: 'idle', aborted: frame.aborted ?? false });
+        entries.push({
+          id: `idle-${frame.seq}`,
+          kind: 'idle',
+          aborted: frame.aborted ?? false,
+          timestamp: frame.ts,
+        });
         break;
       case 'error':
         turnInProgress = false;
@@ -586,6 +591,13 @@ function formatContextPercent(usage?: UsageSnapshot): string | undefined {
 
 function formatAic(units: number): string {
   return units.toFixed(1).replace(/\.0$/, '');
+}
+
+function formatCompletedTime(ms?: number): string {
+  if (typeof ms === 'number' && Number.isFinite(ms)) {
+    return `Completed ${new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+  }
+  return 'Turn complete.';
 }
 
 // Per-session rich-frame cache, kept at module scope so it survives both a
@@ -1388,12 +1400,16 @@ function ChatEntryView({
       );
     }
     case 'idle':
+      if (entry.aborted) {
+        return (
+          <div className="chat-entry--idle chat-entry--idle--canceled">
+            <span className="chat-idle-dot chat-idle-dot--purple" aria-hidden="true" />
+            <span>Operation canceled by user</span>
+          </div>
+        );
+      }
       // A tiny faded centered turn marker (the CLI shows no usage line at all).
-      return (
-        <div className="chat-entry--idle">
-          {entry.aborted ? 'Turn aborted.' : 'Turn complete.'}
-        </div>
-      );
+      return <div className="chat-entry--idle">{formatCompletedTime(entry.timestamp)}</div>;
     case 'error':
       return (
         <div className="chat-entry chat-entry--error" role="alert">

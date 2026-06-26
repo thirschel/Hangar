@@ -91,7 +91,10 @@ import (
 // the context. EventFrame gains Aic — a float on the usage frame, the running sum of the
 // SDK's AssistantUsageData CopilotUsage.TotalNanoAiu (in whole AI units). Additive:
 // omitempty drops it on every non-usage frame and on a usage frame before any request.
-const Version = 21
+// v22 timestamps turn completion. EventFrame gains Timestamp — the SDK event time
+// (unix ms) set on the idle frame so the desktop can show when a turn completed.
+// Additive: omitempty drops it on every frame that does not carry a time.
+const Version = 22
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -405,6 +408,9 @@ type EventFrame struct {
 	Text      string `json:"text,omitempty"`      // assistant.message / assistant.delta / assistant.reasoning(.delta) text
 	ToolName  string `json:"toolName,omitempty"`  // tool.start / tool.complete
 	MCPServer string `json:"mcpServer,omitempty"` // tool.* : MCP server name, when the tool is an MCP tool
+	// SDK event time in unix ms (v22). Set on the idle frame so the desktop can show
+	// when a turn completed. omitempty drops it on frames without a time.
+	Timestamp int64 `json:"ts,omitempty"`
 	// SDK tool-call id (v20). Set on tool.start / tool.complete (the executing call)
 	// and on permission.requested (the gated call's id, when the SDK provides one),
 	// so the desktop can attach an AutoYes permission badge to the exact tool line.

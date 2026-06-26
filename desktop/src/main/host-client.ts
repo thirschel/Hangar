@@ -101,6 +101,7 @@ export interface EventFrame {
   title?: string;
   status?: string;
   aborted?: boolean;
+  ts?: number;
   error?: string;
   mcpServers?: McpServerInfo[]; // present on a frame with kind 'mcp.detail'
   skills?: SkillInfo[]; // present on a frame with kind 'skills'

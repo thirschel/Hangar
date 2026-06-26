@@ -3443,6 +3443,25 @@ body.is-row-resizing .center-terminal__resizer::after {
   font-size: var(--fs-xs);
   text-align: center;
 }
+/* Canceled turn marker: left-aligned, a small purple dot + readable text. */
+.chat-entry--idle--canceled {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-2);
+  text-align: left;
+  color: var(--text-muted);
+}
+.chat-idle-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.chat-idle-dot--purple {
+  background-color: #a371f7;
+  box-shadow: 0 0 6px rgba(163, 113, 247, 0.5);
+}
 .chat-entry--error {
   border-color: rgba(241, 76, 76, 0.45);
   background: rgba(241, 76, 76, 0.08);
@@ -3677,6 +3696,13 @@ body.is-row-resizing .center-terminal__resizer::after {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* "hit esc one more time to cancel" — greyed hint shown next to the status. */
+.chat-composer__esc-hint {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  font-style: italic;
+  white-space: nowrap;
+}
 /* sk-cube-grid spinner, downsized + themed for the inline status line. */
 .chat-status-spinner {
   display: inline-grid;
@@ -3882,6 +3908,16 @@ body.is-row-resizing .center-terminal__resizer::after {
   max-width: 220px;
 }
 
+@keyframes chat-menu-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
 .chat-composer__model-menu {
   position: absolute;
   right: 0;
@@ -3890,13 +3926,13 @@ body.is-row-resizing .center-terminal__resizer::after {
   display: flex;
   flex-direction: column;
   min-width: 180px;
-  max-height: 260px;
-  overflow-y: auto;
   padding: var(--space-1);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
+  transform-origin: bottom right;
+  animation: chat-menu-pop-in 0.14s var(--ease) both;
 }
 
 .chat-composer__model-item {
@@ -4252,6 +4288,7 @@ body.is-row-resizing .center-terminal__resizer::after {
 .chat-composer__model-group {
   display: flex;
   flex-direction: column;
+  position: relative;
 }
 
 /* Parent rows (Effort / Context / More models): label on the left, the current
@@ -4298,11 +4335,22 @@ body.is-row-resizing .center-terminal__resizer::after {
 /* Inline submenu: the expanded options for a parent row, indented and framed by a
    left rule so the hierarchy reads clearly. */
 .chat-composer__submenu {
+  position: absolute;
+  right: calc(100% + var(--space-1));
+  top: 0;
+  z-index: 21;
   display: flex;
   flex-direction: column;
-  margin: 2px 0 2px var(--space-3);
-  padding-left: var(--space-2);
-  border-left: 1px solid var(--border-strong);
+  min-width: 150px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  transform-origin: top right;
+  animation: chat-menu-pop-in 0.12s var(--ease) both;
 }
 
 .chat-composer__submenu-item {

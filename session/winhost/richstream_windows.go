@@ -322,7 +322,11 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 	case *copilot.SessionTitleChangedData:
 		return proto.EventFrame{Kind: proto.EventKindTitle, Title: data.Title}, true
 	case *copilot.SessionIdleData:
-		return proto.EventFrame{Kind: proto.EventKindIdle, Aborted: boolPtrValue(data.Aborted)}, true
+		frame := proto.EventFrame{Kind: proto.EventKindIdle, Aborted: boolPtrValue(data.Aborted)}
+		if !ev.Timestamp.IsZero() {
+			frame.Timestamp = ev.Timestamp.UnixMilli()
+		}
+		return frame, true
 	default:
 		return proto.EventFrame{}, false
 	}

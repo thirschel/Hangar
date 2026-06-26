@@ -15,10 +15,10 @@ import type { ModelInfo } from '../../../main/host-client';
  * Attachments come from the native multi-select file picker (window.cs.pickFiles)
  * and render as removable chips above the box; the list is de-duplicated by path.
  *
- * Submit is Ctrl/Cmd+Enter (mirrors TranscriptView) or the Send button; plain
- * Enter inserts a newline. Sending is a no-op while a turn is in progress or when
- * hard-disabled via `disabledSend`; otherwise Send is enabled when there is
- * trimmed text OR at least one attachment (so files can be sent with no text).
+ * Submit is Enter (unless Shift is held or IME composition is active) or the
+ * Send button. Sending is a no-op while a turn is in progress or when hard-
+ * disabled via `disabledSend`; otherwise Send is enabled when there is trimmed
+ * text OR at least one attachment (so files can be sent with no text).
  */
 export type ComposerProps = {
   /** A turn is streaming: show Stop and disable Send. */
@@ -122,7 +122,9 @@ function ComposerView({
   const [attachments, setAttachments] = useState<string[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [openSection, setOpenSection] = useState<ModelMenuSection | null>(null);
+  const [escArmed, setEscArmed] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
+  const escTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trimmed = text.trim();
   // Send is allowed with trimmed text OR at least one attachment (a files-only
   // send), but never while a turn streams or when hard-disabled.
@@ -167,10 +169,36 @@ function ComposerView({
     };
   }, [modelMenuOpen]);
 
+  useEffect(() => {
+    if (!turnInProgress) {
+      if (escTimerRef.current !== null) {
+        clearTimeout(escTimerRef.current);
+        escTimerRef.current = null;
+      }
+      setEscArmed(false);
+    }
+
+    return () => {
+      if (escTimerRef.current !== null) {
+        clearTimeout(escTimerRef.current);
+        escTimerRef.current = null;
+      }
+    };
+  }, [turnInProgress]);
+
+  const disarmEsc = (): void => {
+    if (escTimerRef.current !== null) {
+      clearTimeout(escTimerRef.current);
+      escTimerRef.current = null;
+    }
+    setEscArmed(false);
+  };
+
   // Send the current draft and clear the box. No-op unless `canSend`, so the
   // keyboard shortcut and the Send button share one guard.
   const trySend = (): void => {
     if (!canSend) return;
+    disarmEsc();
     onSend(trimmed, attachments);
     setText('');
     setAttachments([]);
@@ -254,6 +282,11 @@ function ComposerView({
             <div className="chat-composer__status">
               <StatusSpinner />
               <span className="chat-composer__status-label">{status}</span>
+              {escArmed && (
+                <span className="chat-composer__esc-hint">
+                  hit esc one more time to cancel
+                </span>
+              )}
             </div>
           ) : (
             <span />
@@ -289,7 +322,30 @@ function ComposerView({
           rows={3}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+            if (event.key === 'Escape') {
+              if (modelMenuOpen) return;
+              if (!turnInProgress) return;
+
+              event.preventDefault();
+              if (escArmed) {
+                disarmEsc();
+                onStop();
+                return;
+              }
+
+              setEscArmed(true);
+              escTimerRef.current = setTimeout(() => {
+                escTimerRef.current = null;
+                setEscArmed(false);
+              }, 2000);
+              return;
+            }
+
+            if (
+              event.key === 'Enter' &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing
+            ) {
               event.preventDefault();
               trySend();
             }

@@ -92,7 +92,39 @@ describe('ChatViewHost', () => {
     expect(assistant.closest('.chat-msg--assistant')).not.toBeNull();
     expect(assistant.closest('.md')).not.toBeNull(); // rendered through <Markdown>
     expect(assistant.closest('.chat-msg--user')).toBeNull();
+    // Graceful fallback for older/replayed idle frames without a timestamp.
     expect(screen.getByText('Turn complete.')).toBeInTheDocument();
+  });
+
+  it('renders completed idle frames with the completion time', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    const completedAt = new Date('2026-06-25T20:04:00-05:00').getTime();
+    const expected = `Completed ${new Date(completedAt).toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+    })}`;
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'idle', ts: completedAt } });
+    });
+
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
+
+  it('renders aborted idle frames as canceled with a purple dot', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 1, kind: 'idle', aborted: true } });
+    });
+
+    const canceled = screen.getByText('Operation canceled by user').closest('.chat-entry--idle');
+    expect(canceled).not.toBeNull();
+    expect(canceled).toHaveClass('chat-entry--idle--canceled');
+    expect(container.querySelector('.chat-entry--idle--canceled .chat-idle-dot--purple')).not.toBeNull();
   });
 
   it('fades streaming words in but renders the finalized message plainly without remounting', async () => {
