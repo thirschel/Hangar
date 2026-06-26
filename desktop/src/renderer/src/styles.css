@@ -4332,8 +4332,17 @@ body.is-row-resizing .center-terminal__resizer::after {
   color: var(--text-faint);
 }
 
-/* Inline submenu: the expanded options for a parent row, indented and framed by a
-   left rule so the hierarchy reads clearly. */
+/* Flyout submenu: the options for a parent row, opening to the side of the menu.
+   JS (Composer) clamps it into the viewport via an inline transform when it would
+   overflow, so the animation is opacity-only to avoid fighting that transform. */
+@keyframes chat-submenu-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
 .chat-composer__submenu {
   position: absolute;
   right: calc(100% + var(--space-1));
@@ -4349,8 +4358,7 @@ body.is-row-resizing .center-terminal__resizer::after {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
-  transform-origin: top right;
-  animation: chat-menu-pop-in 0.12s var(--ease) both;
+  animation: chat-submenu-fade-in 0.12s var(--ease) both;
 }
 
 .chat-composer__submenu-item {

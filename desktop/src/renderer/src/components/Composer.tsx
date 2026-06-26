@@ -1,5 +1,5 @@
 import type { FormEvent, JSX, ReactNode } from 'react';
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ModelInfo } from '../../../main/host-client';
 
 /**
@@ -124,6 +124,7 @@ function ComposerView({
   const [openSection, setOpenSection] = useState<ModelMenuSection | null>(null);
   const [escArmed, setEscArmed] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
   const escTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trimmed = text.trim();
   // Send is allowed with trimmed text OR at least one attachment (a files-only
@@ -168,6 +169,33 @@ function ComposerView({
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [modelMenuOpen]);
+
+  // Keep the open flyout submenu inside the window: it opens to the left of the
+  // menu by default, but a narrow window (or a wide list) can push it off an edge.
+  // Measure the un-clamped rect and nudge it back into view via an inline
+  // transform (the submenu's animation is opacity-only so it won't fight this).
+  useLayoutEffect(() => {
+    const el = submenuRef.current;
+    if (!el || openSection === null) return;
+    el.style.transform = 'none';
+    const rect = el.getBoundingClientRect();
+    const margin = 8;
+    let dx = 0;
+    let dy = 0;
+    if (rect.left < margin) {
+      dx = margin - rect.left;
+    } else if (rect.right > window.innerWidth - margin) {
+      dx = window.innerWidth - margin - rect.right;
+    }
+    if (rect.bottom > window.innerHeight - margin) {
+      dy = window.innerHeight - margin - rect.bottom;
+    } else if (rect.top < margin) {
+      dy = margin - rect.top;
+    }
+    if (dx !== 0 || dy !== 0) {
+      el.style.transform = `translate(${dx}px, ${dy}px)`;
+    }
+  }, [openSection]);
 
   useEffect(() => {
     if (!turnInProgress) {
@@ -409,7 +437,7 @@ function ComposerView({
                       </span>
                     </button>
                     {openSection === 'effort' && (
-                      <div className="chat-composer__submenu" role="menu" aria-label="Effort">
+                      <div className="chat-composer__submenu" role="menu" aria-label="Effort" ref={submenuRef}>
                         {supportedEfforts.map((value) => {
                           const active = value === effort;
                           return (
@@ -453,7 +481,7 @@ function ComposerView({
                       </span>
                     </button>
                     {openSection === 'context' && (
-                      <div className="chat-composer__submenu" role="menu" aria-label="Context">
+                      <div className="chat-composer__submenu" role="menu" aria-label="Context" ref={submenuRef}>
                         {CONTEXT_TIERS.map((entry) => {
                           const active = entry.value === contextTier;
                           return (
@@ -493,7 +521,7 @@ function ComposerView({
                     </span>
                   </button>
                   {openSection === 'models' && (
-                    <div className="chat-composer__submenu" role="menu" aria-label="Models">
+                    <div className="chat-composer__submenu" role="menu" aria-label="Models" ref={submenuRef}>
                       {modelList.map((model) => {
                         const active = model.id === currentModelId;
                         return (
