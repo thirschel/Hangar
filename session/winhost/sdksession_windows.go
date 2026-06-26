@@ -132,6 +132,10 @@ func (s *sdkSession) startResumed() error {
 		}
 		s.translateAndEmit(ev)
 	}
+	// If the replayed transcript was interrupted before its terminal frame (e.g. the
+	// daemon was killed mid-turn), settle the dangling turn so the resumed session
+	// presents as idle instead of stuck "running".
+	s.emitIdleIfDangling()
 	return nil
 }
 

@@ -437,3 +437,61 @@ func TestSDKEventFrameReasoningDelta(t *testing.T) {
 		t.Fatalf("reasoning finalizer frame = %+v, want kind=%q text=%q", full, proto.EventKindReasoning, "thinking")
 	}
 }
+
+// TestTurnDangling asserts turnDangling folds a rich log exactly like the desktop's
+// turnInProgress: a working frame with no following terminal => dangling.
+func TestTurnDangling(t *testing.T) {
+	cases := []struct {
+		name string
+		log  []proto.EventFrame
+		want bool
+	}{
+		{"empty", nil, false},
+		{"ends tool.start", []proto.EventFrame{{Kind: proto.EventKindToolStart}}, true},
+		{"tool.start then complete (complete ignored)", []proto.EventFrame{{Kind: proto.EventKindToolStart}, {Kind: proto.EventKindToolComplete}}, true},
+		{"reasoning delta only", []proto.EventFrame{{Kind: proto.EventKindReasoningDelta}}, true},
+		{"working then ignored frames", []proto.EventFrame{{Kind: proto.EventKindToolStart}, {Kind: proto.EventKindUsage}, {Kind: proto.EventKindModel}}, true},
+		{"permission requested pending", []proto.EventFrame{{Kind: proto.EventKindPermissionRequest}}, true},
+		{"ends assistant.message", []proto.EventFrame{{Kind: proto.EventKindToolStart}, {Kind: proto.EventKindAssistantMessage}}, false},
+		{"ends idle", []proto.EventFrame{{Kind: proto.EventKindReasoning}, {Kind: proto.EventKindIdle}}, false},
+		{"ends error", []proto.EventFrame{{Kind: proto.EventKindToolStart}, {Kind: proto.EventKindError}}, false},
+	}
+	for _, tc := range cases {
+		if got := turnDangling(tc.log); got != tc.want {
+			t.Errorf("%s: turnDangling = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestEmitIdleIfDanglingAppendsIdle asserts a revived session whose log ends mid-turn
+// gets a synthetic, timestamp-less idle frame so the desktop resets turnInProgress.
+func TestEmitIdleIfDanglingAppendsIdle(t *testing.T) {
+	s := newSDKSession("rich-dangle", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindToolStart, ToolName: "bash"})
+	s.emitIdleIfDangling()
+
+	frames := s.richTranscript(0)
+	if len(frames) != 2 {
+		t.Fatalf("richTranscript len = %d, want 2 (tool.start + synthetic idle)", len(frames))
+	}
+	if frames[1].Kind != proto.EventKindIdle || frames[1].Timestamp != 0 || frames[1].Aborted {
+		t.Fatalf("settled frame = %+v, want a timestamp-less, non-aborted idle", frames[1])
+	}
+}
+
+// TestEmitIdleIfDanglingNoopWhenTerminal asserts no synthetic idle is added when the
+// replayed log already ended cleanly (no duplicate marker).
+func TestEmitIdleIfDanglingNoopWhenTerminal(t *testing.T) {
+	s := newSDKSession("rich-clean", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindToolStart, ToolName: "bash"})
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindAssistantMessage, Text: "done"})
+	s.emitIdleIfDangling()
+
+	if frames := s.richTranscript(0); len(frames) != 2 {
+		t.Fatalf("richTranscript len = %d, want 2 (no synthetic idle appended)", len(frames))
+	}
+}

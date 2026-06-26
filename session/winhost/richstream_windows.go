@@ -253,6 +253,47 @@ func (s *sdkSession) emitFrame(frame proto.EventFrame) {
 	}
 }
 
+// turnDangling reports whether the rich log ends mid-turn -- it folds the log
+// exactly like the desktop's `turnInProgress`: a "working" frame sets the turn
+// active, a terminal frame (assistant.message / idle / error) clears it, and every
+// other kind (tool.complete, usage, model, mcp.*, *.resolved, title, …) is ignored.
+// A resumed transcript that was interrupted before its terminal frame (e.g. the
+// daemon was killed mid-turn) ends active => dangling.
+func turnDangling(log []proto.EventFrame) bool {
+	active := false
+	for _, f := range log {
+		switch f.Kind {
+		case proto.EventKindAssistantDelta,
+			proto.EventKindReasoning,
+			proto.EventKindReasoningDelta,
+			proto.EventKindToolStart,
+			proto.EventKindPermissionRequest,
+			proto.EventKindUserInputRequest:
+			active = true
+		case proto.EventKindAssistantMessage,
+			proto.EventKindIdle,
+			proto.EventKindError:
+			active = false
+		}
+	}
+	return active
+}
+
+// emitIdleIfDangling settles a turn left dangling in the rich log by emitting a
+// synthetic idle frame, so a session revived from an interrupted transcript
+// presents as idle (not stuck "running"). Called once after the resume replay,
+// when the session is idle by definition; a no-op when the turn already ended.
+// The synthetic idle carries no timestamp, so the desktop renders the neutral
+// "Turn complete." marker and re-enables the composer.
+func (s *sdkSession) emitIdleIfDangling() {
+	s.mu.Lock()
+	dangling := turnDangling(s.richLog)
+	s.mu.Unlock()
+	if dangling {
+		s.emitFrame(proto.EventFrame{Kind: proto.EventKindIdle})
+	}
+}
+
 func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 	switch data := ev.Data.(type) {
 	case *copilot.AssistantMessageData:
