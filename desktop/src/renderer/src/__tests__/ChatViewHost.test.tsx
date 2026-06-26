@@ -1133,6 +1133,39 @@ describe('ChatViewHost', () => {
     }
   });
 
+  it('opens the find bar on Ctrl+F, counts matches, and closes on Escape', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: { seq: 1, kind: 'assistant.message', text: 'banana banana' },
+      });
+      richFrameCallback?.({ session: 'rich-session', frame: { seq: 2, kind: 'idle' } });
+    });
+
+    // The find bar is hidden until Ctrl+F.
+    expect(screen.queryByLabelText('Find in chat')).toBeNull();
+
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+    });
+    const input = screen.getByLabelText('Find in chat');
+
+    // A term that occurs twice in the transcript shows "1/2".
+    await act(async () => {
+      fireEvent.change(input, { target: { value: 'banana' } });
+    });
+    expect(screen.getByText('1/2')).toBeInTheDocument();
+
+    // Escape closes the bar.
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Escape' });
+    });
+    expect(screen.queryByLabelText('Find in chat')).toBeNull();
+  });
+
   // --- Autoscroll + scroll-to-bottom button ------------------------------------
   // jsdom has no real layout, so stub the scroll container's metrics and drive the
   // onScroll / ResizeObserver paths directly.

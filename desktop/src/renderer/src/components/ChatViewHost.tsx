@@ -1,5 +1,5 @@
 import type { FormEvent, JSX } from 'react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   EventFrame,
   McpServerInfo,
@@ -9,6 +9,8 @@ import type {
 } from '../../../main/host-client';
 import { Markdown } from './Markdown';
 import { Composer } from './Composer';
+import { ChatSearchBar } from './ChatSearchBar';
+import { useTranscriptSearch } from './useTranscriptSearch';
 import { ReviewPanel } from './ReviewPanel';
 import { FilesPanel } from './FilesPanel';
 import { McpPage } from './McpPage';
@@ -28,6 +30,11 @@ import { SkillsPage } from './SkillsPage';
 // diverge without coupling; TranscriptView stays the standard-mode rich view.
 export type ChatViewHostProps = {
   workspace: WorkspaceInfo;
+  // Which instance answers the Ctrl/Cmd+F find hotkey. 'global' (default) always
+  // responds — used for the single full-screen agent view. 'active' responds only
+  // when this chat is hovered or focus-within, so in the grid the hotkey targets
+  // the tile the user is on rather than every tile at once.
+  findHotkeyScope?: 'global' | 'active';
 };
 
 // --- Section navigation ----------------------------------------------------
@@ -791,7 +798,10 @@ function ReasoningBlock({
 }
 
 
-export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
+export function ChatViewHost({
+  workspace,
+  findHotkeyScope = 'global',
+}: ChatViewHostProps): JSX.Element {
   const [framesBySeq, setFramesBySeq] = useState<Map<number, EventFrame>>(() => new Map());
   // Optimistic, client-side user-message frames (the backend never emits them).
   const [localUserFrames, setLocalUserFrames] = useState<EventFrame[]>([]);
@@ -818,6 +828,9 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   const modelsRef = useRef<ModelInfo[]>([]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The chat-view root, used to scope the Ctrl+F find hotkey to the
+  // hovered/focused chat when findHotkeyScope is 'active' (grid tiles).
+  const chatViewRef = useRef<HTMLElement>(null);
   // Inner wrapper around the transcript; a ResizeObserver on it keeps the view
   // pinned to the bottom as the reveal/markdown grows the content height (a frame
   // change is NOT emitted while the typewriter animates, so the frame-keyed layout
@@ -846,6 +859,37 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   }, [framesBySeq, localUserFrames]);
   const transcript = useMemo(() => buildTranscript(frames), [frames]);
   const turnInProgress = transcript.turnInProgress || optimisticTurn;
+
+  // In-chat find (Ctrl/Cmd+F). The transcript lives in the DOM, so we highlight
+  // matches with the CSS Custom Highlight API (see useTranscriptSearch). Recompute
+  // on entry-count changes so new messages are searchable without resetting the
+  // user's position on every streaming reveal tick.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const search = useTranscriptSearch(
+    contentRef,
+    searchQuery,
+    searchOpen,
+    transcript.entries.length,
+  );
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || (e.key !== 'f' && e.key !== 'F')) return;
+      const responds =
+        findHotkeyScope === 'global' ||
+        !!chatViewRef.current?.matches(':hover, :focus-within');
+      if (!responds) return;
+      e.preventDefault();
+      setActivePage('chat');
+      setSearchOpen(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [findHotkeyScope]);
 
   // The active selection prefers the optimistic local pick (instant feedback on a
   // user switch), then the daemon's persisted 'model' frame (restores model +
@@ -1156,7 +1200,7 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
   };
 
   return (
-    <section className="chat-view" aria-label="Chat conversation">
+    <section className="chat-view" aria-label="Chat conversation" ref={chatViewRef}>
       <header className="chat-view__topbar">
         <h2 className="chat-view__title">{workspace.title}</h2>
         <label className="autoyes" title="Auto-approve agent prompts (host-side)">
@@ -1212,6 +1256,17 @@ export function ChatViewHost({ workspace }: ChatViewHostProps): JSX.Element {
           )}
 
           <div className="chat-view__scroll-wrap">
+            {searchOpen && (
+              <ChatSearchBar
+                query={searchQuery}
+                onQueryChange={setSearchQuery}
+                matchCount={search.matchCount}
+                activeOrdinal={search.activeOrdinal}
+                onNext={search.next}
+                onPrev={search.prev}
+                onClose={closeSearch}
+              />
+            )}
             <div ref={scrollRef} className="chat-view__scroll" onScroll={onScroll}>
               <div ref={contentRef} className="chat-view__scroll-content">
                 {transcript.entries.length === 0 && !streamError && (

@@ -3289,6 +3289,70 @@ body.is-row-resizing .center-terminal__resizer::after {
   padding: var(--space-5) var(--space-6);
   overflow: auto;
 }
+
+/* In-chat find bar, pinned to the top-right of the transcript (the scroll-wrap
+   is position:relative). */
+.chat-search-bar {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+.chat-search-bar__input {
+  width: 180px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  outline: none;
+}
+.chat-search-bar__count {
+  min-width: 40px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.chat-search-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.chat-search-bar__btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+}
+.chat-search-bar__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* CSS Custom Highlight API styling for transcript search matches. Only the
+   focused chat populates these registries at a time, so they read as scoped. */
+::highlight(chat-search) {
+  background-color: rgba(224, 175, 104, 0.35);
+}
+::highlight(chat-search-current) {
+  background-color: rgba(224, 175, 104, 0.85);
+  color: #1a1a1a;
+}
 /* Wraps the transcript entries so a ResizeObserver can track content growth (the
    typewriter reveal grows height without a frame change); a flex column so the
    empty state can fill the viewport while entries keep their own margins. */

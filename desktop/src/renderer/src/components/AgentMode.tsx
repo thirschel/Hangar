@@ -16,7 +16,7 @@ export function AgentMode({ selectedChat }: AgentModeProps): JSX.Element {
   return (
     <section className="app-mode-agent__main">
       {selectedChat ? (
-        <ChatViewHost workspace={selectedChat} />
+        <ChatViewHost workspace={selectedChat} findHotkeyScope="global" />
       ) : (
         <div className="app-mode-agent__empty">
           <p className="app-mode-agent__empty-title">Select a chat or start a new one</p>

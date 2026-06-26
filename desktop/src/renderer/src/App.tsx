@@ -856,7 +856,7 @@ export function App(): JSX.Element {
               rowHeights={gridRowHeights}
               onRowHeightsChange={onGridRowHeightsChange}
               onLeave={() => setGridMode(false)}
-              renderTile={(w) => <ChatViewHost key={w.id} workspace={w} />}
+              renderTile={(w) => <ChatViewHost key={w.id} workspace={w} findHotkeyScope="active" />}
             />
           ) : (
             <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
