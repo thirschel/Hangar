@@ -99,7 +99,11 @@ import (
 // the session, pulled via RPC.Instructions.GetSources) so the desktop can show an
 // Instructions page alongside MCP servers / Skills. Additive: omitempty drops the
 // new Instructions slice on every other frame.
-const Version = 23
+// v24 adds the rich Agents snapshot: EventKindAgents ("agents") carries the full
+// AgentInfo list (the custom agents discovered for the session via
+// RPC.Agents.Discover) so the desktop can show an Agents page. Additive: omitempty
+// drops the new Agents slice on every other frame.
+const Version = 24
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -451,6 +455,10 @@ type EventFrame struct {
 	// loaded for the session, populated only on EventKindInstructions and replacing
 	// the desktop's Instructions page wholesale.
 	Instructions []InstructionInfo `json:"instructions,omitempty"` // populated on EventKindInstructions
+	// Agents snapshot (v24): the full list of custom agents discovered for the
+	// session, populated only on EventKindAgents and replacing the desktop's Agents
+	// page wholesale.
+	Agents []AgentInfo `json:"agents,omitempty"` // populated on EventKindAgents
 	// Resume-restore fields (v18). Decision is "approve"|"reject" on a
 	// permission.resolved frame (the SDK permission completion). Effort/ContextTier
 	// ride with Model (above) on a model frame so the desktop restores the model
@@ -478,6 +486,7 @@ const (
 	EventKindMCPDetail         = "mcp.detail"   // full MCP server-list snapshot
 	EventKindSkills            = "skills"       // full skills-list snapshot
 	EventKindInstructions      = "instructions" // full custom-instructions snapshot (v23)
+	EventKindAgents            = "agents"       // full custom-agents snapshot (v24)
 	// Resume-restore frames (v18): translate the SDK completion events and carry the
 	// active model so a restarted session restores its answered cards and selection.
 	EventKindPermissionResolved = "permission.resolved" // a permission request was answered (Decision)
@@ -518,6 +527,23 @@ type InstructionInfo struct {
 	Description string   `json:"description,omitempty"`
 	ApplyTo     []string `json:"applyTo,omitempty"` // frontmatter globs; applies only to matching files
 	Content     string   `json:"content,omitempty"` // raw instruction file content
+}
+
+// AgentInfo is one custom agent for the rich Agents page (v24). It is display-safe:
+// names/description/model/source/path plus the agent's preloaded skill and allowed-
+// tool names and its attached MCP server names — never the MCP server configs
+// (commands/urls/headers/tokens).
+type AgentInfo struct {
+	Name           string   `json:"name"`
+	DisplayName    string   `json:"displayName,omitempty"`
+	Description    string   `json:"description,omitempty"`
+	Model          string   `json:"model,omitempty"`
+	Path           string   `json:"path,omitempty"`   // absolute file path (file-based agents only)
+	Source         string   `json:"source,omitempty"` // user|project|plugin|builtin|remote|inherited
+	Skills         []string `json:"skills,omitempty"`
+	Tools          []string `json:"tools,omitempty"`
+	MCPServerNames []string `json:"mcpServerNames,omitempty"` // attached MCP server names only
+	UserInvocable  bool     `json:"userInvocable"`            // false = subagent-only
 }
 
 // ModelInfo is one selectable model for the rich model selector (v14), returned in

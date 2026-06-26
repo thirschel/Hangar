@@ -101,6 +101,22 @@ export interface InstructionInfo {
   content?: string; // raw instruction file content
 }
 
+// One custom agent carried on a frame with kind 'agents' (proto v24). The daemon
+// discovers them from the SDK and re-sends the full list, so the renderer replaces
+// its Agents page wholesale (last-write-wins). MCP server names only — never configs.
+export interface AgentInfo {
+  name: string;
+  displayName?: string;
+  description?: string;
+  model?: string;
+  path?: string; // absolute file path (file-based agents only)
+  source?: string; // user|project|plugin|builtin|remote|inherited
+  skills?: string[];
+  tools?: string[];
+  mcpServerNames?: string[];
+  userInvocable?: boolean; // false = subagent-only
+}
+
 export interface EventFrame {
   seq: number;
   kind: string;
@@ -119,6 +135,7 @@ export interface EventFrame {
   mcpServers?: McpServerInfo[]; // present on a frame with kind 'mcp.detail'
   skills?: SkillInfo[]; // present on a frame with kind 'skills'
   instructions?: InstructionInfo[]; // present on a frame with kind 'instructions'
+  agents?: AgentInfo[]; // present on a frame with kind 'agents'
   // Context-usage snapshot carried on a frame with kind 'usage'. Context % is
   // currentTokens / tokenLimit (guard divide-by-zero / missing). `model` is the
   // active model id/name for the live model selector header.

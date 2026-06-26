@@ -411,6 +411,39 @@ func (s *Session) Instructions(ctx context.Context) ([]InstructionDetail, error)
 	return out, nil
 }
 
+// Agents enumerates the custom agents discovered for the session via the
+// server-level RPC.Agents.Discover for the rich Agents page (v24): user-level and
+// plugin agents always, plus project agents under the session's WorkDir. The SDK
+// marks this API experimental, so failures are returned (winhost logs and skips)
+// and a nil RPC surface yields no agents.
+func (s *Session) Agents(ctx context.Context) ([]AgentDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if client.RPC == nil || client.RPC.Agents == nil {
+		return nil, nil
+	}
+	req := &csrpc.AgentsDiscoverRequest{}
+	if s.cfg.WorkDir != "" {
+		req.ProjectPaths = []string{s.cfg.WorkDir}
+	}
+	res, err := client.RPC.Agents.Discover(ctx, req)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	out := make([]AgentDetail, 0, len(res.Agents))
+	for _, a := range res.Agents {
+		out = append(out, agentDetail(a))
+	}
+	return out, nil
+}
+
 // modelDetail maps an SDK ModelInfo to the display-safe ModelDetail, carrying the
 // id, name, and the model's reasoning-effort options (v16). SupportedEfforts is a
 // defensive copy so callers never alias the SDK's slice.

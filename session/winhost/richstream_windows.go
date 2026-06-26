@@ -154,6 +154,31 @@ func (s *sdkSession) emitInstructionsSnapshot(details []copilotsdk.InstructionDe
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindInstructions, Instructions: instrs})
 }
 
+// emitAgents pulls the custom agents discovered for this session
+// (RPC.Agents.Discover) and emits one agents snapshot frame (v24). The desktop
+// replaces its Agents page wholesale. Like instructions, agents arrive via an RPC
+// pull rather than an event, so this is emitted once on stream start. The SDK API
+// is experimental, so a pull failure is logged and skipped.
+func (s *sdkSession) emitAgents(ctx context.Context) {
+	details, err := s.sess.Agents(ctx)
+	if err != nil {
+		s.logf("SDK agents pull failed for session %q: %v", s.name, err)
+		return
+	}
+	s.logf("SDK agents discovered for session %q: %d agent(s)", s.name, len(details))
+	s.emitAgentsSnapshot(details)
+}
+
+// emitAgentsSnapshot maps an agents snapshot into a single agents frame. Split from
+// emitAgents so the mapping is unit-testable without a live copilotsdk session.
+func (s *sdkSession) emitAgentsSnapshot(details []copilotsdk.AgentDetail) {
+	agents := agentInfos(details)
+	if len(agents) == 0 {
+		return
+	}
+	s.emitFrame(proto.EventFrame{Kind: proto.EventKindAgents, Agents: agents})
+}
+
 // emitUsage emits one usage frame (v14) translating an SDK context-usage event onto
 // the rich event stream. The token counts come straight from the event, so it is
 // correct for both live events and transcript replay (which bypasses the copilotsdk
@@ -262,6 +287,28 @@ func instructionInfos(details []copilotsdk.InstructionDetail) []proto.Instructio
 			Description: d.Description,
 			ApplyTo:     append([]string(nil), d.ApplyTo...),
 			Content:     d.Content,
+		})
+	}
+	return out
+}
+
+func agentInfos(details []copilotsdk.AgentDetail) []proto.AgentInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]proto.AgentInfo, 0, len(details))
+	for _, d := range details {
+		out = append(out, proto.AgentInfo{
+			Name:           d.Name,
+			DisplayName:    d.DisplayName,
+			Description:    d.Description,
+			Model:          d.Model,
+			Path:           d.Path,
+			Source:         d.Source,
+			Skills:         append([]string(nil), d.Skills...),
+			Tools:          append([]string(nil), d.Tools...),
+			MCPServerNames: append([]string(nil), d.MCPServerNames...),
+			UserInvocable:  d.UserInvocable,
 		})
 	}
 	return out

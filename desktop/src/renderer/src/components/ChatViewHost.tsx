@@ -1,6 +1,7 @@
 import type { FormEvent, JSX } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
+  AgentInfo,
   EventFrame,
   InstructionInfo,
   McpServerInfo,
@@ -17,6 +18,7 @@ import { FilesPanel } from './FilesPanel';
 import { McpPage } from './McpPage';
 import { SkillsPage } from './SkillsPage';
 import { InstructionsPage } from './InstructionsPage';
+import { AgentsPage } from './AgentsPage';
 
 // ChatViewHost is the rich chat surface for the new Agent mode: a top bar (chat
 // title + AutoYes), a section nav (Chat / MCP servers / Skills / Changes / All
@@ -40,7 +42,7 @@ export type ChatViewHostProps = {
 };
 
 // --- Section navigation ----------------------------------------------------
-type ChatPage = 'chat' | 'mcp' | 'skills' | 'instructions' | 'changes' | 'files';
+type ChatPage = 'chat' | 'mcp' | 'skills' | 'instructions' | 'agents' | 'changes' | 'files';
 
 type ChatNavTab = {
   id: ChatPage;
@@ -56,6 +58,7 @@ const NAV_TABS: ChatNavTab[] = [
   { id: 'mcp', label: 'MCP servers', enabled: true },
   { id: 'skills', label: 'Skills', enabled: true },
   { id: 'instructions', label: 'Instructions', enabled: true },
+  { id: 'agents', label: 'Agents', enabled: true },
   { id: 'changes', label: 'Changes', enabled: true },
   { id: 'files', label: 'All files', enabled: true },
 ];
@@ -125,6 +128,9 @@ type TranscriptModel = {
   // Latest 'instructions' snapshot (last-write-wins): the custom instructions the
   // SDK loaded for the session, feeding the dedicated Instructions page.
   instructions: InstructionInfo[];
+  // Latest 'agents' snapshot (last-write-wins): the custom agents discovered for the
+  // session, feeding the dedicated Agents page.
+  agents: AgentInfo[];
   turnInProgress: boolean;
   // Latest context-usage snapshot from a 'usage' frame (last-write-wins). Drives
   // the composer header (active model + context %). Undefined until the first
@@ -267,6 +273,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
   let mcpServers: McpServerInfo[] = [];
   let skills: SkillInfo[] = [];
   let instructions: InstructionInfo[] = [];
+  let agents: AgentInfo[] = [];
   // Latest usage reading; last-write-wins across the seq-sorted frames.
   let usage: UsageSnapshot | undefined;
   // Latest model selection; last-write-wins across the seq-sorted frames.
@@ -576,6 +583,10 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         // Full custom-instructions snapshot; replace wholesale (last-write-wins).
         if (frame.instructions) instructions = frame.instructions;
         break;
+      case 'agents':
+        // Full custom-agents snapshot; replace wholesale (last-write-wins).
+        if (frame.agents) agents = frame.agents;
+        break;
       default:
         break;
     }
@@ -592,7 +603,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
     if (label) entries[i] = { ...entry, answered: true, answerLabel: label };
   }
 
-  return { entries, servers, mcpServers, skills, instructions, turnInProgress, usage, modelState };
+  return { entries, servers, mcpServers, skills, instructions, agents, turnInProgress, usage, modelState };
 }
 
 // Context % = currentTokens / tokenLimit, rendered as e.g. "42% context used".
@@ -1366,6 +1377,12 @@ export function ChatViewHost({
       {activePage === 'instructions' && (
         <div className="chat-view__body chat-view__page">
           <InstructionsPage instructions={transcript.instructions} />
+        </div>
+      )}
+
+      {activePage === 'agents' && (
+        <div className="chat-view__body chat-view__page">
+          <AgentsPage agents={transcript.agents} />
         </div>
       )}
     </section>

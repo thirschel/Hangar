@@ -4323,6 +4323,99 @@ body.is-row-resizing .center-terminal__resizer::after {
   overflow-wrap: anywhere;
 }
 
+/* Agents page: read-only cards for each discovered custom agent, mirroring the
+   Instructions page with a source badge, an optional subagent marker, and
+   skill/tool/MCP metadata rows. */
+.agents-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
+}
+.agents-page--empty {
+  align-items: center;
+  justify-content: center;
+}
+.agents-page__empty-text {
+  margin: 0;
+  color: var(--text-muted);
+}
+.agents-page__card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.agents-page__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.agents-page__name {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-size: var(--fs-md);
+  overflow-wrap: anywhere;
+}
+.agents-page__badges {
+  display: flex;
+  flex: none;
+  gap: var(--space-1);
+}
+.agents-page__badge {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.agents-page__badge--subagent {
+  border-color: var(--status-busy, #2f81f7);
+  color: var(--status-busy, #2f81f7);
+}
+.agents-page__id {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.agents-page__description {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.agents-page__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+}
+.agents-page__meta-row {
+  display: flex;
+  gap: var(--space-3);
+}
+.agents-page__meta-key {
+  flex: none;
+  width: 64px;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+.agents-page__meta-val {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.agents-page__path {
+  font-family: var(--font-mono);
+}
+
 /* Errors read as a muted danger line under the card head. */
 .mcp-page__error {
   margin: 0;

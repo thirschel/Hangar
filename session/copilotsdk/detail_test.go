@@ -42,6 +42,49 @@ func TestInstructionDetailMapping(t *testing.T) {
 	}
 }
 
+// TestAgentDetailMapping asserts the SDK AgentInfo -> AgentDetail mapping: optional
+// pointers are dereferenced, the source enum is flattened, slices are defensively
+// copied, and only the MCP server names (sorted) are kept.
+func TestAgentDetailMapping(t *testing.T) {
+	model := "gpt-5"
+	path := "/home/u/.copilot/agents/reviewer.md"
+	src := csrpc.AgentInfoSourceUser
+	inv := true
+	a := csrpc.AgentInfo{
+		Name:          "reviewer",
+		DisplayName:   "Code Reviewer",
+		Description:   "Reviews diffs",
+		Model:         &model,
+		Path:          &path,
+		Source:        &src,
+		Skills:        []string{"pdf"},
+		Tools:         []string{"read", "write"},
+		MCPServers:    map[string]any{"zeta": nil, "alpha": nil},
+		UserInvocable: &inv,
+	}
+	got := agentDetail(a)
+	if got.Name != "reviewer" || got.DisplayName != "Code Reviewer" || got.Description != "Reviews diffs" ||
+		got.Model != "gpt-5" || got.Path != path || got.Source != "user" || !got.UserInvocable ||
+		len(got.Skills) != 1 || len(got.Tools) != 2 {
+		t.Fatalf("agentDetail = %+v", got)
+	}
+	// MCP server names only, sorted; never the configs.
+	if len(got.MCPServerNames) != 2 || got.MCPServerNames[0] != "alpha" || got.MCPServerNames[1] != "zeta" {
+		t.Fatalf("MCPServerNames = %+v", got.MCPServerNames)
+	}
+	// Defensive copy of Skills (no aliasing of the SDK slice).
+	a.Skills[0] = "mutated"
+	if got.Skills[0] != "pdf" {
+		t.Fatalf("Skills aliased the source slice: %+v", got.Skills)
+	}
+
+	// A bare agent (nil pointers) maps without panic and defaults UserInvocable false.
+	bare := agentDetail(csrpc.AgentInfo{Name: "helper"})
+	if bare.Name != "helper" || bare.Model != "" || bare.Source != "" || bare.UserInvocable {
+		t.Fatalf("bare agentDetail = %+v", bare)
+	}
+}
+
 // TestCaptureMCPServersLoadedAccessor drives a synthetic servers-loaded event
 // through handleEvent and asserts the captured detail (status/transport/source/
 // error) plus the best-effort tool allowlist merged from config.

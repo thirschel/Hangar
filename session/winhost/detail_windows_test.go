@@ -202,6 +202,46 @@ func TestEmitInstructionsSnapshotEmptyNoFrame(t *testing.T) {
 	}
 }
 
+func TestEmitAgentsSnapshot(t *testing.T) {
+	s := newSDKSession("rich-agents", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitAgentsSnapshot([]copilotsdk.AgentDetail{
+		{
+			Name:           "reviewer",
+			DisplayName:    "Code Reviewer",
+			Description:    "Reviews diffs",
+			Model:          "gpt-5",
+			Path:           "/a/reviewer.md",
+			Source:         "user",
+			Skills:         []string{"pdf"},
+			Tools:          []string{"read"},
+			MCPServerNames: []string{"github"},
+			UserInvocable:  true,
+		},
+	})
+
+	frames := s.richTranscript(0)
+	if len(frames) != 1 || frames[0].Kind != proto.EventKindAgents || len(frames[0].Agents) != 1 {
+		t.Fatalf("agents frame = %+v", frames)
+	}
+	a := frames[0].Agents[0]
+	if a.Name != "reviewer" || a.DisplayName != "Code Reviewer" || a.Model != "gpt-5" || a.Source != "user" ||
+		!a.UserInvocable || len(a.Skills) != 1 || len(a.Tools) != 1 || len(a.MCPServerNames) != 1 {
+		t.Fatalf("agent = %+v", a)
+	}
+}
+
+func TestEmitAgentsSnapshotEmptyNoFrame(t *testing.T) {
+	s := newSDKSession("rich-agents", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
+	defer s.close()
+
+	s.emitAgentsSnapshot(nil)
+	if frames := s.richTranscript(0); len(frames) != 0 {
+		t.Fatalf("empty agents should emit no frame, got %+v", frames)
+	}
+}
+
 // TestTranslateAndEmitPillBarUnchanged proves the additive mcp.detail emission
 // leaves the existing per-server mcp.status pill stream untouched, and that a
 // skills-loaded event routes to emitSkills (a no-op without captured skills)

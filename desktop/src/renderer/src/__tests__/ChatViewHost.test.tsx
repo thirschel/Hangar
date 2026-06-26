@@ -742,6 +742,47 @@ describe('ChatViewHost', () => {
     expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
   });
 
+  it('renders the read-only Agents page from an agents snapshot', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'agents',
+          agents: [
+            {
+              name: 'reviewer',
+              displayName: 'Code Reviewer',
+              description: 'Reviews diffs',
+              model: 'gpt-5',
+              path: '/home/u/.copilot/agents/reviewer.md',
+              source: 'user',
+              skills: ['pdf'],
+              tools: ['read'],
+              mcpServerNames: ['github'],
+              userInvocable: true,
+            },
+            { name: 'helper', userInvocable: false },
+          ],
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Agents' }));
+
+    expect(screen.getByText('Code Reviewer')).toBeInTheDocument();
+    expect(screen.getByText('Reviews diffs')).toBeInTheDocument();
+    expect(screen.getByText('gpt-5')).toBeInTheDocument();
+    expect(screen.getByText('/home/u/.copilot/agents/reviewer.md')).toBeInTheDocument();
+    expect(screen.getByText('helper')).toBeInTheDocument();
+    expect(screen.getByText('Subagent')).toBeInTheDocument();
+    // Read-only page takeover: no composer is rendered.
+    expect(screen.queryByPlaceholderText('Message Copilot…')).not.toBeInTheDocument();
+  });
+
   it('shows the model + context used header from a usage frame', async () => {
     const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());

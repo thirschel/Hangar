@@ -1,6 +1,8 @@
 package copilotsdk
 
 import (
+	"sort"
+
 	copilot "github.com/github/copilot-sdk/go"
 	csrpc "github.com/github/copilot-sdk/go/rpc"
 )
@@ -58,6 +60,58 @@ func instructionDetail(src csrpc.InstructionSource) InstructionDetail {
 	}
 	if src.Description != nil {
 		d.Description = *src.Description
+	}
+	return d
+}
+
+// AgentDetail is a display-safe snapshot of one custom agent discovered for the
+// session via RPC.Agents.Discover, for the rich Agents page (v24). winhost maps it
+// to proto.AgentInfo. It carries the agent's name/description/model/source/path and
+// its preloaded skill + allowed-tool names and attached MCP server *names* — never
+// the MCP server configs.
+type AgentDetail struct {
+	Name           string
+	DisplayName    string
+	Description    string
+	Model          string
+	Path           string
+	Source         string
+	Skills         []string
+	Tools          []string
+	MCPServerNames []string
+	UserInvocable  bool
+}
+
+// agentDetail maps one SDK AgentInfo to the display-safe AgentDetail: optional
+// pointers are dereferenced, the source enum is flattened, slices are defensively
+// copied, and only the MCP server *names* (sorted map keys) are kept.
+func agentDetail(a csrpc.AgentInfo) AgentDetail {
+	d := AgentDetail{
+		Name:        a.Name,
+		DisplayName: a.DisplayName,
+		Description: a.Description,
+		Skills:      append([]string(nil), a.Skills...),
+		Tools:       append([]string(nil), a.Tools...),
+	}
+	if a.Model != nil {
+		d.Model = *a.Model
+	}
+	if a.Path != nil {
+		d.Path = *a.Path
+	}
+	if a.Source != nil {
+		d.Source = string(*a.Source)
+	}
+	if a.UserInvocable != nil {
+		d.UserInvocable = *a.UserInvocable
+	}
+	if len(a.MCPServers) > 0 {
+		names := make([]string, 0, len(a.MCPServers))
+		for name := range a.MCPServers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		d.MCPServerNames = names
 	}
 	return d
 }
