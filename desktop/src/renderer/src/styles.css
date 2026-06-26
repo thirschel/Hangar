@@ -4416,6 +4416,20 @@ body.is-row-resizing .center-terminal__resizer::after {
   font-family: var(--font-mono);
 }
 
+/* The snapshot tab pages render inside the height-bounded .chat-view__page wrapper,
+   which has no overflow of its own, so make each page root fill the wrapper and
+   scroll its own content. Scoped to these classes (only rendered in a tab page);
+   the Chat tab scrolls via .chat-view__scroll and Changes/Files scroll inside their
+   own panels. */
+.mcp-page,
+.skills-page,
+.instructions-page,
+.agents-page {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 /* Errors read as a muted danger line under the card head. */
 .mcp-page__error {
   margin: 0;
