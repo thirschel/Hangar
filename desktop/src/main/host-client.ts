@@ -114,7 +114,7 @@ export interface AgentInfo {
   skills?: string[];
   tools?: string[];
   mcpServerNames?: string[];
-  userInvocable?: boolean; // false = subagent-only
+  userInvocable: boolean; // false = subagent-only
 }
 
 export interface EventFrame {
@@ -463,7 +463,7 @@ export class ControlClient {
       try {
         this.decoder.push(chunk);
       } catch (error) {
-        this.rejectAll(error instanceof Error ? error : new Error(String(error)));
+        this.socket.destroy(error instanceof Error ? error : new Error(String(error)));
       }
     });
     socket.once('error', (error) => this.rejectAll(error));
