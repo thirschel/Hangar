@@ -487,6 +487,112 @@ func (s *Session) DiscoverSkills(ctx context.Context) ([]SkillDetail, error) {
 	return out, nil
 }
 
+// MCPStatus returns the live MCP server status via the session-scoped RPC.MCP.List.
+// Unlike the servers-loaded event stream (which is not replayed on resume), List
+// reports the current connection status on demand, so the host can refresh the MCP
+// page after a resume — and poll it as servers connect asynchronously — without
+// waiting for the first turn. Each server is mapped to a display-safe detail with the
+// configured tool allowlist merged in. A nil RPC surface or not-started session yields
+// no servers.
+func (s *Session) MCPStatus(ctx context.Context) ([]MCPServerDetail, error) {
+	sess := s.session()
+	if sess == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.MCP == nil {
+		return nil, nil
+	}
+	res, err := sess.RPC.MCP.List(ctx)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	tools := s.mcpTools
+	s.mu.RUnlock()
+	out := make([]MCPServerDetail, 0, len(res.Servers))
+	for _, sv := range res.Servers {
+		d := MCPServerDetail{
+			Name:   sv.Name,
+			Status: string(sv.Status),
+			Error:  strDeref(sv.Error),
+			Tools:  append([]string(nil), tools[sv.Name]...),
+		}
+		if sv.Source != nil {
+			d.Source = string(*sv.Source)
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// UsageMetrics returns the session-wide accumulated Copilot AI-unit cost via the
+// session-scoped RPC.Usage.GetMetrics, used to seed the usage display on resume (the
+// AssistantUsageData deltas that normally accumulate it are not replayed). It also
+// seeds the internal AIC accumulator to the reported total so later live deltas add on
+// top instead of starting from zero. known is false when the RPC surface is
+// unavailable.
+func (s *Session) UsageMetrics(ctx context.Context) (aic float64, known bool, err error) {
+	sess := s.session()
+	if sess == nil {
+		return 0, false, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Usage == nil {
+		return 0, false, nil
+	}
+	res, err := sess.RPC.Usage.GetMetrics(ctx)
+	if err != nil {
+		return 0, false, s.noteErr(err)
+	}
+	if res == nil {
+		return 0, false, nil
+	}
+	nano := 0.0
+	if res.TotalNanoAiu != nil {
+		nano = *res.TotalNanoAiu
+	}
+	s.mu.Lock()
+	s.usageAicNano = nano
+	s.mu.Unlock()
+	return nano / 1e9, true, nil
+}
+
+// ContextWindow returns the current context-window token usage via the session-scoped
+// RPC.Metadata.ContextInfo, used to seed the usage display on resume. The SDK returns
+// a null context info until the session runtime is initialized (i.e. before the first
+// turn), in which case known is false. cur is the tokens currently in the window,
+// limit the model's prompt-token limit. On success it also seeds the internal usage
+// snapshot so Session.Usage() is consistent before the first usage_info event.
+func (s *Session) ContextWindow(ctx context.Context) (cur, limit int64, known bool, err error) {
+	sess := s.session()
+	if sess == nil {
+		return 0, 0, false, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Metadata == nil {
+		return 0, 0, false, nil
+	}
+	res, err := sess.RPC.Metadata.ContextInfo(ctx, &csrpc.MetadataContextInfoRequest{})
+	if err != nil {
+		return 0, 0, false, s.noteErr(err)
+	}
+	if res == nil || res.ContextInfo == nil {
+		return 0, 0, false, nil
+	}
+	ci := res.ContextInfo
+	limit = ci.PromptTokenLimit
+	if limit == 0 {
+		limit = ci.Limit
+	}
+	s.mu.Lock()
+	s.usageCurrent = ci.TotalTokens
+	s.usageLimit = limit
+	s.usageKnown = true
+	s.mu.Unlock()
+	return ci.TotalTokens, limit, true, nil
+}
+
 // modelDetail maps an SDK ModelInfo to the display-safe ModelDetail, carrying the
 // id, name, and the model's reasoning-effort options (v16). SupportedEfforts is a
 // defensive copy so callers never alias the SDK's slice.
@@ -683,21 +789,6 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 	// OnEvent consumer can read the fresh state through MCPServers()/Skills().
 	if s.cfg.OnEvent != nil {
 		s.cfg.OnEvent(ev)
-	}
-}
-
-// CaptureReplayedEvent ingests a single event from a resumed session's persisted
-// transcript into the MCP capture state, WITHOUT forwarding it to OnEvent or
-// touching status. It lets winhost rebuild the last-known MCP server status on
-// resume: the copilot CLI does not reconnect MCP servers until the first turn, so
-// the live servers-loaded events are otherwise unavailable until then. Only MCP
-// events carry meaningful state here; all other event types are ignored.
-func (s *Session) CaptureReplayedEvent(ev copilot.SessionEvent) {
-	switch data := ev.Data.(type) {
-	case *copilot.SessionMCPServersLoadedData:
-		s.captureMCPServersLoaded(data)
-	case *copilot.SessionMCPServerStatusChangedData:
-		s.captureMCPServerStatusChanged(data)
 	}
 }
 

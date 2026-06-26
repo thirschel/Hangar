@@ -5,6 +5,9 @@ package winhost
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
+	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
 	"hangar/session/copilotsdk"
@@ -105,18 +108,14 @@ func (s *sdkSession) emitMCPDetailSnapshot(details []copilotsdk.MCPServerDetail,
 	s.emitFrame(proto.EventFrame{Kind: proto.EventKindMCPDetail, MCPServers: servers})
 }
 
-// emitResumedMCPStatus emits the last-known MCP server status reconstructed from a
-// resumed session's transcript (via CaptureReplayedEvent): one status pill per
-// server plus a full mcp.detail snapshot, mirroring how a live servers-loaded event
-// is translated. The copilot CLI does not reconnect MCP servers until the first
-// turn, so without this the MCP page would stay "pending" on resume until a message
-// is sent. A no-op when the transcript carried no MCP status (nothing captured).
-func (s *sdkSession) emitResumedMCPStatus() {
-	details := s.sess.MCPServers()
+// emitMCPStatusFrames emits one status pill per server plus a full mcp.detail snapshot
+// from a status list pulled via RPC (the resume-refresh path) rather than received as
+// a live event. Mirrors how a live servers-loaded event is translated. A no-op on an
+// empty list.
+func (s *sdkSession) emitMCPStatusFrames(details []copilotsdk.MCPServerDetail) {
 	if len(details) == 0 {
 		return
 	}
-	s.logf("SDK resumed MCP status for session %q: %d server(s)", s.name, len(details))
 	for _, d := range details {
 		s.emitFrame(proto.EventFrame{
 			Kind:      proto.EventKindMCPStatus,
@@ -125,7 +124,102 @@ func (s *sdkSession) emitResumedMCPStatus() {
 			Error:     d.Error,
 		})
 	}
-	s.emitMCPDetail()
+	s.emitMCPDetailSnapshot(details, nil)
+}
+
+// refreshResumedSessionState proactively pulls live session state after a resume so the
+// MCP / context / AIC panes populate without waiting for the first turn. The SDK
+// replays only the conversation transcript on resume; MCP connections, accumulated AIC,
+// and the context window are not carried, and the copilot CLI connects MCP servers and
+// computes context lazily/asynchronously. So this seeds usage immediately and polls the
+// MCP server list (the same approach the SDK's own e2e uses) until every server settles.
+// Runs in its own goroutine, cancelable via the session ctx.
+func (s *sdkSession) refreshResumedSessionState() {
+	go func() {
+		ctx := s.ctx
+		// AIC is persisted and available immediately; the context window may be null
+		// until the runtime initializes (then the first turn's usage_info event fills it).
+		s.emitResumedUsage(ctx)
+		s.pollResumedMCP(ctx)
+	}()
+}
+
+// emitResumedUsage pulls accumulated AIC + the current context window and emits one
+// usage frame, so AIC (and context, when available) show on resume. A no-op when
+// neither is available (the desktop guards a zero token limit / zero AIC).
+func (s *sdkSession) emitResumedUsage(ctx context.Context) {
+	aic, aicKnown, err := s.sess.UsageMetrics(ctx)
+	if err != nil {
+		s.logf("SDK resumed usage pull failed for session %q: %v", s.name, err)
+	}
+	cur, limit, ctxKnown, err := s.sess.ContextWindow(ctx)
+	if err != nil {
+		s.logf("SDK resumed context pull failed for session %q: %v", s.name, err)
+	}
+	if !aicKnown && !ctxKnown {
+		return
+	}
+	s.logf("SDK resumed usage for session %q: aic=%.4f tokens=%d/%d ctxKnown=%v", s.name, aic, cur, limit, ctxKnown)
+	s.emitUsageSnapshot(cur, limit, s.sess.CurrentModel(), aic)
+}
+
+// pollResumedMCP polls RPC.MCP.List until every server reaches a terminal status (or a
+// bounded deadline / session cancel), emitting an MCP snapshot whenever the status set
+// changes. MCP servers connect asynchronously after resume, so a single pull would
+// still show "pending"; polling flips the page to connected without a turn.
+func (s *sdkSession) pollResumedMCP(ctx context.Context) {
+	const (
+		interval = 1500 * time.Millisecond
+		maxWait  = 45 * time.Second
+	)
+	deadline := time.Now().Add(maxWait)
+	for {
+		if s.refreshResumedMCP(ctx) || time.Now().After(deadline) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
+
+// refreshResumedMCP pulls the live MCP status once, emits it when it changed since the
+// last emit, and reports whether every server has settled (no server still "pending").
+// A pull error or a nil/empty list counts as settled so polling does not spin forever.
+func (s *sdkSession) refreshResumedMCP(ctx context.Context) (settled bool) {
+	details, err := s.sess.MCPStatus(ctx)
+	if err != nil {
+		s.logf("SDK resumed MCP status pull failed for session %q: %v", s.name, err)
+		return true
+	}
+	if len(details) == 0 {
+		return true
+	}
+	if sig := mcpStatusSignature(details); sig != s.lastMCPSig {
+		s.lastMCPSig = sig
+		s.logf("SDK resumed MCP status for session %q: %d server(s)", s.name, len(details))
+		s.emitMCPStatusFrames(details)
+	}
+	for _, d := range details {
+		if d.Status == "pending" {
+			return false
+		}
+	}
+	return true
+}
+
+// mcpStatusSignature is a stable, order-independent fingerprint of a status list, used
+// to suppress redundant resume-poll emissions (which would otherwise bloat the replay
+// log with identical frames while servers are still connecting).
+func mcpStatusSignature(details []copilotsdk.MCPServerDetail) string {
+	parts := make([]string, 0, len(details))
+	for _, d := range details {
+		parts = append(parts, d.Name+"\x00"+d.Status+"\x00"+d.Error)
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "\x01")
 }
 
 // emitSkills pulls the skills available to the session (RPC.Skills.Discover) and

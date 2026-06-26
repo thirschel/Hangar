@@ -164,22 +164,16 @@ func TestEmitSkillsSnapshotEmptyNoFrame(t *testing.T) {
 	}
 }
 
-// TestEmitResumedMCPStatus asserts the resume seed emits real last-known MCP status
-// (a per-server status pill plus one mcp.detail snapshot) reconstructed from the
-// transcript via CaptureReplayedEvent, instead of leaving the page "pending".
-func TestEmitResumedMCPStatus(t *testing.T) {
+// TestEmitMCPStatusFrames asserts the resume-refresh emitter maps a status list pulled
+// via RPC into a per-server status pill plus one mcp.detail snapshot (the path that
+// replaces "pending" with real status on resume).
+func TestEmitMCPStatusFrames(t *testing.T) {
 	s := newSDKSession("rich-resume-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
-	transport := copilot.MCPServerTransportStdio
-	source := copilot.MCPServerSourceUser
-	s.sess.CaptureReplayedEvent(copilot.SessionEvent{Data: &copilot.SessionMCPServersLoadedData{
-		Servers: []copilot.MCPServersLoadedServer{
-			{Name: "github", Status: copilot.MCPServerStatusConnected, Transport: &transport, Source: &source},
-		},
-	}})
-
-	s.emitResumedMCPStatus()
+	s.emitMCPStatusFrames([]copilotsdk.MCPServerDetail{
+		{Name: "github", Status: "connected", Source: "user", Tools: []string{"read"}},
+	})
 
 	frames := s.richTranscript(0)
 	var pill, detail *proto.EventFrame
@@ -200,15 +194,29 @@ func TestEmitResumedMCPStatus(t *testing.T) {
 	}
 }
 
-// TestEmitResumedMCPStatusEmptyNoFrame asserts the seed is a no-op when the resumed
-// transcript carried no MCP status (the pending fallback elsewhere is unchanged).
-func TestEmitResumedMCPStatusEmptyNoFrame(t *testing.T) {
+// TestEmitMCPStatusFramesEmptyNoFrame asserts an empty status list emits nothing.
+func TestEmitMCPStatusFramesEmptyNoFrame(t *testing.T) {
 	s := newSDKSession("rich-resume-mcp", "copilot", t.TempDir(), "", false, "", "", "", "", nil, nil)
 	defer s.close()
 
-	s.emitResumedMCPStatus()
+	s.emitMCPStatusFrames(nil)
 	if frames := s.richTranscript(0); len(frames) != 0 {
-		t.Fatalf("no captured MCP should emit no frame, got %+v", frames)
+		t.Fatalf("empty status list should emit no frame, got %+v", frames)
+	}
+}
+
+// TestMCPStatusSignature asserts the resume-poll fingerprint is order-independent and
+// changes when any server's status or error changes (so redundant emits are suppressed
+// but real transitions are not).
+func TestMCPStatusSignature(t *testing.T) {
+	a := []copilotsdk.MCPServerDetail{{Name: "a", Status: "pending"}, {Name: "b", Status: "connected"}}
+	b := []copilotsdk.MCPServerDetail{{Name: "b", Status: "connected"}, {Name: "a", Status: "pending"}}
+	if mcpStatusSignature(a) != mcpStatusSignature(b) {
+		t.Fatal("signature should be order-independent")
+	}
+	c := []copilotsdk.MCPServerDetail{{Name: "a", Status: "connected"}, {Name: "b", Status: "connected"}}
+	if mcpStatusSignature(a) == mcpStatusSignature(c) {
+		t.Fatal("signature should change when a status changes")
 	}
 }
 

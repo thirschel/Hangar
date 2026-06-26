@@ -48,7 +48,8 @@ type sdkSession struct {
 	richSubs    map[*richSub]struct{}
 	bufferMCP   bool
 	bufferedMCP []copilot.SessionEvent
-	lastSeen    int64 // lastOutputUnixMs observed at the previous hasUpdated() call
+	lastMCPSig  string // last emitted resume-poll MCP status fingerprint (poll goroutine only)
+	lastSeen    int64  // lastOutputUnixMs observed at the previous hasUpdated() call
 	exitCode    int
 	closed      bool
 	exitedNoted bool // true once the agent-process-exit error frame has been emitted
@@ -125,26 +126,17 @@ func (s *sdkSession) startResumed() error {
 		return nil
 	}
 	for _, ev := range evs {
-		// Skills are re-pulled below via RPC.Skills.Discover, so skip replaying their
+		// MCP status and skills are re-pulled live on resume (MCP via RPC.MCP.List
+		// polling below, skills via RPC.Skills.Discover), so skip replaying their
 		// historical events.
-		if isSkillsEvent(ev) {
-			continue
-		}
-		// The copilot CLI does not reconnect MCP servers on resume (only on the first
-		// turn), so the live servers-loaded events never arrive until a message is
-		// sent. Feed the historical MCP events into the capture state here (without
-		// translating each to a frame) so emitResumedMCPStatus below can emit the
-		// last-known status as one snapshot instead of leaving the page "pending".
-		if isMCPStatusEvent(ev) {
-			s.sess.CaptureReplayedEvent(ev)
+		if isMCPStatusEvent(ev) || isSkillsEvent(ev) {
 			continue
 		}
 		s.translateAndEmit(ev)
 	}
-	// Emit the last-known MCP status reconstructed from the replayed transcript so the
-	// MCP page shows real status on resume rather than "pending". Live servers-loaded
-	// events overwrite it once the first turn actually reconnects the servers.
-	s.emitResumedMCPStatus()
+	// Proactively refresh live session state (MCP status, AIC, context window) that the
+	// transcript replay does not carry, so those panes populate without the first turn.
+	s.refreshResumedSessionState()
 	// Custom instructions, agents, and skills arrive via RPC pulls (not the event
 	// stream), so emit one-time snapshots on stream start so their pages populate
 	// (v23/v24). Skills are additionally re-emitted on each live skills-loaded event.
