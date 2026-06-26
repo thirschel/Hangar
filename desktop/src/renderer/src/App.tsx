@@ -5,6 +5,7 @@ import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { GridPane } from './components/GridPane';
 import { AgentMode } from './components/AgentMode';
+import { ChatViewHost } from './components/ChatViewHost';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
 import { BreadcrumbCopy } from './components/BreadcrumbCopy';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
@@ -554,6 +555,15 @@ export function App(): JSX.Element {
     if (gridMode && gridWorkspaces.length === 0) setGridMode(false);
   }, [gridMode, gridWorkspaces.length]);
 
+  // Keep the grid selection mode-local: terminal and rich chats can't be tiled in
+  // the same grid (standard tiles a TermView, agent tiles a ChatViewHost), and the
+  // standard list includes rich chats — so a selection carried across the surface
+  // toggle could mount the wrong tile type. Reset the grid whenever appMode flips.
+  useEffect(() => {
+    setGridMode(false);
+    setGridSelectedIds(new Set());
+  }, [appMode]);
+
   // Prune the "deleting" set once a row is actually gone (or if it reappears for
   // some reason), so the optimistic markers never leak across refreshes.
   useEffect(() => {
@@ -833,8 +843,24 @@ export function App(): JSX.Element {
             noun="chat"
             emptyHint={<p>Click + to start a Copilot chat in its own git worktree.</p>}
             deletingIds={deletingIds}
+            gridSelectedIds={gridSelectedIds}
+            onToggleGridMember={toggleGridMember}
+            onClearGridSelection={clearGridSelection}
           />
-          <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
+          {gridMode ? (
+            <GridPane
+              workspaces={gridWorkspaces}
+              columns={gridColumns}
+              onColumnsChange={onGridColumnsChange}
+              onReorder={onGridReorder}
+              rowHeights={gridRowHeights}
+              onRowHeightsChange={onGridRowHeightsChange}
+              onLeave={() => setGridMode(false)}
+              renderTile={(w) => <ChatViewHost key={w.id} workspace={w} />}
+            />
+          ) : (
+            <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
+          )}
         </main>
       ) : (
       <main

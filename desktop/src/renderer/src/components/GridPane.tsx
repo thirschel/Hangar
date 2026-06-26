@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
 import { effectiveColumns } from './grid-columns';
@@ -22,6 +22,10 @@ type GridPaneProps = {
   rowHeights?: number[];
   // Commit new per-row heights after a drag-resize (for persistence).
   onRowHeightsChange?: (heights: number[]) => void;
+  // Renders a tile's live body for a workspace. Defaults to a TermView bound to
+  // the workspace's terminal session; the rich agent view passes a ChatViewHost
+  // so the same grid can tile rich Copilot chats.
+  renderTile?: (w: WorkspaceInfo) => ReactNode;
 };
 
 // GridPane tiles several agents at once. Each tile is a self-contained, live,
@@ -37,6 +41,7 @@ export function GridPane({
   onReorder,
   rowHeights,
   onRowHeightsChange,
+  renderTile,
 }: GridPaneProps): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -226,7 +231,11 @@ export function GridPane({
                 {w.regenerating && <span className="grid-tile__badge">Regenerating…</span>}
               </div>
               <div className="grid-tile__term">
-                <TermView key={w.sessionName} sessionName={w.sessionName} />
+                {renderTile ? (
+                  renderTile(w)
+                ) : (
+                  <TermView key={w.sessionName} sessionName={w.sessionName} />
+                )}
               </div>
               <div
                 className="grid-tile__resize"

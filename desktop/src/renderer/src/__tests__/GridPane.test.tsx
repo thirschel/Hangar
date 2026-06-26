@@ -54,6 +54,22 @@ describe('GridPane', () => {
     expect(tiles.map((t) => t.getAttribute('data-session'))).toEqual(['ws_a', 'ws_b']);
   });
 
+  it('renders a custom tile body when renderTile is provided', () => {
+    render(
+      <GridPane
+        workspaces={[mkWs('a'), mkWs('b')]}
+        columns={0}
+        onColumnsChange={() => {}}
+        onLeave={() => {}}
+        renderTile={(w) => <div data-testid="rich-tile" data-id={w.id} />}
+      />,
+    );
+    // The custom renderer replaces the default TermView body, one per workspace.
+    expect(screen.queryAllByTestId('termview')).toHaveLength(0);
+    const tiles = screen.getAllByTestId('rich-tile');
+    expect(tiles.map((t) => t.getAttribute('data-id'))).toEqual(['a', 'b']);
+  });
+
   it('applies a manual column count to the grid template', () => {
     const { container } = render(
       <GridPane
