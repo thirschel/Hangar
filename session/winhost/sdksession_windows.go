@@ -38,6 +38,14 @@ type sdkSession struct {
 	// to observe what richSend threads through, without a live Copilot CLI.
 	sendFn func(ctx context.Context, text string, attachments []string) error
 
+	startFn        func(context.Context) error
+	resumeFn       func(context.Context) error
+	transcriptFn   func(context.Context) ([]copilot.SessionEvent, error)
+	instructionsFn func(context.Context) ([]copilotsdk.InstructionDetail, error)
+	agentsFn       func(context.Context) ([]copilotsdk.AgentDetail, error)
+	skillsFn       func(context.Context) ([]copilotsdk.SkillDetail, error)
+	mcpStatusFn    func(context.Context) ([]copilotsdk.MCPServerDetail, error)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -138,7 +146,7 @@ func (s *sdkSession) logPhase(phase string, t0 time.Time, err error) {
 func (s *sdkSession) start() error {
 	s.beginMCPStartupBuffer()
 	t0 := time.Now()
-	err := s.sess.Start(s.ctx)
+	err := s.sdkStart(s.ctx)
 	s.logPhase("create", t0, err)
 	if err != nil {
 		s.cancelMCPStartupBuffer()
@@ -150,20 +158,21 @@ func (s *sdkSession) start() error {
 	// create — proactively poll live MCP/usage state so the panes populate without
 	// waiting for the first message (the page would otherwise sit on "pending").
 	s.refreshSessionState()
+	s.emitStartupSnapshots()
 	return nil
 }
 
 func (s *sdkSession) startResumed() error {
 	s.beginMCPStartupBuffer()
 	tResume := time.Now()
-	rerr := s.sess.Resume(s.ctx)
+	rerr := s.sdkResume(s.ctx)
 	s.logPhase("resume", tResume, rerr)
 	if rerr != nil {
 		s.cancelMCPStartupBuffer()
 		s.logf("SDK resume failed for session %q: %v; starting fresh", s.name, rerr)
 		s.beginMCPStartupBuffer()
 		tFresh := time.Now()
-		startErr := s.sess.Start(s.ctx)
+		startErr := s.sdkStart(s.ctx)
 		s.logPhase("resume-fresh-start", tFresh, startErr)
 		if startErr != nil {
 			s.cancelMCPStartupBuffer()
@@ -171,12 +180,14 @@ func (s *sdkSession) startResumed() error {
 		}
 		s.emitConfiguredMCPServersPending()
 		s.flushMCPStartupBuffer()
+		s.refreshSessionState()
+		s.emitStartupSnapshots()
 		return nil
 	}
 	s.emitConfiguredMCPServersPending()
 	s.flushMCPStartupBuffer()
 	tTranscript := time.Now()
-	evs, err := s.sess.Transcript(s.ctx)
+	evs, err := s.sdkTranscript(s.ctx)
 	s.logPhase("transcript", tTranscript, err)
 	if err != nil {
 		s.logf("SDK transcript replay failed for session %q: %v", s.name, err)
@@ -199,16 +210,41 @@ func (s *sdkSession) startResumed() error {
 	// Custom instructions, agents, and skills arrive via RPC pulls (not the event
 	// stream), so emit one-time snapshots on stream start so their pages populate
 	// (v23/v24). Skills are additionally re-emitted on each live skills-loaded event.
-	tEmit := time.Now()
-	s.emitInstructions(s.ctx)
-	s.emitAgents(s.ctx)
-	s.emitSkills(s.ctx)
-	s.logPhase("emit-snapshots", tEmit, nil)
+	s.emitStartupSnapshots()
 	// If the replayed transcript was interrupted before its terminal frame (e.g. the
 	// daemon was killed mid-turn), settle the dangling turn so the resumed session
 	// presents as idle instead of stuck "running".
 	s.emitIdleIfDangling()
 	return nil
+}
+
+func (s *sdkSession) emitStartupSnapshots() {
+	tEmit := time.Now()
+	s.emitInstructions(s.ctx)
+	s.emitAgents(s.ctx)
+	s.emitSkills(s.ctx)
+	s.logPhase("emit-snapshots", tEmit, nil)
+}
+
+func (s *sdkSession) sdkStart(ctx context.Context) error {
+	if s.startFn != nil {
+		return s.startFn(ctx)
+	}
+	return s.sess.Start(ctx)
+}
+
+func (s *sdkSession) sdkResume(ctx context.Context) error {
+	if s.resumeFn != nil {
+		return s.resumeFn(ctx)
+	}
+	return s.sess.Resume(ctx)
+}
+
+func (s *sdkSession) sdkTranscript(ctx context.Context) ([]copilot.SessionEvent, error) {
+	if s.transcriptFn != nil {
+		return s.transcriptFn(ctx)
+	}
+	return s.sess.Transcript(ctx)
 }
 
 func (s *sdkSession) beginMCPStartupBuffer() {

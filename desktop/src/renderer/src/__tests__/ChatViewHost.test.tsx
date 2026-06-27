@@ -1379,4 +1379,73 @@ describe('ChatViewHost', () => {
       (window as unknown as { ResizeObserver: unknown }).ResizeObserver = RealRO;
     }
   });
+
+  // --- RevealStore session-scoping -------------------------------------------
+  // Two sessions can have the same seq numbers.  Before the fix, session-A's
+  // `assistant-1` entry would mark the reveal as done and session-B's entry with
+  // the same id would skip its animation.  After the fix, keys are namespaced
+  // by sessionName so the stores are isolated.
+  it('revealStore keys are session-scoped so two sessions with the same seq animate independently', async () => {
+    installMatchMedia(false); // motion allowed
+
+    // Mount session A, stream a live turn, let the reveal start.
+    const wsA = makeWorkspace({ id: 'ws-a', sessionName: 'session-a', createdUnix: Math.floor(Date.now() / 1000) });
+    const wsB = makeWorkspace({ id: 'ws-b', sessionName: 'session-b', createdUnix: Math.floor(Date.now() / 1000) });
+
+    // Capture separate frame callbacks for each session.
+    let cbA: ((data: { session: string; frame: EventFrame }) => void) | undefined;
+    let cbB: ((data: { session: string; frame: EventFrame }) => void) | undefined;
+    window.cs.onRichFrame = vi
+      .fn()
+      .mockImplementationOnce((cb: (data: { session: string; frame: EventFrame }) => void) => {
+        cbA = cb;
+        return () => {};
+      })
+      .mockImplementationOnce((cb: (data: { session: string; frame: EventFrame }) => void) => {
+        cbB = cb;
+        return () => {};
+      });
+
+    const { unmount: unmountA } = render(<ChatViewHost workspace={wsA} />);
+    await vi.waitFor(() => expect(cbA).toBeDefined());
+    await act(async () => {});
+
+    vi.useFakeTimers();
+    try {
+      // Stream a full turn into session A and advance reveal to done.
+      act(() => {
+        cbA?.({ session: 'session-a', frame: { seq: 1, kind: 'assistant.delta', text: LONG_REPLY } });
+        cbA?.({ session: 'session-a', frame: { seq: 2, kind: 'assistant.message', text: LONG_REPLY } });
+        cbA?.({ session: 'session-a', frame: { seq: 3, kind: 'idle' } });
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+
+      // Unmount A — its reveal is done (stored in revealStore under session-a key).
+      unmountA();
+
+      // Mount session B with the SAME seq=1 delta.
+      const { container: containerB } = render(<ChatViewHost workspace={wsB} />);
+      await vi.waitFor(() => expect(cbB).toBeDefined());
+      await act(async () => {});
+
+      // Stream the same-seq turn into session B.
+      act(() => {
+        cbB?.({ session: 'session-b', frame: { seq: 1, kind: 'assistant.delta', text: LONG_REPLY } });
+        cbB?.({ session: 'session-b', frame: { seq: 2, kind: 'assistant.message', text: LONG_REPLY } });
+      });
+
+      // Immediately after the frames arrive — reveal should NOT be complete yet
+      // (session-scoped key means the "done" state from session-A doesn't bleed in).
+      const assistantB = containerB.querySelector('.chat-msg--assistant') as HTMLElement;
+      expect(assistantB.textContent).not.toContain('running');
+      // Cursor is present => still revealing (animation in progress).
+      expect(containerB.querySelector('.chat-msg__cursor')).not.toBeNull();
+
+      // Let session B's reveal finish.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(assistantB.textContent).toContain(LONG_REPLY);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

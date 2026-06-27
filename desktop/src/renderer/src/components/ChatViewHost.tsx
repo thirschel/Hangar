@@ -252,7 +252,7 @@ function deriveActivityStatus(entries: TranscriptEntry[]): string {
   return 'Working';
 }
 
-function buildTranscript(frames: EventFrame[]): TranscriptModel {
+function buildTranscript(frames: EventFrame[], sessionName: string): TranscriptModel {
   const entries: TranscriptEntry[] = [];
   const servers = new Map<string, { status: string; error?: string }>();
   const toolEntries = new Map<string, number>();
@@ -297,7 +297,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           pendingAssistantSeq = frame.seq;
           pendingAssistantIndex = entries.length;
           entries.push({
-            id: `assistant-${pendingAssistantSeq}`,
+            id: `assistant-${sessionName}-${pendingAssistantSeq}`,
             kind: 'assistant',
             text: pendingAssistantText,
             streaming: true,
@@ -323,7 +323,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
             // Keep the streaming entry's stable id (first-delta seq) so the
             // streaming -> finalized transition reconciles in place rather than
             // remounting and re-animating the whole message.
-            id: `assistant-${pendingAssistantSeq ?? frame.seq}`,
+            id: `assistant-${sessionName}-${pendingAssistantSeq ?? frame.seq}`,
             kind: 'assistant',
             text,
             streaming: false,
@@ -336,7 +336,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         } else {
           // No deltas preceded this full message => replayed history / instant.
           entries.push({
-            id: `assistant-${frame.seq}`,
+            id: `assistant-${sessionName}-${frame.seq}`,
             kind: 'assistant',
             text,
             streaming: false,
@@ -358,7 +358,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           pendingReasoningSeq = frame.seq;
           pendingReasoningIndex = entries.length;
           entries.push({
-            id: `reasoning-${pendingReasoningSeq}`,
+            id: `reasoning-${sessionName}-${pendingReasoningSeq}`,
             kind: 'reasoning',
             text: pendingReasoningText,
             streaming: true,
@@ -381,7 +381,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
           // Finalize the streamed reasoning: replace the accumulated text with the
           // authoritative complete block and clear the streaming flag (same id).
           entries[pendingReasoningIndex] = {
-            id: `reasoning-${pendingReasoningSeq ?? frame.seq}`,
+            id: `reasoning-${sessionName}-${pendingReasoningSeq ?? frame.seq}`,
             kind: 'reasoning',
             text,
             fromDelta: true,
@@ -389,7 +389,7 @@ function buildTranscript(frames: EventFrame[]): TranscriptModel {
         } else {
           // No deltas were streamed: push a finished reasoning entry as before
           // (replayed history / a full-only reasoning => rendered instantly).
-          entries.push({ id: `reasoning-${frame.seq}`, kind: 'reasoning', text, fromDelta: false });
+          entries.push({ id: `reasoning-${sessionName}-${frame.seq}`, kind: 'reasoning', text, fromDelta: false });
         }
         pendingReasoningIndex = null;
         pendingReasoningText = '';
@@ -952,7 +952,7 @@ export function ChatViewHost({
     const merged = [...framesBySeq.values(), ...localUserFrames];
     return merged.sort((a, b) => a.seq - b.seq);
   }, [framesBySeq, localUserFrames]);
-  const transcript = useMemo(() => buildTranscript(frames), [frames]);
+  const transcript = useMemo(() => buildTranscript(frames, workspace.sessionName), [frames, workspace.sessionName]);
   const turnInProgress = transcript.turnInProgress || optimisticTurn;
 
   // In-chat find (Ctrl/Cmd+F). The transcript lives in the DOM, so we highlight
@@ -1190,7 +1190,7 @@ export function ChatViewHost({
     if (!shouldRestore) return undefined;
     const timer = window.setTimeout(() => setRestoring(false), RESTORE_SKELETON_CAP_MS);
     return () => window.clearTimeout(timer);
-  }, [workspace.sessionName, workspace.createdUnix]);
+  }, [workspace.sessionName, workspace.createdUnix, workspace.id]);
 
   // Fetch the selectable models for this session (live model selector). Resets
   // the list + optimistic pick when the session changes; a stale resolve from a

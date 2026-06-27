@@ -39,13 +39,17 @@ type fakeSession struct {
 	sendHook      func(*fakeSession, []byte) error
 	failStart     bool
 	startErr      error
+	// panicStart (when true) makes start() panic, simulating a launch that
+	// unwinds the start path before finishSessionStart runs (recovered upstream
+	// by safeDispatch). Used to prove the reservation is not leaked. [HOL-1]
+	panicStart bool
 	// startEntered (when non-nil) is closed once as start() begins, and startBlock
 	// (when non-nil) parks start() until it is closed — together they let a test
 	// hold a session "mid-start" to prove the host does not keep h.mu across the
 	// (possibly slow) launch. [HOL-1]
-	startEntered  chan struct{}
-	startBlock    chan struct{}
-	exitCode      int
+	startEntered chan struct{}
+	startBlock   chan struct{}
+	exitCode     int
 }
 
 func newFake(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
@@ -110,6 +114,9 @@ func (f *fakeSession) start() error {
 	}
 	if f.startBlock != nil {
 		<-f.startBlock
+	}
+	if f.panicStart {
+		panic("fake start panic")
 	}
 	if f.failStart {
 		if f.startErr != nil {

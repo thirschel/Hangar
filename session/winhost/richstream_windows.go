@@ -5,6 +5,7 @@ package winhost
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,8 @@ import (
 type richSub struct {
 	ch chan []byte
 }
+
+var snapshotPullTimeout = 12 * time.Second
 
 func (s *sdkSession) onSDKEvent(ev copilot.SessionEvent) {
 	if s.bufferMCPStartupEvent(ev) {
@@ -58,7 +61,10 @@ func (s *sdkSession) translateAndEmit(ev copilot.SessionEvent) {
 		// stalls all further event delivery and can deadlock if the SDK's event
 		// queue fills during the round-trip. Mirrors refreshSessionState,
 		// which already offloads its blocking pulls to a goroutine. [#7]
-		go s.emitSkills(s.ctx)
+		go func() {
+			defer recoverGoroutine("winhost.emitSkills")
+			s.emitSkills(s.ctx)
+		}()
 		return
 	case *copilot.SessionUsageInfoData:
 		s.emitUsage(data)
@@ -142,6 +148,7 @@ func (s *sdkSession) emitMCPStatusFrames(details []copilotsdk.MCPServerDetail) {
 // the session ctx.
 func (s *sdkSession) refreshSessionState() {
 	go func() {
+		defer recoverGoroutine("winhost.refreshSessionState")
 		ctx := s.ctx
 		// AIC is persisted and available immediately; the context window may be null
 		// until the runtime initializes (then the first turn's usage_info event fills it).
@@ -193,15 +200,18 @@ func (s *sdkSession) pollMCPStatus(ctx context.Context) {
 
 // refreshMCPStatus pulls the live MCP status once, emits it when it changed since the
 // last emit, and reports whether every server has settled (no server still "pending").
-// A pull error or a nil/empty list counts as settled so polling does not spin forever.
+// Pull errors and nil/empty lists are treated as transient so polling can observe
+// the first real status list; pollMCPStatus's deadline bounds genuinely empty sessions.
 func (s *sdkSession) refreshMCPStatus(ctx context.Context) (settled bool) {
-	details, err := s.sess.MCPStatus(ctx)
+	details, err := s.sdkMCPStatus(ctx)
 	if err != nil {
-		s.logf("SDK MCP status pull failed for session %q: %v", s.name, err)
-		return true
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			s.logf("SDK MCP status pull failed for session %q: %v", s.name, err)
+		}
+		return false
 	}
 	if len(details) == 0 {
-		return true
+		return false
 	}
 	if sig := mcpStatusSignature(details); sig != s.lastMCPSig {
 		s.lastMCPSig = sig
@@ -214,6 +224,13 @@ func (s *sdkSession) refreshMCPStatus(ctx context.Context) (settled bool) {
 		}
 	}
 	return true
+}
+
+func (s *sdkSession) sdkMCPStatus(ctx context.Context) ([]copilotsdk.MCPServerDetail, error) {
+	if s.mcpStatusFn != nil {
+		return s.mcpStatusFn(ctx)
+	}
+	return s.sess.MCPStatus(ctx)
 }
 
 // mcpStatusSignature is a stable, order-independent fingerprint of a status list, used
@@ -236,13 +253,22 @@ func mcpStatusSignature(details []copilotsdk.MCPServerDetail) string {
 // signals a change. The SDK API is experimental, so a pull failure is logged and
 // skipped rather than breaking the stream.
 func (s *sdkSession) emitSkills(ctx context.Context) {
-	details, err := s.sess.DiscoverSkills(ctx)
+	ctx, cancel := context.WithTimeout(ctx, snapshotPullTimeout)
+	defer cancel()
+	details, err := s.sdkDiscoverSkills(ctx)
 	if err != nil {
 		s.logf("SDK skills pull failed for session %q: %v", s.name, err)
 		return
 	}
 	s.logf("SDK skills discovered for session %q: %d skill(s)", s.name, len(details))
 	s.emitSkillsSnapshot(details)
+}
+
+func (s *sdkSession) sdkDiscoverSkills(ctx context.Context) ([]copilotsdk.SkillDetail, error) {
+	if s.skillsFn != nil {
+		return s.skillsFn(ctx)
+	}
+	return s.sess.DiscoverSkills(ctx)
 }
 
 // emitSkillsSnapshot maps a skills snapshot into a single skills frame. Split from
@@ -262,7 +288,9 @@ func (s *sdkSession) emitSkillsSnapshot(details []copilotsdk.SkillDetail) {
 // The SDK API is experimental, so a pull failure is logged and skipped rather than
 // breaking the stream.
 func (s *sdkSession) emitInstructions(ctx context.Context) {
-	details, err := s.sess.Instructions(ctx)
+	ctx, cancel := context.WithTimeout(ctx, snapshotPullTimeout)
+	defer cancel()
+	details, err := s.sdkInstructions(ctx)
 	if err != nil {
 		s.logf("SDK instructions pull failed for session %q: %v", s.name, err)
 		return
@@ -274,6 +302,13 @@ func (s *sdkSession) emitInstructions(ctx context.Context) {
 		s.logf("  instruction: type=%q location=%q path=%q label=%q", d.Type, d.Location, d.SourcePath, d.Label)
 	}
 	s.emitInstructionsSnapshot(details)
+}
+
+func (s *sdkSession) sdkInstructions(ctx context.Context) ([]copilotsdk.InstructionDetail, error) {
+	if s.instructionsFn != nil {
+		return s.instructionsFn(ctx)
+	}
+	return s.sess.Instructions(ctx)
 }
 
 // emitInstructionsSnapshot maps an instructions snapshot into a single instructions
@@ -293,13 +328,22 @@ func (s *sdkSession) emitInstructionsSnapshot(details []copilotsdk.InstructionDe
 // pull rather than an event, so this is emitted once on stream start. The SDK API
 // is experimental, so a pull failure is logged and skipped.
 func (s *sdkSession) emitAgents(ctx context.Context) {
-	details, err := s.sess.Agents(ctx)
+	ctx, cancel := context.WithTimeout(ctx, snapshotPullTimeout)
+	defer cancel()
+	details, err := s.sdkAgents(ctx)
 	if err != nil {
 		s.logf("SDK agents pull failed for session %q: %v", s.name, err)
 		return
 	}
 	s.logf("SDK agents discovered for session %q: %d agent(s)", s.name, len(details))
 	s.emitAgentsSnapshot(details)
+}
+
+func (s *sdkSession) sdkAgents(ctx context.Context) ([]copilotsdk.AgentDetail, error) {
+	if s.agentsFn != nil {
+		return s.agentsFn(ctx)
+	}
+	return s.sess.Agents(ctx)
 }
 
 // emitAgentsSnapshot maps an agents snapshot into a single agents frame. Split from

@@ -3,7 +3,9 @@
 package winhost
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -225,6 +227,52 @@ func TestOnSDKEventMCPStatusFrames(t *testing.T) {
 	}
 	if frames[2].MCPServer != "github" || frames[2].Status != string(copilot.MCPServerStatusNeedsAuth) {
 		t.Fatalf("status-changed frame = %+v", frames[2])
+	}
+}
+
+func TestRefreshMCPStatusPollsPastEmptyAndTransientError(t *testing.T) {
+	s := newSDKSession(sdkSessionParams{name: "rich-mcp-refresh", program: "copilot", workDir: t.TempDir()}, nil, nil)
+	defer s.close()
+
+	calls := 0
+	s.mcpStatusFn = func(context.Context) ([]copilotsdk.MCPServerDetail, error) {
+		calls++
+		switch calls {
+		case 1:
+			return nil, nil
+		case 2:
+			return nil, errors.New("not listed yet")
+		default:
+			return []copilotsdk.MCPServerDetail{{Name: "github", Status: "connected", Source: "user"}}, nil
+		}
+	}
+
+	if settled := s.refreshMCPStatus(context.Background()); settled {
+		t.Fatal("empty MCP status should keep polling")
+	}
+	if settled := s.refreshMCPStatus(context.Background()); settled {
+		t.Fatal("transient MCP status error should keep polling")
+	}
+	if frames := s.richTranscript(0); len(frames) != 0 {
+		t.Fatalf("transient MCP status results should not emit frames, got %+v", frames)
+	}
+	if settled := s.refreshMCPStatus(context.Background()); !settled {
+		t.Fatal("non-empty connected MCP status should settle")
+	}
+
+	frames := s.richTranscript(0)
+	if len(frames) != 2 {
+		t.Fatalf("richTranscript returned %d frames, want status + detail: %+v", len(frames), frames)
+	}
+	if frames[0].Kind != proto.EventKindMCPStatus || frames[0].MCPServer != "github" || frames[0].Status != "connected" {
+		t.Fatalf("MCP status frame = %+v", frames[0])
+	}
+	if frames[1].Kind != proto.EventKindMCPDetail || len(frames[1].MCPServers) != 1 ||
+		frames[1].MCPServers[0].Name != "github" || frames[1].MCPServers[0].Status != "connected" {
+		t.Fatalf("MCP detail frame = %+v", frames[1])
+	}
+	if calls != 3 {
+		t.Fatalf("MCP status calls = %d, want 3", calls)
 	}
 }
 

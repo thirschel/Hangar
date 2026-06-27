@@ -63,16 +63,31 @@ type managedSession interface {
 	unsubscribe(sub *subscriber)
 }
 
+// startReservation is a cancellable claim on a session name held in host.starting
+// while its (possibly slow) start/resume runs without h.mu. A lifecycle op that
+// races a mid-start session (killSession during ArchiveWorkspace teardown, or
+// triggerShutdown) marks the reservation canceled; finishSessionStart then closes
+// the freshly-started session instead of registering it, so no Copilot child is
+// orphaned outside ListWorkspaces' ownership. [HOL-1]
+type startReservation struct {
+	canceled bool
+}
+
 type host struct {
-	mu         sync.RWMutex
-	sessions   map[string]managedSession
+	mu       sync.RWMutex
+	sessions map[string]managedSession
 	// starting holds session names whose (possibly slow) start/resume is in
 	// progress. It is guarded by mu and lets startSDKSession /
 	// startManagedSessionWithShell reserve a name, release mu across the slow
 	// launch, then register the live session — so a slow start never holds mu and
 	// blocks getSession/list (the ListWorkspaces poll). See reserveSessionStart.
-	starting   map[string]struct{}
-	newSession func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
+	// The value is a cancellable reservation so lifecycle ops (kill/shutdown) can
+	// abort a start in flight.
+	starting map[string]*startReservation
+	// shuttingDown is set under mu by triggerShutdown so a session whose start is
+	// in flight is closed rather than registered when its start finishes.
+	shuttingDown bool
+	newSession   func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
 	// startSDKSessionHook, when non-nil, replaces the real rich (Copilot SDK)
 	// backend in startSDKSession. Production leaves it nil; unit tests set it to
 	// register a fake session and record the call (e.g. the resume flag), so the
@@ -98,7 +113,7 @@ type host struct {
 func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
-		starting: make(map[string]struct{}),
+		starting: make(map[string]*startReservation),
 		newSession: func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
 			return newConptySession(name, program, workDir, shell, cols, rows, autoYes, logger)
 		},
@@ -140,7 +155,7 @@ func (h *host) reserveSessionStart(name string) error {
 	if _, starting := h.starting[name]; starting {
 		return fmt.Errorf("session already starting: %s", name)
 	}
-	h.starting[name] = struct{}{}
+	h.starting[name] = &startReservation{}
 	return nil
 }
 
@@ -148,13 +163,50 @@ func (h *host) reserveSessionStart(name string) error {
 // when the start succeeded, registers the live session. It must be called exactly
 // once per successful reserveSessionStart (success or failure) so a failed start
 // frees the name for a retry.
-func (h *host) finishSessionStart(name string, s managedSession, startErr error) {
+//
+// If the reservation was canceled while the start was in flight (killSession,
+// e.g. during ArchiveWorkspace teardown) or the host is shutting down, a
+// successfully-started session is closed instead of registered so its Copilot
+// child is not orphaned outside ListWorkspaces' ownership. A start aborted this
+// way is not a user-facing failure, so callers should not surface an error for
+// it. [HOL-1]
+//
+// It returns true when the session was registered, false when it was discarded
+// (canceled/shutting-down) or the start failed.
+func (h *host) finishSessionStart(name string, s managedSession, startErr error) bool {
 	h.mu.Lock()
-	defer h.mu.Unlock()
+	res := h.starting[name]
 	delete(h.starting, name)
-	if startErr == nil && s != nil {
-		h.sessions[name] = s
-		h.lastActive = time.Now()
+	if startErr != nil || s == nil {
+		h.mu.Unlock()
+		return false
+	}
+	canceled := h.shuttingDown || (res != nil && res.canceled)
+	if canceled {
+		// Drop the lock before closing: close() may block on child teardown and
+		// must never be held across h.mu (which getSession/list take).
+		h.mu.Unlock()
+		_ = s.close()
+		h.logger.Printf("discarded session %q started after cancel/shutdown", name)
+		return false
+	}
+	h.sessions[name] = s
+	h.lastActive = time.Now()
+	h.mu.Unlock()
+	return true
+}
+
+// abortSessionStart frees a reservation whose start unwound before
+// finishSessionStart ran — e.g. a panic during launch recovered upstream by
+// safeDispatch. Without it the name would stay wedged in h.starting forever
+// ("session already starting"). Any partially-created session is closed so a
+// half-spawned child is not leaked. [HOL-1]
+func (h *host) abortSessionStart(name string, s managedSession) {
+	h.mu.Lock()
+	delete(h.starting, name)
+	h.mu.Unlock()
+	if s != nil {
+		_ = s.close()
 	}
 }
 
@@ -433,13 +485,29 @@ func (h *host) startManagedSessionWithShell(name, program, workDir, shell string
 	if err := h.reserveSessionStart(name); err != nil {
 		return err
 	}
+	var s managedSession
+	done := false
+	// If a panic (recovered upstream by safeDispatch) unwinds before
+	// finishSessionStart runs, free the reservation and close any partial
+	// session so the name isn't wedged as "already starting". [HOL-1]
+	defer func() {
+		if !done {
+			h.abortSessionStart(name, s)
+		}
+	}()
 	// newSession + start() run WITHOUT h.mu: a slow ConPTY/agent launch must not
 	// block getSession/list (the ListWorkspaces poll) on other connections. [HOL-1]
-	s := h.newSession(name, program, workDir, shell, cols, rows, autoYes, h.logger)
+	s = h.newSession(name, program, workDir, shell, cols, rows, autoYes, h.logger)
 	startErr := s.start()
-	h.finishSessionStart(name, s, startErr)
+	registered := h.finishSessionStart(name, s, startErr)
+	done = true
 	if startErr != nil {
 		return fmt.Errorf("start session: %w", startErr)
+	}
+	if !registered {
+		// The start was canceled (kill/shutdown raced the launch); the session
+		// was already closed by finishSessionStart. Not a user-facing error.
+		return nil
 	}
 	programName, argCount := safeProgramSummary(program, shell)
 	h.logger.Printf("created session %q (programName=%q argCount=%d shell=%q cols=%d rows=%d)", name, programName, argCount, shell, cols, rows)
@@ -463,10 +531,21 @@ func (h *host) startSDKSession(p sdkSessionParams) error {
 	if err := h.reserveSessionStart(p.name); err != nil {
 		return err
 	}
+	var started managedSession
+	done := false
+	// A panic during the SDK launch (recovered upstream by safeDispatch) must not
+	// leave p.name wedged in h.starting. Free the reservation and close any
+	// partial session if finishSessionStart never runs. [HOL-1]
+	defer func() {
+		if !done {
+			h.abortSessionStart(p.name, started)
+		}
+	}()
 	// newSDKSession + start/startResumed (the Copilot SDK launch, transcript replay
 	// and MCP connect) run WITHOUT h.mu. These can take many seconds; holding h.mu
 	// across them froze every ListWorkspaces/getSession poll for the whole start. [HOL-1]
 	s := newSDKSession(p, nil, h.logger)
+	started = s
 	var startErr error
 	if p.resume {
 		startErr = s.startResumed()
@@ -480,9 +559,15 @@ func (h *host) startSDKSession(p sdkSessionParams) error {
 		// previous order.
 		s.emitModelFrame()
 	}
-	h.finishSessionStart(p.name, s, startErr)
+	registered := h.finishSessionStart(p.name, s, startErr)
+	done = true
 	if startErr != nil {
 		return fmt.Errorf("start sdk session: %w", startErr)
+	}
+	if !registered {
+		// The start was canceled (kill/shutdown raced the launch); the session was
+		// already closed by finishSessionStart. Not a user-facing error.
+		return nil
 	}
 	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", p.name, filepath.Base(p.program), p.workDir, p.resume)
 	return nil
@@ -523,6 +608,13 @@ func (h *host) killSession(name string) {
 	s, ok := h.sessions[name]
 	if ok {
 		delete(h.sessions, name)
+	}
+	// If the session's start is still in flight, cancel its reservation so
+	// finishSessionStart closes the freshly-started session instead of
+	// registering it for an already-killed workspace (ArchiveWorkspace teardown
+	// calls killSession). [HOL-1]
+	if res, starting := h.starting[name]; starting {
+		res.canceled = true
 	}
 	h.mu.Unlock()
 	if ok {
@@ -930,6 +1022,13 @@ func (h *host) triggerShutdown() {
 	h.shutdownOnce.Do(func() {
 		// Tear down any live sessions so no child processes are orphaned.
 		h.mu.Lock()
+		// Cancel any in-flight starts so a session that finishes launching after
+		// this point is closed by finishSessionStart, not registered (and thus
+		// orphaned) past shutdown. [HOL-1]
+		h.shuttingDown = true
+		for _, res := range h.starting {
+			res.canceled = true
+		}
 		sessions := make([]managedSession, 0, len(h.sessions))
 		for _, s := range h.sessions {
 			sessions = append(sessions, s)

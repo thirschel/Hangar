@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -128,6 +129,7 @@ type Session struct {
 	mu         sync.RWMutex
 	status     Status
 	started    bool
+	liveCancel context.CancelFunc
 	mcpServers []string
 	mcpTools   map[string][]string // configured tool allowlist per server (best-effort, v13)
 	mcpDetail  []MCPServerDetail   // full per-server MCP detail for the rich MCP page (v13)
@@ -275,13 +277,15 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 		_ = client.Stop()
 		return fmt.Errorf("create/resume session: %w", err)
 	}
+	liveCtx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
-	s.client, s.sess, s.unsub, s.started, s.status = client, sess, nil, true, StatusReady
+	s.client, s.sess, s.unsub, s.started, s.liveCancel, s.status = client, sess, nil, true, cancel, StatusReady
 	s.mu.Unlock()
 	s.promptMu.Lock()
 	s.closing = false
 	s.promptMu.Unlock()
 	s.touch()
+	s.watchClientProcessExit(liveCtx, client)
 	return nil
 }
 
@@ -673,9 +677,12 @@ func setModelOptions(effort, contextTier string) *copilot.SetModelOptions {
 // Close disconnects the session and stops the runtime.
 func (s *Session) Close() error {
 	s.mu.Lock()
-	unsub, sess, client := s.unsub, s.sess, s.client
-	s.sess, s.client, s.unsub, s.started = nil, nil, nil, false
+	unsub, sess, client, cancel := s.unsub, s.sess, s.client, s.liveCancel
+	s.sess, s.client, s.unsub, s.liveCancel, s.started = nil, nil, nil, nil, false
 	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	s.closePrompts()
 	if unsub != nil {
 		unsub()
@@ -763,11 +770,63 @@ func (s *Session) setStatus(st Status) {
 	s.mu.Unlock()
 }
 
-// Exited reports whether the CLI child process has exited/crashed. A crashed
-// child emits NO SDK event (verified by spike), so this is detected reactively
-// when an operation returns a "process exited" error. The host marks the session
-// not-alive so the next OpenRichStream revives (resumes) it.
+// Exited reports whether the CLI child process has exited/crashed. SDK sessions
+// do not emit a semantic event for a dead child, so start() watches the SDK
+// process-done signal and noteErr keeps the older RPC-error fallback.
 func (s *Session) Exited() bool { return s.Status() == StatusExited }
+
+func (s *Session) watchClientProcessExit(ctx context.Context, client *copilot.Client) {
+	done, ok := clientProcessDoneValue(client)
+	if !ok {
+		return
+	}
+	go func() {
+		chosen, _, _ := reflect.Select([]reflect.SelectCase{
+			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())},
+			{Dir: reflect.SelectRecv, Chan: done},
+		})
+		if chosen == 1 {
+			s.markExitedForClient(client)
+		}
+	}()
+}
+
+func clientProcessDoneValue(client *copilot.Client) (reflect.Value, bool) {
+	if client == nil {
+		return reflect.Value{}, false
+	}
+	v := reflect.ValueOf(client)
+	if v.Kind() != reflect.Pointer || v.IsNil() {
+		return reflect.Value{}, false
+	}
+	f := v.Elem().FieldByName("processDone")
+	if !f.IsValid() || f.Kind() != reflect.Chan || f.IsNil() {
+		return reflect.Value{}, false
+	}
+	return f, true
+}
+
+func (s *Session) watchProcessDone(ctx context.Context, client *copilot.Client, done <-chan struct{}) <-chan struct{} {
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			s.markExitedForClient(client)
+		}
+	}()
+	return finished
+}
+
+func (s *Session) markExitedForClient(client *copilot.Client) {
+	s.mu.Lock()
+	if s.client == client && s.started && s.status != StatusExited {
+		s.status = StatusExited
+	}
+	s.mu.Unlock()
+}
 
 // noteErr flags the session as exited when err indicates the CLI child process
 // died, so Exited()/alive() reflect the crash. Returns err unchanged.
@@ -795,6 +854,14 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 			s.setStatus(StatusRunning)
 		case *copilot.PermissionRequestedData:
 			s.setStatus(StatusWaiting)
+		case *copilot.PermissionCompletedData,
+			*copilot.UserInputCompletedData,
+			*copilot.ElicitationCompletedData,
+			*copilot.ToolExecutionStartData,
+			*copilot.AssistantMessageDeltaData,
+			*copilot.AssistantReasoningDeltaData,
+			*copilot.AssistantStreamingDeltaData:
+			s.setStatus(StatusRunning)
 		case *copilot.SessionIdleData:
 			s.setStatus(StatusReady)
 		case *copilot.SessionMCPServersLoadedData:

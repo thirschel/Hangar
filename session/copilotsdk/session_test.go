@@ -364,3 +364,81 @@ func TestNoteErrMarksExitedSticky(t *testing.T) {
 		t.Fatalf("StatusExited must be sticky, got %v", s.Status())
 	}
 }
+
+func TestProcessDoneMarksExited(t *testing.T) {
+	s := New(Config{})
+	client := copilot.NewClient(nil)
+	s.mu.Lock()
+	s.client = client
+	s.started = true
+	s.status = StatusReady
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := s.watchProcessDone(ctx, client, done)
+
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for process-done watcher")
+	}
+	if !s.Exited() {
+		t.Fatal("closed process-done channel must mark the session exited")
+	}
+}
+
+func TestProcessDoneIgnoresOldClient(t *testing.T) {
+	s := New(Config{})
+	oldClient := copilot.NewClient(nil)
+	currentClient := copilot.NewClient(nil)
+	s.mu.Lock()
+	s.client = currentClient
+	s.started = true
+	s.status = StatusReady
+	s.mu.Unlock()
+
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	finished := s.watchProcessDone(ctx, oldClient, done)
+
+	close(done)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for process-done watcher")
+	}
+	if s.Exited() {
+		t.Fatal("process exit from an old client must not mark the current session exited")
+	}
+}
+
+func TestHandleEventClearsWaitingOnResumedActivity(t *testing.T) {
+	cases := []struct {
+		name string
+		data copilot.SessionEventData
+	}{
+		{"permission completed", &copilot.PermissionCompletedData{}},
+		{"user input completed", &copilot.UserInputCompletedData{}},
+		{"elicitation completed", &copilot.ElicitationCompletedData{}},
+		{"tool execution start", &copilot.ToolExecutionStartData{}},
+		{"assistant message delta", &copilot.AssistantMessageDeltaData{}},
+		{"assistant reasoning delta", &copilot.AssistantReasoningDeltaData{}},
+		{"assistant streaming delta", &copilot.AssistantStreamingDeltaData{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := New(Config{})
+			s.setStatus(StatusWaiting)
+
+			s.handleEvent(copilot.SessionEvent{Data: tc.data})
+
+			if got := s.Status(); got != StatusRunning {
+				t.Fatalf("Status() = %v, want %v", got, StatusRunning)
+			}
+		})
+	}
+}

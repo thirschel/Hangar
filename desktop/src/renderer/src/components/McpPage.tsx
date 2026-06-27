@@ -242,6 +242,9 @@ export function McpPage({ servers, workspace }: McpPageProps): JSX.Element {
       setDeleteBusy(true);
       setDeleteError(null);
       setCatalog(await window.cs.mcpRemoveServer(pendingDelete));
+      // Clear pendingDelete directly so the modal disappears even if the Modal
+      // ref was already nulled by a re-render before close() could be called.
+      setPendingDelete(null);
       deleteModalRef.current?.close();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : String(err));

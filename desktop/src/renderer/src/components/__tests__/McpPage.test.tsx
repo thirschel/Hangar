@@ -204,4 +204,26 @@ describe('McpPage', () => {
     unmount();
     expect(unsubscribeCalled).toBe(true);
   });
+
+  it('clears pendingDelete immediately on success so the modal disappears even if the ref is null', async () => {
+    render(<McpPage servers={[]} workspace={makeWorkspace()} />);
+
+    const githubRow = (await screen.findByText('github')).closest('.mcp-page__catalog-row');
+    fireEvent.click(within(githubRow as HTMLElement).getByRole('button', { name: 'Delete' }));
+
+    // Modal is open.
+    expect(await screen.findByRole('button', { name: 'Delete server' })).toBeInTheDocument();
+
+    // Confirm delete: the API resolves and the modal should disappear.
+    fireEvent.click(screen.getByRole('button', { name: 'Delete server' }));
+
+    await waitFor(() => {
+      expect(window.cs.mcpRemoveServer).toHaveBeenCalledWith('github');
+    });
+
+    // pendingDelete was cleared directly, so the modal is gone from the DOM.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Delete server' })).not.toBeInTheDocument();
+    });
+  });
 });

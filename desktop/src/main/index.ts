@@ -252,6 +252,13 @@ let authenticatedHello: Response | null = null;
 // workspace's agent (+ its shell), which are swapped when the selection changes.
 const attachments = new Map<string, net.Socket>();
 const eventStreams = new Map<string, net.Socket>();
+// Per-session generation counters: bumped at the START of every open/attach AND
+// every close/detach. After the async awaits in open/attach, we compare the
+// current generation to the one captured before the awaits — if they differ, a
+// close or a newer open raced us, so we destroy the just-connected socket and
+// bail instead of storing it (which would leak the socket forever).
+const attachGenerations = new Map<string, number>();
+const richStreamGenerations = new Map<string, number>();
 // Per-workspace shell program (sh_<workspaceId> -> program string), so an explicit
 // shell switch can detect a changed program and respawn while a reattached,
 // daemon-persisted shell is left intact.
@@ -384,6 +391,10 @@ async function attachSession(
 ): Promise<Response> {
   const start = Date.now();
   log.info('attachSession start', { session: sessionName, cols, rows });
+  // Bump the generation BEFORE any await. A concurrent detach or re-attach bumps
+  // it too; capture it now to detect the race after the awaits complete.
+  const gen = (attachGenerations.get(sessionName) ?? 0) + 1;
+  attachGenerations.set(sessionName, gen);
   const client = await getControlClient();
   if (attachments.has(sessionName)) {
     log.info('attachSession already attached', { session: sessionName, elapsedMs: Date.now() - start });
@@ -408,6 +419,14 @@ async function attachSession(
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
+  }
+  // A concurrent detach or re-attach bumped the generation while we were
+  // awaiting above. Destroy the just-connected socket instead of storing it —
+  // otherwise nobody ever reads it and the daemon streams frames indefinitely.
+  if (attachGenerations.get(sessionName) !== gen) {
+    log.info('attachSession superseded; destroying socket', { session: sessionName });
+    socket.destroy();
+    return attached;
   }
   attachments.set(sessionName, socket);
   const dataStats = { total: 0, firstLogged: false };
@@ -461,6 +480,8 @@ async function attachSession(
 }
 
 function detachSession(sessionName: string): void {
+  // Bump generation so any concurrent attach sees the mismatch after its awaits.
+  attachGenerations.set(sessionName, (attachGenerations.get(sessionName) ?? 0) + 1);
   terminalRects.delete(sessionName);
   const socket = attachments.get(sessionName);
   if (socket) {
@@ -473,6 +494,10 @@ async function openRichStream(
   sessionName: string,
   since = 0,
 ): Promise<{ attachPipe: string; attachToken: string }> {
+  // Bump the generation BEFORE any await. A concurrent close or re-open bumps
+  // it too; capture it now to detect the race after the awaits complete.
+  const gen = (richStreamGenerations.get(sessionName) ?? 0) + 1;
+  richStreamGenerations.set(sessionName, gen);
   const client = await getControlClient();
   const existing = eventStreams.get(sessionName);
   if (existing) {
@@ -496,12 +521,22 @@ async function openRichStream(
   socket.once('error', (error) => {
     sendToRenderer('rich:error', { session: sessionName, message: error.message });
   });
+  // A concurrent close or re-open bumped the generation while we were awaiting
+  // above. Destroy the just-connected socket instead of storing it — otherwise
+  // nobody reads it and the daemon streams frames indefinitely.
+  if (richStreamGenerations.get(sessionName) !== gen) {
+    log.info('openRichStream superseded; destroying socket', { session: sessionName });
+    socket.destroy();
+    return stream;
+  }
   eventStreams.set(sessionName, socket);
   sendToRenderer('rich:ready', { session: sessionName });
   return stream;
 }
 
 function closeRichStream(sessionName: string): void {
+  // Bump generation so any concurrent open sees the mismatch after its awaits.
+  richStreamGenerations.set(sessionName, (richStreamGenerations.get(sessionName) ?? 0) + 1);
   const socket = eventStreams.get(sessionName);
   if (socket) {
     socket.destroy();
@@ -512,8 +547,10 @@ function closeRichStream(sessionName: string): void {
 function detachAll(): void {
   for (const socket of attachments.values()) socket.destroy();
   attachments.clear();
+  attachGenerations.clear();
   for (const socket of eventStreams.values()) socket.destroy();
   eventStreams.clear();
+  richStreamGenerations.clear();
 }
 
 function quoteProgramPart(part: string): string {
@@ -619,11 +656,17 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
   let response: Response;
   try {
     response = await callHost();
-  } catch {
-    // If the pipe dropped (daemon restarted), reconnect and retry once.
+  } catch (err) {
+    // Only retry (once) when the relevant pipe actually dropped (isClosed). If
+    // the client is still connected — e.g. a 120s call timeout on a wedged pipe
+    // — retrying on the same client doubles the hang; rethrow immediately.
+    const clientClosed = useRead ? (readControl?.isClosed() ?? true) : (control?.isClosed() ?? true);
+    if (!clientClosed) {
+      throw err;
+    }
     if (useRead) {
-      if (readControl?.isClosed()) readControl = null;
-    } else if (control?.isClosed()) {
+      readControl = null;
+    } else {
       control = null;
       authenticatedHello = null;
     }

@@ -4,10 +4,14 @@ package winhost
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	copilot "github.com/github/copilot-sdk/go"
+	"hangar/session/copilotsdk"
+	"hangar/session/winhost/proto"
 )
 
 // TestSDKSessionAdapter exercises the managedSession mapping that does not need a
@@ -72,6 +76,93 @@ func TestSDKSessionAdapter(t *testing.T) {
 	}
 	if err := s.close(); err != nil {
 		t.Errorf("double close should be a no-op, got %v", err)
+	}
+}
+
+func TestSDKSessionFreshStartEmitsStartupSnapshots(t *testing.T) {
+	s := newSDKSession(sdkSessionParams{name: "rich-start", program: "copilot", workDir: t.TempDir()}, nil, nil)
+	defer s.close()
+	s.startFn = func(context.Context) error { return nil }
+	s.instructionsFn = func(context.Context) ([]copilotsdk.InstructionDetail, error) {
+		return []copilotsdk.InstructionDetail{{Label: "Repo instructions", SourcePath: ".github/copilot-instructions.md"}}, nil
+	}
+	s.agentsFn = func(context.Context) ([]copilotsdk.AgentDetail, error) {
+		return []copilotsdk.AgentDetail{{Name: "reviewer", DisplayName: "Reviewer"}}, nil
+	}
+	s.skillsFn = func(context.Context) ([]copilotsdk.SkillDetail, error) {
+		return []copilotsdk.SkillDetail{{Name: "pdf", Enabled: true}}, nil
+	}
+
+	if err := s.start(); err != nil {
+		t.Fatalf("start returned error: %v", err)
+	}
+
+	assertStartupSnapshotFrames(t, s.richTranscript(0))
+}
+
+func TestSDKSessionResumeFallbackEmitsStartupSnapshots(t *testing.T) {
+	s := newSDKSession(sdkSessionParams{name: "rich-resume-fallback", program: "copilot", workDir: t.TempDir(), sessionID: "missing"}, nil, nil)
+	defer s.close()
+	s.resumeFn = func(context.Context) error { return errors.New("missing session") }
+	s.startFn = func(context.Context) error { return nil }
+	s.instructionsFn = func(context.Context) ([]copilotsdk.InstructionDetail, error) {
+		return []copilotsdk.InstructionDetail{{Label: "Repo instructions", SourcePath: ".github/copilot-instructions.md"}}, nil
+	}
+	s.agentsFn = func(context.Context) ([]copilotsdk.AgentDetail, error) {
+		return []copilotsdk.AgentDetail{{Name: "reviewer", DisplayName: "Reviewer"}}, nil
+	}
+	s.skillsFn = func(context.Context) ([]copilotsdk.SkillDetail, error) {
+		return []copilotsdk.SkillDetail{{Name: "pdf", Enabled: true}}, nil
+	}
+
+	if err := s.startResumed(); err != nil {
+		t.Fatalf("startResumed returned error: %v", err)
+	}
+
+	assertStartupSnapshotFrames(t, s.richTranscript(0))
+}
+
+func TestSDKSessionStartBoundsSlowSnapshotPull(t *testing.T) {
+	oldTimeout := snapshotPullTimeout
+	snapshotPullTimeout = 40 * time.Millisecond
+	defer func() { snapshotPullTimeout = oldTimeout }()
+
+	s := newSDKSession(sdkSessionParams{name: "rich-slow-snapshot", program: "copilot", workDir: t.TempDir()}, nil, nil)
+	defer s.close()
+	s.startFn = func(context.Context) error { return nil }
+	s.instructionsFn = func(ctx context.Context) ([]copilotsdk.InstructionDetail, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	s.agentsFn = func(context.Context) ([]copilotsdk.AgentDetail, error) { return nil, nil }
+	s.skillsFn = func(context.Context) ([]copilotsdk.SkillDetail, error) { return nil, nil }
+
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() { done <- s.start() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("start returned error: %v", err)
+		}
+		if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+			t.Fatalf("start took %s, want bounded by snapshot timeout", elapsed)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("start did not return after the bounded snapshot timeout")
+	}
+}
+
+func assertStartupSnapshotFrames(t *testing.T, frames []proto.EventFrame) {
+	t.Helper()
+	seen := map[string]bool{}
+	for _, frame := range frames {
+		seen[frame.Kind] = true
+	}
+	for _, kind := range []string{proto.EventKindInstructions, proto.EventKindAgents, proto.EventKindSkills} {
+		if !seen[kind] {
+			t.Fatalf("startup snapshots missing %q frame: %+v", kind, frames)
+		}
 	}
 }
 

@@ -832,6 +832,11 @@ export async function ensureHost(csExe: string, opts?: { verbose?: boolean }): P
     // HANGAR_DEBUG only affects a newly spawned daemon; a running daemon is unaffected until it restarts.
     env: { ...process.env, ...(opts?.verbose ? { HANGAR_DEBUG: '1' } : {}) },
   });
+  // Guard against a missing/unexecutable binary (e.g. AV-blocked). Without this
+  // handler the async 'error' event would become an uncaughtException and
+  // hard-crash the Electron main process. waitForValidHostInfo below times out
+  // and rejects gracefully.
+  child.on('error', (err) => log.error('ensureHost spawn error', err));
   log.info('ensureHost spawned session-host', { pipeName, pid: child.pid, verbose: !!opts?.verbose });
   child.unref();
 

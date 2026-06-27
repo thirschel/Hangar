@@ -52,6 +52,15 @@ export function GridPane({
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   // Live per-row heights during an active resize drag (null = use the prop).
   const [liveHeights, setLiveHeights] = useState<number[] | null>(null);
+  // Cleanup function for an active row-resize drag. Stored so that if GridPane
+  // unmounts mid-drag, the window listeners and userSelect override are torn down
+  // instead of leaking for the lifetime of the page.
+  const rowResizeCleanupRef = useRef<(() => void) | null>(null);
+
+  // On unmount, run any in-flight row-resize cleanup (removes window listeners,
+  // restores userSelect). Without this, an unmount during a drag leaves two
+  // permanent window event listeners AND a stuck `userSelect: none` app-wide.
+  useEffect(() => () => { rowResizeCleanupRef.current?.(); }, []);
 
   // Drop the dragged tile onto targetId. Because tiles are keyed by id (and each
   // TermView by sessionName), reordering only moves the keyed nodes — the live
@@ -126,7 +135,11 @@ export function GridPane({
         setLiveHeights(compute(lastClientY));
       });
     };
-    const onUp = (ev: MouseEvent): void => {
+
+    // Centralised teardown: remove both listeners, cancel any pending rAF, and
+    // restore the body's userSelect. Stored in rowResizeCleanupRef so that an
+    // unmount mid-drag (which never reaches onUp) can still run it.
+    const cleanup = (): void => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       if (rafId !== null) {
@@ -134,12 +147,18 @@ export function GridPane({
         rafId = null;
       }
       document.body.style.userSelect = prevUserSelect;
+      rowResizeCleanupRef.current = null;
+    };
+
+    const onUp = (ev: MouseEvent): void => {
+      cleanup();
       const finalHeights = compute(ev.clientY);
       setLiveHeights(null);
       onRowHeightsChange?.(finalHeights);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    rowResizeCleanupRef.current = cleanup;
   };
 
   return (
