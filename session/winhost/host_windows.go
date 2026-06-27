@@ -413,6 +413,8 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.respondRichPermission(req)
 	case proto.MethodRespondUserInput:
 		return h.respondRichUserInput(req)
+	case proto.MethodRespondExitPlanMode:
+		return h.respondRichExitPlanMode(req)
 	case proto.MethodListModels:
 		return h.listRichModels(req)
 	case proto.MethodSetModel:
@@ -746,7 +748,7 @@ func (h *host) sendRichMessage(req *proto.Request) *proto.Response {
 	}
 	go func() {
 		defer recoverGoroutine("host.sendRichMessage")
-		if err := sess.richSend(context.Background(), req.Message, req.Attachments); err != nil {
+		if err := sess.richSend(context.Background(), req.Message, req.Attachments, req.AgentMode); err != nil {
 			h.logger.Printf("rich send failed session=%q err=%v", req.Session, err)
 		}
 	}()
@@ -790,6 +792,17 @@ func (h *host) respondRichUserInput(req *proto.Request) *proto.Response {
 	}
 	if err := sess.richRespondUserInput(req.RequestID, req.Answer, req.Freeform); err != nil {
 		return proto.Errorf(req.ID, "respond user input: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) respondRichExitPlanMode(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richRespondExitPlanMode(req.RequestID, req.Approved, req.SelectedAction, req.Feedback); err != nil {
+		return proto.Errorf(req.ID, "respond exit plan mode: %v", err)
 	}
 	return &proto.Response{ID: req.ID, OK: true}
 }

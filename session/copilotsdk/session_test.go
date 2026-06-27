@@ -435,6 +435,74 @@ func TestProcessDoneIgnoresOldClient(t *testing.T) {
 	}
 }
 
+// TestOnExitPlanModeApproveAndRespond proves the plan round-trip: onExitPlanMode
+// surfaces the plan via OnPlan and blocks until RespondExitPlanMode answers it,
+// then returns the user's approval + selected action + feedback to the SDK.
+func TestOnExitPlanModeApproveAndRespond(t *testing.T) {
+	got := make(chan PlanPrompt, 1)
+	s := New(Config{Logger: log.New(io.Discard, "", 0), OnPlan: func(p PlanPrompt) { got <- p }})
+
+	type res struct {
+		r   copilot.ExitPlanModeResult
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		r, err := s.onExitPlanMode(copilot.ExitPlanModeRequest{
+			Summary:           "do X",
+			PlanContent:       "## plan",
+			Actions:           []string{"interactive", "autopilot", "exit_only"},
+			RecommendedAction: "autopilot",
+		}, copilot.ExitPlanModeInvocation{})
+		done <- res{r, err}
+	}()
+
+	var p PlanPrompt
+	select {
+	case p = <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnPlan was not called within 2s")
+	}
+	if p.Summary != "do X" || p.RecommendedAction != "autopilot" || len(p.Actions) != 3 || p.RequestID == "" {
+		t.Fatalf("plan prompt = %+v", p)
+	}
+	if err := s.RespondExitPlanMode(p.RequestID, true, "autopilot", "lgtm"); err != nil {
+		t.Fatalf("RespondExitPlanMode: %v", err)
+	}
+	select {
+	case out := <-done:
+		if out.err != nil || !out.r.Approved || out.r.SelectedAction != "autopilot" || out.r.Feedback != "lgtm" {
+			t.Fatalf("onExitPlanMode result = %+v err=%v", out.r, out.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("onExitPlanMode did not return within 2s")
+	}
+}
+
+// TestRespondExitPlanModeNoPending proves answering an unknown plan request is a
+// reported no-op (and does not panic).
+func TestRespondExitPlanModeNoPending(t *testing.T) {
+	s := New(Config{Logger: log.New(io.Discard, "", 0)})
+	err := s.RespondExitPlanMode("nope", true, "autopilot", "")
+	if err == nil || !strings.Contains(err.Error(), "no pending plan request") {
+		t.Fatalf("RespondExitPlanMode err = %v, want no-pending", err)
+	}
+}
+
+// TestOnExitPlanModeNoClientDeclines proves that with no interactive client (OnPlan
+// nil) onExitPlanMode declines (Approved=false) rather than auto-approving execution,
+// so a detached session never silently runs an unreviewed plan.
+func TestOnExitPlanModeNoClientDeclines(t *testing.T) {
+	s := New(Config{Logger: log.New(io.Discard, "", 0)})
+	r, err := s.onExitPlanMode(copilot.ExitPlanModeRequest{Summary: "x"}, copilot.ExitPlanModeInvocation{})
+	if err != nil {
+		t.Fatalf("onExitPlanMode err = %v", err)
+	}
+	if r.Approved {
+		t.Fatalf("expected declined (Approved=false) when no client, got %+v", r)
+	}
+}
+
 func TestHandleEventClearsWaitingOnResumedActivity(t *testing.T) {
 	cases := []struct {
 		name string

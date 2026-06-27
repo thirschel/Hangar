@@ -1,6 +1,7 @@
 import type { FormEvent, JSX, ReactNode } from 'react';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ModelInfo } from '../../../main/host-client';
+import { MODE_LABEL, type WorkMode } from './workMode';
 
 /**
  * Composer is the message input for the Agent (rich Copilot) chat surface. It is
@@ -58,6 +59,13 @@ export type ComposerProps = {
    * Model button is a disabled placeholder.
    */
   onApplyModel?: (modelId: string, effort: string, contextTier: string) => void;
+  /**
+   * Current work mode (Copilot CLI parity): 'interactive' (default), 'plan', or
+   * 'autopilot'. Drives the colored mode pill + composer border and rides each send.
+   */
+  mode?: WorkMode;
+  /** Cycle the work mode (Shift+Tab in the box, or clicking the mode pill). */
+  onCycleMode?: () => void;
 };
 
 // The two context tiers offered by the Context submenu. `value` is the raw tier
@@ -117,6 +125,8 @@ function ComposerView({
   currentEffort,
   currentContextTier,
   onApplyModel,
+  mode = 'interactive',
+  onCycleMode,
 }: ComposerProps): JSX.Element {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<string[]>([]);
@@ -303,7 +313,7 @@ function ComposerView({
   };
 
   return (
-    <form className="chat-composer" onSubmit={onSubmit}>
+    <form className={`chat-composer chat-composer--mode-${mode}`} onSubmit={onSubmit}>
       {(status !== undefined || info !== undefined) && (
         <div className="chat-composer__header">
           {status !== undefined ? (
@@ -377,9 +387,28 @@ function ComposerView({
               event.preventDefault();
               trySend();
             }
+
+            // Shift+Tab cycles the work mode (Copilot CLI parity): Interactive ->
+            // Plan -> Autopilot. preventDefault so focus does not move out of the box.
+            if (event.key === 'Tab' && event.shiftKey && onCycleMode !== undefined) {
+              event.preventDefault();
+              onCycleMode();
+            }
           }}
         />
         <div className="chat-composer__actions">
+          {onCycleMode !== undefined && (
+            <button
+              type="button"
+              className="chat-composer__tool chat-composer__mode"
+              title={'Cycle work mode (Shift+Tab): Interactive \u2192 Plan \u2192 Autopilot'}
+              aria-label={`Work mode: ${MODE_LABEL[mode]}. Shift+Tab to change.`}
+              onClick={onCycleMode}
+            >
+              <span className="chat-composer__mode-dot" aria-hidden="true" />
+              <span className="chat-composer__mode-label">{MODE_LABEL[mode]}</span>
+            </button>
+          )}
           <button
             type="button"
             className="chat-composer__tool chat-composer__upload"

@@ -59,6 +59,7 @@ describe('ChatViewHost', () => {
     window.cs.setWorkspaceAutoYes = vi.fn().mockResolvedValue(undefined);
     window.cs.listModels = vi.fn().mockResolvedValue([]);
     window.cs.setModel = vi.fn().mockResolvedValue(undefined);
+    window.cs.respondExitPlanMode = vi.fn().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -470,10 +471,99 @@ describe('ChatViewHost', () => {
     fireEvent.change(textarea, { target: { value: 'ping' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'ping', []);
+    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'ping', [], undefined);
     const bubble = screen.getByText('ping');
     expect(bubble.closest('.chat-msg--user')).not.toBeNull();
     expect(bubble.closest('.md')).toBeNull(); // user text is plain, not Markdown
+  });
+
+  it('cycles the work mode (Interactive -> Plan -> Autopilot) and tints the composer', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    const form = container.querySelector('.chat-composer') as HTMLElement;
+    expect(screen.getByRole('button', { name: /Work mode:/ })).toHaveTextContent('Interactive');
+    expect(form.className).not.toMatch(/mode-plan|mode-autopilot/);
+
+    fireEvent.click(screen.getByRole('button', { name: /Work mode:/ }));
+    expect(screen.getByRole('button', { name: /Work mode:/ })).toHaveTextContent('Plan');
+    expect(container.querySelector('.chat-composer')?.className).toContain('chat-composer--mode-plan');
+
+    fireEvent.click(screen.getByRole('button', { name: /Work mode:/ }));
+    expect(screen.getByRole('button', { name: /Work mode:/ })).toHaveTextContent('Autopilot');
+    expect(container.querySelector('.chat-composer')?.className).toContain('chat-composer--mode-autopilot');
+
+    fireEvent.click(screen.getByRole('button', { name: /Work mode:/ }));
+    expect(screen.getByRole('button', { name: /Work mode:/ })).toHaveTextContent('Interactive');
+  });
+
+  it('cycles the work mode with Shift+Tab in the message box', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.keyDown(screen.getByPlaceholderText('Message Copilot\u2026'), { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: /Work mode:/ })).toHaveTextContent('Plan');
+  });
+
+  it('threads the selected work mode (plan) to sendMessage', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: /Work mode:/ })); // Interactive -> Plan
+    fireEvent.change(screen.getByPlaceholderText('Message Copilot\u2026'), { target: { value: 'go' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'go', [], 'plan');
+  });
+
+  it('renders a plan-review card and answers exit_plan_mode on an action click', async () => {
+    const { container } = render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'exit_plan_mode.requested',
+          requestId: 'plan-1',
+          summary: 'Add modes',
+          planContent: '## Steps\n1. proto',
+          actions: ['interactive', 'autopilot', 'exit_only'],
+          recommendedAction: 'autopilot',
+        },
+      });
+    });
+
+    expect(container.querySelector('.chat-entry--plan')).not.toBeNull();
+    expect(screen.getByText('Add modes')).toBeInTheDocument();
+    expect(container.querySelector('.chat-plan__content')?.textContent).toContain('## Steps');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve (autopilot)' }));
+    expect(window.cs.respondExitPlanMode).toHaveBeenCalledWith('rich-session', 'plan-1', true, 'autopilot', '');
+  });
+
+  it('answers exit_plan_mode with reject when the user requests changes', async () => {
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    await act(async () => {
+      richFrameCallback?.({
+        session: 'rich-session',
+        frame: {
+          seq: 1,
+          kind: 'exit_plan_mode.requested',
+          requestId: 'plan-2',
+          summary: 'Plan B',
+          planContent: 'do it',
+          actions: ['interactive', 'autopilot'],
+          recommendedAction: 'interactive',
+        },
+      });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Request changes' }));
+    expect(window.cs.respondExitPlanMode).toHaveBeenCalledWith('rich-session', 'plan-2', false, '', '');
   });
 
   it('forwards picked attachments to sendMessage and reflects them in the bubble', async () => {
@@ -491,10 +581,12 @@ describe('ChatViewHost', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     // handleSend threads the absolute attachment paths to the daemon call.
-    expect(window.cs.sendMessage).toHaveBeenCalledWith('rich-session', 'review these', [
-      '/a/x.go',
-      '/b/y.ts',
-    ]);
+    expect(window.cs.sendMessage).toHaveBeenCalledWith(
+      'rich-session',
+      'review these',
+      ['/a/x.go', '/b/y.ts'],
+      undefined,
+    );
     // The optimistic bubble shows the text plus a 📎 basenames summary so the
     // user sees what they sent.
     const bubble = container.querySelector('.chat-msg--user .chat-msg__bubble');

@@ -36,7 +36,7 @@ type sdkSession struct {
 	// sendFn delivers a user message (text + absolute attachment paths) to the
 	// underlying SDK session. nil means call sess.Send directly; tests override it
 	// to observe what richSend threads through, without a live Copilot CLI.
-	sendFn func(ctx context.Context, text string, attachments []string) error
+	sendFn func(ctx context.Context, text string, attachments []string, mode string) error
 
 	startFn        func(context.Context) error
 	resumeFn       func(context.Context) error
@@ -123,6 +123,7 @@ func newSDKSession(p sdkSessionParams, onEvent func(copilot.SessionEvent), logge
 			}
 		},
 		OnPrompt: s.onSDKPrompt,
+		OnPlan:   s.onSDKPlan,
 		Logger:   logger,
 	})
 	return s
@@ -376,6 +377,20 @@ func (s *sdkSession) onSDKPrompt(prompt copilotsdk.Prompt) {
 // Trust prompts are a terminal concept; the SDK gates tools structurally.
 func (s *sdkSession) armTrustApproval(reason string, expiresAt time.Time) {}
 func (s *sdkSession) clearTrustApproval()                                 {}
+
+// onSDKPlan surfaces an exit-plan-mode request (agent finished planning in plan
+// mode) as an exit_plan_mode.requested frame so the desktop renders a plan-review
+// card. The blocking handler waits for RespondExitPlanMode (v25).
+func (s *sdkSession) onSDKPlan(prompt copilotsdk.PlanPrompt) {
+	s.emitFrame(proto.EventFrame{
+		Kind:              proto.EventKindExitPlanModeRequest,
+		RequestID:         prompt.RequestID,
+		Summary:           prompt.Summary,
+		PlanContent:       prompt.PlanContent,
+		Actions:           append([]string(nil), prompt.Actions...),
+		RecommendedAction: prompt.RecommendedAction,
+	})
+}
 
 func (s *sdkSession) info() proto.SessionInfo {
 	return proto.SessionInfo{

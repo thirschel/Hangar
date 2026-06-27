@@ -159,6 +159,16 @@ export interface EventFrame {
   // when the tool failed. Both optional -- absent on non-tool frames.
   toolArgs?: string;
   toolResult?: string;
+  // Plan/Autopilot work modes (v25). On an 'exit_plan_mode.requested' frame:
+  // `summary` + `planContent` (markdown) + `actions` (selectable) + `recommendedAction`
+  // drive the plan-review card. On an 'exit_plan_mode.resolved' frame: `approved` +
+  // `selectedAction` (the chosen action) dismiss the card on resume.
+  summary?: string;
+  planContent?: string;
+  actions?: string[];
+  recommendedAction?: string;
+  selectedAction?: string;
+  approved?: boolean;
 }
 
 // A selectable agent model, returned by the ListModels RPC and switched live via
@@ -224,6 +234,7 @@ export interface Request {
     | 'GetTranscript'
     | 'RespondPermission'
     | 'RespondUserInput'
+    | 'RespondExitPlanMode'
     | 'ListModels'
     | 'SetModel'
     | string;
@@ -242,6 +253,13 @@ export interface Request {
   decision?: 'approve' | 'reject';
   answer?: string;
   freeform?: boolean;
+  // Plan/Autopilot work modes (v25). `agentMode` ('plan' | 'autopilot' | '') rides a
+  // SendMessage; `approved` + `selectedAction` + `feedback` answer a
+  // RespondExitPlanMode (the chosen plan action, or reject-with-feedback).
+  agentMode?: string;
+  approved?: boolean;
+  selectedAction?: string;
+  feedback?: string;
   // SetModel: the target model id to switch the session to (live), plus the
   // optional reasoning effort and context tier to apply with it. `contextTier`
   // is 'default' | 'long_context'.
@@ -535,8 +553,9 @@ export class ControlClient {
     session: string,
     message: string,
     attachments?: string[],
+    agentMode?: string,
   ): Promise<void> {
-    const response = await this.call({ method: 'SendMessage', session, message, attachments });
+    const response = await this.call({ method: 'SendMessage', session, message, attachments, agentMode });
     if (!response.ok) {
       throw new Error(response.error || 'SendMessage failed');
     }
@@ -575,6 +594,26 @@ export class ControlClient {
     });
     if (!response.ok) {
       throw new Error(response.error || 'RespondUserInput failed');
+    }
+  }
+
+  public async respondExitPlanMode(
+    session: string,
+    requestId: string,
+    approved: boolean,
+    selectedAction: string,
+    feedback: string,
+  ): Promise<void> {
+    const response = await this.call({
+      method: 'RespondExitPlanMode',
+      session,
+      requestId,
+      approved,
+      selectedAction,
+      feedback,
+    });
+    if (!response.ok) {
+      throw new Error(response.error || 'RespondExitPlanMode failed');
     }
   }
 

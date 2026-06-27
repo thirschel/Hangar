@@ -26,7 +26,7 @@ func TestSendMessageThreadsAttachmentsToRichSend(t *testing.T) {
 		attachments []string
 	}
 	got := make(chan call, 1)
-	rich.sendFn = func(_ context.Context, text string, attachments []string) error {
+	rich.sendFn = func(_ context.Context, text string, attachments []string, _ string) error {
 		got <- call{text: text, attachments: attachments}
 		return nil
 	}
@@ -66,12 +66,12 @@ func TestRichSendNilAttachmentsUnchanged(t *testing.T) {
 	defer rich.close()
 
 	got := make(chan []string, 1)
-	rich.sendFn = func(_ context.Context, _ string, attachments []string) error {
+	rich.sendFn = func(_ context.Context, _ string, attachments []string, _ string) error {
 		got <- attachments
 		return nil
 	}
 
-	if err := rich.richSend(context.Background(), "hi", nil); err != nil {
+	if err := rich.richSend(context.Background(), "hi", nil, ""); err != nil {
 		t.Fatalf("richSend = %v", err)
 	}
 	if a := <-got; a != nil {

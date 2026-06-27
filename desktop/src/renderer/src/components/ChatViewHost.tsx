@@ -11,6 +11,7 @@ import type {
 } from '../../../main/host-client';
 import { Markdown } from './Markdown';
 import { Composer } from './Composer';
+import { nextWorkMode, type WorkMode } from './workMode';
 import { ChatSearchBar } from './ChatSearchBar';
 import { useTranscriptSearch } from './useTranscriptSearch';
 import { ReviewPanel } from './ReviewPanel';
@@ -111,6 +112,19 @@ type TranscriptEntry =
       choices: string[];
       // Answered-state derived from a replayed 'input.resolved' frame (label
       // "answered"); mirrors the permission entry above so it survives a remount.
+      answered?: boolean;
+      answerLabel?: string;
+    }
+  | {
+      id: string;
+      kind: 'plan';
+      requestId?: string;
+      summary: string;
+      planContent: string;
+      actions: string[];
+      recommendedAction?: string;
+      // Answered-state derived from a replayed 'exit_plan_mode.resolved' frame; the
+      // label is the chosen action (e.g. "autopilot") or "rejected".
       answered?: boolean;
       answerLabel?: string;
     }
@@ -509,6 +523,25 @@ function buildTranscript(frames: EventFrame[], sessionName: string): TranscriptM
           resolved.set(frame.requestId, 'answered');
         }
         break;
+      case 'exit_plan_mode.requested':
+        turnInProgress = true;
+        entries.push({
+          id: `plan-${frame.requestId ?? frame.seq}`,
+          kind: 'plan',
+          requestId: frame.requestId,
+          summary: frame.summary ?? '',
+          planContent: frame.planContent ?? '',
+          actions: frame.actions ?? [],
+          recommendedAction: frame.recommendedAction,
+        });
+        break;
+      case 'exit_plan_mode.resolved':
+        // A plan was answered: record the chosen action (or "rejected") so the plan
+        // card replays as answered after a remount.
+        if (frame.requestId) {
+          resolved.set(frame.requestId, frame.approved ? frame.selectedAction || 'approved' : 'rejected');
+        }
+        break;
       case 'usage':
         // Capture the structured reading for the composer header (active model +
         // context %). The CLI shows no inline "Usage updated" line, so we never
@@ -598,7 +631,7 @@ function buildTranscript(frames: EventFrame[], sessionName: string): TranscriptM
   // active buttons) even on a fresh mount where answeredRequests is still empty.
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
-    if (entry.kind !== 'permission' && entry.kind !== 'input') continue;
+    if (entry.kind !== 'permission' && entry.kind !== 'input' && entry.kind !== 'plan') continue;
     if (!entry.requestId) continue;
     const label = resolved.get(entry.requestId);
     if (label) entries[i] = { ...entry, answered: true, answerLabel: label };
@@ -1319,6 +1352,9 @@ export function ChatViewHost({
     return realMax + 0.5 + localCounter.current * 1e-6;
   }, []);
 
+  const [agentMode, setAgentMode] = useState<WorkMode>('interactive');
+  const cycleMode = useCallback((): void => setAgentMode(nextWorkMode), []);
+
   // --- Composer slot contract (consumed by <Composer/>; see slot below) -----
   const handleSend = useCallback((text: string, attachments: string[]): void => {
     const message = text.trim();
@@ -1328,14 +1364,15 @@ export function ChatViewHost({
     setLocalUserFrames((current) => [...current, { seq, kind: USER_LOCAL_KIND, text: bubbleText }]);
     setOptimisticTurn(true);
     const sessionName = workspace.sessionName;
+    const mode = agentMode === 'interactive' ? undefined : agentMode;
     void window.cs
-      .sendMessage(sessionName, message, attachments)
+      .sendMessage(sessionName, message, attachments, mode)
       .catch((error: unknown) => {
         if (!isCurrentWorkspace(workspace.id, sessionName)) return;
         setOptimisticTurn(false);
         setStreamError(error instanceof Error ? error.message : String(error));
       });
-  }, [isCurrentWorkspace, nextLocalSeq, workspace.id, workspace.sessionName]);
+  }, [agentMode, isCurrentWorkspace, nextLocalSeq, workspace.id, workspace.sessionName]);
 
   const handleStop = useCallback((): void => {
     setOptimisticTurn(false);
@@ -1433,6 +1470,23 @@ export function ChatViewHost({
     }
   }, [isCurrentWorkspace, markAnswered, unmarkAnswered, workspace.id, workspace.sessionName]);
 
+  const respondExitPlanMode = useCallback(async (
+    requestId: string,
+    approved: boolean,
+    selectedAction: string,
+    feedback: string,
+  ): Promise<void> => {
+    markAnswered(requestId, approved ? selectedAction || 'approved' : 'rejected');
+    const sessionName = workspace.sessionName;
+    try {
+      await window.cs.respondExitPlanMode(sessionName, requestId, approved, selectedAction, feedback);
+    } catch (error) {
+      if (!isCurrentWorkspace(workspace.id, sessionName)) return;
+      unmarkAnswered(requestId);
+      setStreamError(error instanceof Error ? error.message : String(error));
+    }
+  }, [isCurrentWorkspace, markAnswered, unmarkAnswered, workspace.id, workspace.sessionName]);
+
   return (
     <section className="chat-view" aria-label="Chat conversation" ref={chatViewRef}>
       <header className="chat-view__topbar">
@@ -1512,7 +1566,9 @@ export function ChatViewHost({
                   ))}
                 {transcript.entries.map((entry) => {
                   const requestId =
-                    entry.kind === 'permission' || entry.kind === 'input' ? entry.requestId : undefined;
+                    entry.kind === 'permission' || entry.kind === 'input' || entry.kind === 'plan'
+                      ? entry.requestId
+                      : undefined;
                   const answered = requestId ? answeredRequests.has(requestId) : false;
                   const answerLabel = requestId ? answerLabels.get(requestId) : undefined;
                   return (
@@ -1524,6 +1580,7 @@ export function ChatViewHost({
                       answerLabel={answerLabel}
                       onRespondPermission={respondPermission}
                       onRespondUserInput={respondUserInput}
+                      onRespondExitPlanMode={respondExitPlanMode}
                     />
                   );
                 })}
@@ -1567,6 +1624,8 @@ export function ChatViewHost({
               currentEffort={currentEffort}
               currentContextTier={currentContextTier}
               onApplyModel={applyModel}
+              mode={agentMode}
+              onCycleMode={cycleMode}
             />
           </div>
         </div>
@@ -1618,6 +1677,7 @@ const ChatEntryView = memo(function ChatEntryView({
   answerLabel,
   onRespondPermission,
   onRespondUserInput,
+  onRespondExitPlanMode,
 }: {
   entry: TranscriptEntry;
   autoYes: boolean;
@@ -1625,6 +1685,12 @@ const ChatEntryView = memo(function ChatEntryView({
   answerLabel?: string;
   onRespondPermission: (requestId: string, decision: 'approve' | 'reject') => Promise<void>;
   onRespondUserInput: (requestId: string, answer: string, wasFreeform: boolean) => Promise<void>;
+  onRespondExitPlanMode: (
+    requestId: string,
+    approved: boolean,
+    selectedAction: string,
+    feedback: string,
+  ) => Promise<void>;
 }): JSX.Element | null {
   switch (entry.kind) {
     case 'user':
@@ -1706,6 +1772,18 @@ const ChatEntryView = memo(function ChatEntryView({
         />
       );
     }
+    case 'plan': {
+      // The agent finished planning (plan mode); approve + pick the next mode, or
+      // request changes. Dual source like permission/input: replay OR local click.
+      return (
+        <ChatPlanEntry
+          entry={entry}
+          answered={entry.answered === true || answered}
+          answerLabel={answerLabel ?? entry.answerLabel}
+          onRespond={onRespondExitPlanMode}
+        />
+      );
+    }
     case 'idle':
       if (entry.aborted) {
         return (
@@ -1777,6 +1855,82 @@ function ChatPermissionEntry({
       )}
     </div>
   );
+}
+
+function ChatPlanEntry({
+  entry,
+  answered,
+  answerLabel,
+  onRespond,
+}: {
+  entry: Extract<TranscriptEntry, { kind: 'plan' }>;
+  answered: boolean;
+  answerLabel?: string;
+  onRespond: (requestId: string, approved: boolean, selectedAction: string, feedback: string) => Promise<void>;
+}): JSX.Element {
+  const disabled = answered || !entry.requestId;
+  const approve = (action: string): void => {
+    if (entry.requestId) void onRespond(entry.requestId, true, action, '');
+  };
+  const reject = (): void => {
+    if (entry.requestId) void onRespond(entry.requestId, false, '', '');
+  };
+  // The daemon forwards the SDK's offered actions; fall back to the standard set.
+  const actions = entry.actions.length > 0 ? entry.actions : ['interactive', 'autopilot', 'exit_only'];
+
+  return (
+    <div className="chat-entry chat-entry--plan">
+      <div className="chat-request__header">
+        <strong>Plan ready</strong>
+        {answered && answerLabel && <span className="chat-request__state">{answerLabel}</span>}
+      </div>
+      {entry.summary && <span className="chat-request__detail">{entry.summary}</span>}
+      {entry.planContent && <pre className="chat-plan__content">{entry.planContent}</pre>}
+      <div className="chat-request__actions">
+        {actions.map((action) => (
+          <button
+            key={action}
+            type="button"
+            className={
+              action === entry.recommendedAction
+                ? 'chat-request__button'
+                : 'chat-request__button chat-request__button--secondary'
+            }
+            disabled={disabled}
+            onClick={() => approve(action)}
+          >
+            {planActionLabel(action)}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="chat-request__button chat-request__button--secondary"
+          disabled={disabled}
+          onClick={reject}
+        >
+          Request changes
+        </button>
+        {!entry.requestId && <span className="chat-entry__meta">Missing request id.</span>}
+      </div>
+    </div>
+  );
+}
+
+// Human labels for the SDK exit-plan-mode actions (all are "approve + then run in
+// this mode"; exit_only approves but stops without executing).
+function planActionLabel(action: string): string {
+  switch (action) {
+    case 'interactive':
+      return 'Approve (step through)';
+    case 'autopilot':
+      return 'Approve (autopilot)';
+    case 'autopilot_fleet':
+      return 'Approve (autopilot fleet)';
+    case 'exit_only':
+      return 'Approve (stop here)';
+    default:
+      return action;
+  }
 }
 
 function ChatUserInputEntry({

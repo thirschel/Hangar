@@ -35,6 +35,7 @@ const mockCs = {
   abortTurn: asyncNoop,
   respondPermission: asyncNoop,
   respondUserInput: asyncNoop,
+  respondExitPlanMode: asyncNoop,
   getTranscript: async () => [],
   listModels: async () => [],
   setModel: asyncNoop,

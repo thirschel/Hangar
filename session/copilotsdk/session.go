@@ -70,6 +70,17 @@ type Prompt struct {
 	AllowFreeform bool
 }
 
+// PlanPrompt is a daemon-synthesized plan-review prompt surfaced when the agent
+// (in plan mode) calls exit_plan_mode. The client renders Summary + PlanContent
+// and answers with RespondExitPlanMode (approve + one of Actions, or reject).
+type PlanPrompt struct {
+	RequestID         string
+	Summary           string
+	PlanContent       string
+	Actions           []string
+	RecommendedAction string
+}
+
 // Config configures a Session. Handlers are optional; safe non-blocking defaults
 // are used so the daemon never hangs when no interactive client is attached.
 type Config struct {
@@ -112,6 +123,11 @@ type Config struct {
 	// OnPrompt receives SDK handler prompts that are not emitted as SDK events
 	// (ask_user / elicitation). The handler then blocks until RespondUserInput.
 	OnPrompt func(Prompt)
+	// OnPlan receives an exit-plan-mode request (the agent finished planning) so a
+	// client can render the plan and approve/select an action. The handler blocks
+	// until RespondExitPlanMode. A nil sink safely declines (the agent stays in plan
+	// mode) so the daemon never hangs when no interactive client is attached.
+	OnPlan func(PlanPrompt)
 	// Decide overrides the permission policy. When nil, AutoYes governs: approve
 	// when AutoYes is set, otherwise leave the request pending.
 	Decide PermissionDecider
@@ -145,9 +161,10 @@ type Session struct {
 	autoYes      atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
 	lastOutput   atomic.Int64 // unix-ms of the last output-changing event
 
-	promptMu sync.Mutex
-	prompts  map[string]chan userInputReply
-	closing  bool
+	promptMu    sync.Mutex
+	prompts     map[string]chan userInputReply
+	planPrompts map[string]chan planReply
+	closing     bool
 }
 
 type userInputReply struct {
@@ -156,12 +173,19 @@ type userInputReply struct {
 	ok       bool
 }
 
+type planReply struct {
+	approved bool
+	action   string
+	feedback string
+	ok       bool
+}
+
 // New builds a Session from cfg. Call Start (fresh) or Resume (existing id).
 func New(cfg Config) *Session {
 	if cfg.Logger == nil {
 		cfg.Logger = log.New(os.Stderr, "[copilotsdk] ", log.LstdFlags)
 	}
-	s := &Session{cfg: cfg, status: StatusLoading, currentModel: cfg.Model, prompts: make(map[string]chan userInputReply)}
+	s := &Session{cfg: cfg, status: StatusLoading, currentModel: cfg.Model, prompts: make(map[string]chan userInputReply), planPrompts: make(map[string]chan planReply)}
 	s.autoYes.Store(cfg.AutoYes)
 	return s
 }
@@ -190,6 +214,9 @@ func (s *Session) sessionConfig() *copilot.SessionConfig {
 		OnPermissionRequest:  s.onPermission,
 		OnUserInputRequest:   s.onUserInput,   // always register, else ask_user blocks
 		OnElicitationRequest: s.onElicitation, // always register, else elicitation blocks
+		// Plan/Autopilot work modes (v25): surface exit_plan_mode requests so a
+		// client can review + approve the agent's plan and pick the next mode.
+		OnExitPlanModeRequest: s.onExitPlanMode,
 	}
 	if s.cfg.Model != "" {
 		sc.Model = s.cfg.Model
@@ -218,11 +245,12 @@ func (s *Session) sessionConfig() *copilot.SessionConfig {
 // byte-for-byte the pre-v18 request. MCP forwarding mirrors sessionConfig.
 func (s *Session) resumeConfig() *copilot.ResumeSessionConfig {
 	rc := &copilot.ResumeSessionConfig{
-		Streaming:            copilot.Bool(true),
-		OnEvent:              s.handleEvent,
-		OnPermissionRequest:  s.onPermission,
-		OnUserInputRequest:   s.onUserInput,
-		OnElicitationRequest: s.onElicitation,
+		Streaming:             copilot.Bool(true),
+		OnEvent:               s.handleEvent,
+		OnPermissionRequest:   s.onPermission,
+		OnUserInputRequest:    s.onUserInput,
+		OnElicitationRequest:  s.onElicitation,
+		OnExitPlanModeRequest: s.onExitPlanMode,
 	}
 	if s.cfg.Model != "" {
 		rc.Model = s.cfg.Model
@@ -293,7 +321,7 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 // fire-and-forget should run it in a goroutine and observe the event stream.
 // attachments are absolute file paths; an empty/nil slice sends a plain message
 // exactly as before.
-func (s *Session) Send(ctx context.Context, prompt string, attachments []string) error {
+func (s *Session) Send(ctx context.Context, prompt string, attachments []string, mode string) error {
 	sess := s.session()
 	if sess == nil {
 		return fmt.Errorf("session not started")
@@ -301,6 +329,11 @@ func (s *Session) Send(ctx context.Context, prompt string, attachments []string)
 	s.setStatus(StatusRunning)
 	opts := copilot.MessageOptions{Prompt: prompt}
 	opts.Attachments = attachmentsFromPaths(attachments)
+	// Plan/Autopilot work modes (v25): an empty mode is interactive (omitted), so a
+	// modeless send is byte-for-byte the pre-v25 request.
+	if mode != "" {
+		opts.AgentMode = copilot.AgentMode(mode)
+	}
 	_, err := sess.Send(ctx, opts)
 	return s.noteErr(err)
 }
@@ -959,6 +992,33 @@ func (s *Session) onElicitation(req copilot.ElicitationContext) (result copilot.
 	}, nil
 }
 
+// onExitPlanMode surfaces an exit-plan-mode request (the agent, in plan mode,
+// finished drafting a plan) to the client and blocks until it is answered via
+// RespondExitPlanMode. A declined/closed/aborted wait leaves the agent in plan
+// mode (Approved=false) rather than auto-approving execution.
+func (s *Session) onExitPlanMode(req copilot.ExitPlanModeRequest, _ copilot.ExitPlanModeInvocation) (result copilot.ExitPlanModeResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onExitPlanMode: %v\n%s", r, debug.Stack())
+			result, err = copilot.ExitPlanModeResult{Approved: false}, fmt.Errorf("internal error handling exit-plan-mode request")
+		}
+	}()
+	reply, werr := s.planPromptAndWait(PlanPrompt{
+		Summary:           req.Summary,
+		PlanContent:       req.PlanContent,
+		Actions:           req.Actions,
+		RecommendedAction: req.RecommendedAction,
+	})
+	if werr != nil {
+		return copilot.ExitPlanModeResult{Approved: false}, nil
+	}
+	return copilot.ExitPlanModeResult{
+		Approved:       reply.approved,
+		SelectedAction: reply.action,
+		Feedback:       reply.feedback,
+	}, nil
+}
+
 func (s *Session) promptAndWait(prompt Prompt) (userInputReply, error) {
 	if s.cfg.OnPrompt == nil {
 		return userInputReply{}, fmt.Errorf("no interactive client available to answer %s", prompt.Kind)
@@ -1004,12 +1064,64 @@ func (s *Session) RespondUserInput(requestID, answer string, freeform bool) erro
 	return nil
 }
 
+// planPromptAndWait surfaces a plan-review prompt via OnPlan and blocks until
+// RespondExitPlanMode answers it (mirrors promptAndWait for ask_user/elicitation).
+func (s *Session) planPromptAndWait(prompt PlanPrompt) (planReply, error) {
+	if s.cfg.OnPlan == nil {
+		return planReply{}, fmt.Errorf("no interactive client available to review the plan")
+	}
+	id, err := newPromptRequestID()
+	if err != nil {
+		return planReply{}, err
+	}
+	prompt.RequestID = id
+	ch := make(chan planReply, 1)
+
+	s.promptMu.Lock()
+	if s.closing {
+		s.promptMu.Unlock()
+		return planReply{}, fmt.Errorf("session is closing")
+	}
+	s.planPrompts[id] = ch
+	s.promptMu.Unlock()
+
+	s.setStatus(StatusWaiting)
+	s.touch()
+	s.cfg.OnPlan(prompt)
+	reply := <-ch
+	if !reply.ok {
+		return planReply{}, fmt.Errorf("session closed before the plan was answered")
+	}
+	return reply, nil
+}
+
+// RespondExitPlanMode answers a pending plan-review prompt generated by this
+// Session. approved=false leaves the agent in plan mode; selectedAction is one of
+// the prompt's Actions (e.g. "interactive"|"autopilot"|"exit_only").
+func (s *Session) RespondExitPlanMode(requestID string, approved bool, selectedAction, feedback string) error {
+	s.promptMu.Lock()
+	ch, ok := s.planPrompts[requestID]
+	if ok {
+		delete(s.planPrompts, requestID)
+		ch <- planReply{approved: approved, action: selectedAction, feedback: feedback, ok: true}
+	}
+	s.promptMu.Unlock()
+	if !ok {
+		return fmt.Errorf("no pending plan request: %s", requestID)
+	}
+	return nil
+}
+
 func (s *Session) closePrompts() {
 	s.promptMu.Lock()
 	s.closing = true
 	for id, ch := range s.prompts {
 		delete(s.prompts, id)
 		ch <- userInputReply{ok: false}
+	}
+	for id, ch := range s.planPrompts {
+		delete(s.planPrompts, id)
+		ch <- planReply{ok: false}
 	}
 	s.promptMu.Unlock()
 }
@@ -1022,6 +1134,10 @@ func (s *Session) abortPrompts() {
 	for id, ch := range s.prompts {
 		delete(s.prompts, id)
 		ch <- userInputReply{ok: false}
+	}
+	for id, ch := range s.planPrompts {
+		delete(s.planPrompts, id)
+		ch <- planReply{ok: false}
 	}
 	s.promptMu.Unlock()
 }

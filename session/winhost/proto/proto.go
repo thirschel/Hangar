@@ -103,7 +103,13 @@ import (
 // AgentInfo list (the custom agents discovered for the session via
 // RPC.Agents.Discover) so the desktop can show an Agents page. Additive: omitempty
 // drops the new Agents slice on every other frame.
-const Version = 24
+// v25 adds Plan/Autopilot work modes: Request.AgentMode ("plan"|"autopilot"|"" =
+// interactive) rides on a SendMessage call; the agent's plan surfaces on the new
+// EventKindExitPlanModeRequest frame (Summary/PlanContent/Actions/RecommendedAction)
+// and is answered by MethodRespondExitPlanMode (Approved/SelectedAction/Feedback),
+// with EventKindExitPlanModeResolved replaying the answer on resume. Additive: an
+// omitted AgentMode sends exactly as v24.
+const Version = 25
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -176,6 +182,11 @@ const (
 	// method.
 	MethodListModels = "ListModels" // -> Response.Models
 	MethodSetModel   = "SetModel"   // Request.Model = target model id; live switch
+
+	// Plan/Autopilot work modes (v25): RespondExitPlanMode answers a pending
+	// exit_plan_mode.requested (Approved + SelectedAction + Feedback). The per-turn
+	// mode itself rides on Request.AgentMode of a MethodSendMessage call.
+	MethodRespondExitPlanMode = "RespondExitPlanMode"
 )
 
 // Capture modes for MethodCapturePane.
@@ -281,6 +292,15 @@ type Request struct {
 	// Attachments (v15) carries absolute file paths the desktop sends alongside
 	// Message on a MethodSendMessage call. Empty/nil = a plain message (unchanged).
 	Attachments []string `json:"attachments,omitempty"` // absolute file paths sent with a message
+
+	// Plan/Autopilot work modes (v25). AgentMode rides on a MethodSendMessage call:
+	// "" (interactive, unchanged), "plan", or "autopilot". Approved/SelectedAction/
+	// Feedback carry a MethodRespondExitPlanMode answer (RequestID correlates with an
+	// exit_plan_mode.requested frame; SelectedAction is one of that frame's Actions).
+	AgentMode      string `json:"agentMode,omitempty"`
+	Approved       bool   `json:"approved,omitempty"`
+	SelectedAction string `json:"selectedAction,omitempty"`
+	Feedback       string `json:"feedback,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -473,6 +493,16 @@ type EventFrame struct {
 	Decision    string `json:"decision,omitempty"`    // permission.resolved: "approve"|"reject"
 	Effort      string `json:"effort,omitempty"`      // model: reasoning effort (with Model/ContextTier)
 	ContextTier string `json:"contextTier,omitempty"` // model: pinned context tier (with Model/Effort)
+	// Plan/Autopilot work modes (v25): populated only on an exit_plan_mode.requested
+	// frame, carrying the SDK ExitPlanModeRequest so the desktop can render a plan-
+	// review card. exit_plan_mode.resolved reuses RequestID + Approved/SelectedAction
+	// to dismiss the card on resume. All omitempty.
+	Summary           string   `json:"summary,omitempty"`           // exit_plan_mode.requested: one-line plan summary
+	PlanContent       string   `json:"planContent,omitempty"`       // exit_plan_mode.requested: full plan (markdown)
+	Actions           []string `json:"actions,omitempty"`           // exit_plan_mode.requested: selectable actions
+	RecommendedAction string   `json:"recommendedAction,omitempty"` // exit_plan_mode.requested: the recommended action
+	SelectedAction    string   `json:"selectedAction,omitempty"`    // exit_plan_mode.resolved: the chosen action
+	Approved          bool     `json:"approved,omitempty"`          // exit_plan_mode.resolved: whether the plan was approved
 }
 
 // EventFrame.Kind values for the rich event stream (v11).
@@ -499,6 +529,11 @@ const (
 	EventKindPermissionResolved = "permission.resolved" // a permission request was answered (Decision)
 	EventKindInputResolved      = "input.resolved"      // a user-input/elicitation request was answered (RequestID)
 	EventKindModel              = "model"               // the session's active model (Model + Effort + ContextTier)
+	// Plan/Autopilot work modes (v25): exit_plan_mode.requested carries the plan
+	// (Summary/PlanContent/Actions/RecommendedAction); exit_plan_mode.resolved marks
+	// it answered (RequestID + Approved + SelectedAction) for resume replay.
+	EventKindExitPlanModeRequest  = "exit_plan_mode.requested"
+	EventKindExitPlanModeResolved = "exit_plan_mode.resolved"
 )
 
 // MCPServerInfo is per-server detail for the rich MCP page (v13). It is display-
