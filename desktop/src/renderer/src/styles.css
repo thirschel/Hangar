@@ -4800,7 +4800,10 @@ body.is-row-resizing .center-terminal__resizer::after {
 
 .chat-composer__model-caret {
   margin-left: var(--space-1);
+  /* Inline SVG chevron (path centered in its viewBox), so flex centering lines it
+     up with the model text exactly — no font-glyph baseline guesswork. */
   color: var(--text-muted);
+  flex: none;
 }
 
 /* Current-model header row: the active model name + a check, non-interactive. */

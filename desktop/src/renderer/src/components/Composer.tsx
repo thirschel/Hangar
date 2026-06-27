@@ -403,9 +403,22 @@ function ComposerView({
               {supportsEffort && effort.length > 0 && (
                 <span className="chat-composer__model-effort">{titleCaseEffort(effort)}</span>
               )}
-              <span className="chat-composer__model-caret" aria-hidden="true">
-                {'\u2304'}
-              </span>
+              <svg
+                className="chat-composer__model-caret"
+                width="9"
+                height="9"
+                viewBox="0 0 12 12"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 4.5L6 7.5L9 4.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </button>
             {modelMenuOpen && modelSelectable && (
               <div className="chat-composer__model-menu" role="menu" aria-label="Select model">
