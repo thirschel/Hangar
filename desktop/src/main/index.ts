@@ -600,10 +600,18 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
   // mutation in flight on the command connection can't head-of-line-block them.
   const useRead = !!request.method && READ_POLL_METHODS.has(request.method);
   const callHost = async (): Promise<Response> => {
-    if (!useRead && request.method === 'Hello' && authenticatedHello) {
+    if (useRead) {
+      const client = await getReadControlClient();
+      return client.call(request);
+    }
+    // Command path: establish the primary client FIRST (its setup performs the
+    // authenticated Hello and caches it), THEN short-circuit a renderer Hello to
+    // that cache. The renderer's Hello carries no nonce, so forwarding it to the
+    // daemon would be rejected and surface as hostVersion=0 ("daemon is v0").
+    const client = await getControlClient();
+    if (request.method === 'Hello' && authenticatedHello) {
       return authenticatedHello;
     }
-    const client = useRead ? await getReadControlClient() : await getControlClient();
     return client.call(request);
   };
 
