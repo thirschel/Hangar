@@ -1200,6 +1200,18 @@ app.whenReady().then(() => {
 // tree by PID so the daemon never lingers. Only the primary instance owns the host.
 async function shutdownHost(): Promise<void> {
   if (!isPrimaryInstance) return;
+  // In development (electron-vite) the app is killed and relaunched on every
+  // main-process code change. The session-host is a persistent singleton, so
+  // tearing it down on each reload would needlessly stop + re-revive every agent
+  // session (slow, especially with large/MCP-heavy chats). Leave it running across
+  // dev restarts: finalizeQuit still closes our client sockets, the next launch
+  // re-adopts the same host, and it idle-exits on its own if the dev server is
+  // fully stopped. Production (packaged) quit still stops the host so cs.exe exits
+  // with the app.
+  if (!app.isPackaged) {
+    log.info('shutdownHost skipped (dev): leaving session-host running for reload');
+    return;
+  }
   const hostPid = authenticatedHello?.hostPid;
   let stopped = false;
   if (control && !control.isClosed()) {
