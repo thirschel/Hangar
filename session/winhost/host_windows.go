@@ -679,6 +679,14 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 func (h *host) richSession(req *proto.Request) (*sdkSession, *proto.Response) {
 	sess, ok := h.getSession(req.Session)
 	if !ok {
+		// The session may have died (e.g. the daemon restarted); revive it from the
+		// persisted workspace so ANY rich RPC works without first issuing an explicit
+		// OpenRichStream. Bounded: once revived, later calls take the getSession path.
+		if revived, rerr := h.workspaces.reviveBySession(req.Session, req.Cols, req.Rows); rerr == nil && revived {
+			sess, ok = h.getSession(req.Session)
+		}
+	}
+	if !ok {
 		return nil, proto.Errorf(req.ID, "no such session: %s", req.Session)
 	}
 	rich, ok := sess.(*sdkSession)

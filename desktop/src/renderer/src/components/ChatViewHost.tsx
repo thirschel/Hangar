@@ -19,6 +19,7 @@ import { McpPage } from './McpPage';
 import { SkillsPage } from './SkillsPage';
 import { InstructionsPage } from './InstructionsPage';
 import { AgentsPage } from './AgentsPage';
+import { diag } from '../diag';
 
 // ChatViewHost is the rich chat surface for the new Agent mode: a top bar (chat
 // title + AutoYes), a section nav (Chat / MCP servers / Skills / Changes / All
@@ -1209,20 +1210,40 @@ export function ChatViewHost({
     // the 'default' tier). Undefined = no local pick yet this mount.
     setSelectedEffort(undefined);
     setSelectedContextTier(undefined);
-    void window.cs
-      .listModels(workspace.sessionName)
-      .then((list) => {
-        // Skip entirely when unchanged so an empty result over an empty list
-        // never dispatches (and never warns about an update outside act()).
-        if (cancelled || sameModelList(modelsRef.current, list)) return;
-        modelsRef.current = list;
-        setModels(list);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setStreamError(error instanceof Error ? error.message : String(error));
-      });
+    // The model list only feeds the picker; the chat itself opens via the stream.
+    // Right after a daemon restart the session may not be revived yet (list-models
+    // can race OpenRichStream's revive), so a failure here is NON-fatal: retry a few
+    // times rather than blocking the whole chat with a stream error.
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const fetchModels = (): void => {
+      if (cancelled) return;
+      void window.cs
+        .listModels(workspace.sessionName)
+        .then((list) => {
+          // Skip entirely when unchanged so an empty result over an empty list
+          // never dispatches (and never warns about an update outside act()).
+          if (cancelled || sameModelList(modelsRef.current, list)) return;
+          modelsRef.current = list;
+          setModels(list);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          attempts += 1;
+          if (attempts < 6) {
+            retryTimer = setTimeout(fetchModels, 800);
+          } else {
+            diag('rich list-models failed (non-fatal)', {
+              session: workspace.sessionName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        });
+    };
+    fetchModels();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [workspace.sessionName]);
 

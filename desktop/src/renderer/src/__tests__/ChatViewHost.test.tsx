@@ -447,6 +447,21 @@ describe('ChatViewHost', () => {
     expect(screen.queryByRole('status', { name: /Restoring conversation/ })).not.toBeInTheDocument();
   });
 
+  it('treats a list-models failure as non-fatal (no stream error blocks the chat)', async () => {
+    // After a daemon restart the session may not be revived yet, so list-models can
+    // reject with "no such session". That must NOT surface as a fatal stream error:
+    // the chat still opens via the stream; the model picker just stays empty.
+    window.cs.listModels = vi.fn().mockRejectedValue(new Error('no such session: rich-session'));
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(window.cs.listModels).toHaveBeenCalled());
+    // Flush the rejection's catch so any (incorrect) setStreamError would have run.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/Send a message to start/)).toBeInTheDocument();
+  });
+
   it('sends a message and shows it optimistically as a right-aligned user bubble', async () => {
     render(<ChatViewHost workspace={makeWorkspace()} />);
     await vi.waitFor(() => expect(richFrameCallback).toBeDefined());

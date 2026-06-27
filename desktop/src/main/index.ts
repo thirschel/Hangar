@@ -1257,8 +1257,10 @@ async function shutdownHost(): Promise<void> {
   // dev restarts: finalizeQuit still closes our client sockets, the next launch
   // re-adopts the same host, and it idle-exits on its own if the dev server is
   // fully stopped. Production (packaged) quit still stops the host so cs.exe exits
-  // with the app.
-  if (!app.isPackaged) {
+  // with the app. ELECTRON_RENDERER_URL (set by electron-vite dev) is a reliable
+  // dev signal in case app.isPackaged is unexpectedly true for an unpacked run.
+  const isDev = !app.isPackaged || !!process.env.ELECTRON_RENDERER_URL;
+  if (isDev) {
     log.info('shutdownHost skipped (dev): leaving session-host running for reload');
     return;
   }
