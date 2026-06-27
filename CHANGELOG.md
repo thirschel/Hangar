@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [2.0.0](https://github.com/thirschel/Hangar/compare/v1.10.1...v2.0.0) (2026-06-27)
+
+### ⚠ BREAKING CHANGES
+
+* Copilot SDK rich agent view (structured chat) for the Hangar desktop (#93)
+
+### Features
+
+* Copilot SDK rich agent view (structured chat) for the Hangar desktop ([#93](https://github.com/thirschel/Hangar/issues/93)) ([80f78db](https://github.com/thirschel/Hangar/commit/80f78dbb0fd4828af9e3b82336b4f8707cb1f738)), closes [#79](https://github.com/thirschel/Hangar/issues/79) [#78](https://github.com/thirschel/Hangar/issues/78) [#88](https://github.com/thirschel/Hangar/issues/88)
+
 ## [1.10.1](https://github.com/thirschel/Hangar/compare/v1.10.0...v1.10.1) (2026-06-24)
 
 ### Bug Fixes
