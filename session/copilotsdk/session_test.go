@@ -3,6 +3,8 @@ package copilotsdk
 import (
 	"context"
 	"errors"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -388,6 +390,23 @@ func TestProcessDoneMarksExited(t *testing.T) {
 	if !s.Exited() {
 		t.Fatal("closed process-done channel must mark the session exited")
 	}
+}
+
+func TestHandleEventRecoversCallbackPanic(t *testing.T) {
+	// A panic in the OnEvent callback (or any handleEvent processing) must be
+	// recovered, not crash the daemon — the daemon's stderr is discarded, so an
+	// unrecovered goroutine panic vanishes without a trace. Regression guard for
+	// the reflection-based-liveness crash that took the daemon down on every start.
+	s := New(Config{
+		Logger:  log.New(io.Discard, "", 0),
+		OnEvent: func(copilot.SessionEvent) { panic("boom in OnEvent") },
+	})
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("handleEvent let a callback panic escape: %v", r)
+		}
+	}()
+	s.handleEvent(copilot.SessionEvent{})
 }
 
 func TestProcessDoneIgnoresOldClient(t *testing.T) {

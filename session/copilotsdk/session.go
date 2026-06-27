@@ -17,7 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"reflect"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -277,7 +277,7 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 		_ = client.Stop()
 		return fmt.Errorf("create/resume session: %w", err)
 	}
-	liveCtx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	s.client, s.sess, s.unsub, s.started, s.liveCancel, s.status = client, sess, nil, true, cancel, StatusReady
 	s.mu.Unlock()
@@ -285,7 +285,6 @@ func (s *Session) start(ctx context.Context, resume bool) error {
 	s.closing = false
 	s.promptMu.Unlock()
 	s.touch()
-	s.watchClientProcessExit(liveCtx, client)
 	return nil
 }
 
@@ -775,41 +774,19 @@ func (s *Session) setStatus(st Status) {
 // process-done signal and noteErr keeps the older RPC-error fallback.
 func (s *Session) Exited() bool { return s.Status() == StatusExited }
 
-func (s *Session) watchClientProcessExit(ctx context.Context, client *copilot.Client) {
-	done, ok := clientProcessDoneValue(client)
-	if !ok {
-		return
-	}
-	go func() {
-		chosen, _, _ := reflect.Select([]reflect.SelectCase{
-			{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())},
-			{Dir: reflect.SelectRecv, Chan: done},
-		})
-		if chosen == 1 {
-			s.markExitedForClient(client)
-		}
-	}()
-}
-
-func clientProcessDoneValue(client *copilot.Client) (reflect.Value, bool) {
-	if client == nil {
-		return reflect.Value{}, false
-	}
-	v := reflect.ValueOf(client)
-	if v.Kind() != reflect.Pointer || v.IsNil() {
-		return reflect.Value{}, false
-	}
-	f := v.Elem().FieldByName("processDone")
-	if !f.IsValid() || f.Kind() != reflect.Chan || f.IsNil() {
-		return reflect.Value{}, false
-	}
-	return f, true
-}
+// watchClientProcessExit/clientProcessDoneValue were removed: they read the SDK
+// client's UNEXPORTED processDone channel via reflection and ran reflect.Select on
+// it, which panics ("value obtained using unexported field") and — in an
+// unrecovered goroutine — crashed the daemon on every session start. Liveness is
+// detected reactively via noteErr (the pre-existing behavior). watchProcessDone
+// below is the safe, channel-based helper kept for a future proactive wiring if
+// the SDK ever exposes a PUBLIC process-done signal.
 
 func (s *Session) watchProcessDone(ctx context.Context, client *copilot.Client, done <-chan struct{}) <-chan struct{} {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
+		defer s.recoverPanic("watchProcessDone")
 		select {
 		case <-ctx.Done():
 			return
@@ -847,7 +824,18 @@ func isProcessExited(err error) bool {
 func (s *Session) touch() { s.lastOutput.Store(time.Now().UnixMilli()) }
 
 // handleEvent maps the SDK event stream onto Status, then forwards to the consumer.
+// recoverPanic logs a recovered panic from an SDK callback or goroutine so one
+// bad event/handler can't crash the whole daemon. The daemon's stderr is
+// discarded, so an unrecovered goroutine panic would otherwise vanish without a
+// trace (exactly how the old reflection-based liveness silently crashed it).
+func (s *Session) recoverPanic(where string) {
+	if r := recover(); r != nil {
+		s.cfg.Logger.Printf("recovered panic in %s: %v\n%s", where, r, debug.Stack())
+	}
+}
+
 func (s *Session) handleEvent(ev copilot.SessionEvent) {
+	defer s.recoverPanic("handleEvent")
 	if ev.Data != nil {
 		switch data := ev.Data.(type) {
 		case *copilot.AssistantTurnStartData:
@@ -889,7 +877,13 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 // onPermission is the deadlock-free permission policy: it returns immediately,
 // either auto-approving or declining-to-pending (NoResult) so a (re)attaching
 // client can answer. It NEVER blocks on an IPC round-trip.
-func (s *Session) onPermission(req copilot.PermissionRequest, _ copilot.PermissionInvocation) (csrpc.PermissionDecision, error) {
+func (s *Session) onPermission(req copilot.PermissionRequest, _ copilot.PermissionInvocation) (decision csrpc.PermissionDecision, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onPermission: %v\n%s", r, debug.Stack())
+			decision, err = &csrpc.PermissionDecisionReject{}, fmt.Errorf("internal error handling permission request")
+		}
+	}()
 	approve, pend := s.decide(req)
 	switch {
 	case approve:
@@ -914,7 +908,13 @@ func (s *Session) decide(req copilot.PermissionRequest) (approve, pend bool) {
 // onUserInput must answer synchronously (ask_user has no requestID-keyed
 // out-of-band resolve). The SDK invokes it on its own goroutine, so it is safe to
 // block until the host answers through RespondUserInput.
-func (s *Session) onUserInput(req copilot.UserInputRequest, _ copilot.UserInputInvocation) (copilot.UserInputResponse, error) {
+func (s *Session) onUserInput(req copilot.UserInputRequest, _ copilot.UserInputInvocation) (resp copilot.UserInputResponse, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onUserInput: %v\n%s", r, debug.Stack())
+			resp, err = copilot.UserInputResponse{}, fmt.Errorf("internal error handling user-input request")
+		}
+	}()
 	allowFreeform := false
 	if req.AllowFreeform != nil {
 		allowFreeform = *req.AllowFreeform
@@ -931,7 +931,13 @@ func (s *Session) onUserInput(req copilot.UserInputRequest, _ copilot.UserInputI
 	return copilot.UserInputResponse{Answer: reply.answer, WasFreeform: reply.freeform}, nil
 }
 
-func (s *Session) onElicitation(req copilot.ElicitationContext) (copilot.ElicitationResult, error) {
+func (s *Session) onElicitation(req copilot.ElicitationContext) (result copilot.ElicitationResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onElicitation: %v\n%s", r, debug.Stack())
+			result, err = copilot.ElicitationResult{Action: copilot.ElicitationActionDecline}, fmt.Errorf("internal error handling elicitation request")
+		}
+	}()
 	reply, err := s.promptAndWait(Prompt{
 		Kind:          "elicitation",
 		Question:      req.Message,
