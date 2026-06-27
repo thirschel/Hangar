@@ -55,6 +55,10 @@ type Config struct {
 	// Default false (motion enabled). Motion also auto-disables when the terminal
 	// is too small or there are too many visible workspaces.
 	DisableSidebarMotion bool `json:"disable_sidebar_motion,omitempty"`
+	// CopilotRichView opts Copilot workspaces into the experimental, structured
+	// "rich agent view" backed by the Copilot SDK instead of the ConPTY terminal.
+	// Off by default.
+	CopilotRichView bool `json:"copilot_rich_view,omitempty"`
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and

@@ -2,13 +2,18 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   CopilotSessionInfo,
   DirEntry,
+  EventFrame,
   FileContents,
   FileDiffInfo,
+  ModelInfo,
   Request,
   Response,
   WorkspaceInfo,
 } from '../main/host-client';
+import type { McpCatalog, McpServerDef } from '../main/mcpCatalog';
 import type { Settings, ShellProfile } from '../main/settings';
+
+export type { McpCatalog, McpServerDef } from '../main/mcpCatalog';
 
 export type AppInfo = {
   version: string;
@@ -48,6 +53,24 @@ export type TermError = {
   message: string;
 };
 
+export type RichFrame = {
+  session: string;
+  frame: EventFrame;
+};
+
+export type RichReady = {
+  session: string;
+};
+
+export type RichClosed = {
+  session: string;
+};
+
+export type RichError = {
+  session: string;
+  message: string;
+};
+
 // Resolved render/compositing state (RDP blank-terminal mitigations). The renderer
 // reads this lazily after the window opens to select the terminal renderer and gate
 // its diagnostics probe. See docs/rdp-blank-terminal-postmortem.md.
@@ -74,6 +97,8 @@ export type CreateWorkspaceArgs = {
   shell?: string;
   // When true, open the session in-place against repoPath without a git worktree.
   noWorktree?: boolean;
+  // When true (Copilot only), use the experimental rich Copilot SDK agent view.
+  rich?: boolean;
 };
 
 export type RunOutput = {
@@ -117,6 +142,7 @@ const api = {
       autoYes: args.autoYes,
       shell: args.shell,
       noWorktree: args.noWorktree,
+      rich: args.rich,
     });
     if (!r.ok || !r.workspace) throw new Error(r.error || 'CreateWorkspace failed');
     return r.workspace;
@@ -255,8 +281,47 @@ const api = {
     ipcRenderer.invoke('cs:ensure-shell', { workspaceId, worktreePath, ...opts }),
   closeShell: (workspaceId: string): Promise<void> =>
     ipcRenderer.invoke('cs:close-shell', workspaceId),
+  openRichStream: (
+    session: string,
+    since = 0,
+  ): Promise<{ attachPipe: string; attachToken: string }> =>
+    ipcRenderer.invoke('rich:open-stream', { session, since }),
+  closeRichStream: (session: string): Promise<void> =>
+    ipcRenderer.invoke('rich:close-stream', session),
+  sendMessage: (session: string, message: string, attachments?: string[]): Promise<void> =>
+    ipcRenderer.invoke('rich:send-message', { session, message, attachments }),
+  abortTurn: (session: string): Promise<void> =>
+    ipcRenderer.invoke('rich:abort-turn', session),
+  respondPermission: (
+    session: string,
+    requestId: string,
+    decision: 'approve' | 'reject',
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:respond-permission', { session, requestId, decision }),
+  respondUserInput: (
+    session: string,
+    requestId: string,
+    answer: string,
+    wasFreeform: boolean,
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:respond-user-input', { session, requestId, answer, wasFreeform }),
+  getTranscript: (session: string, since = 0): Promise<EventFrame[]> =>
+    ipcRenderer.invoke('rich:get-transcript', { session, since }),
+  // Live model selector (session-scoped, same session id as the other rich calls).
+  listModels: (sessionName: string): Promise<ModelInfo[]> =>
+    ipcRenderer.invoke('rich:list-models', sessionName),
+  setModel: (
+    sessionName: string,
+    modelId: string,
+    effort?: string,
+    contextTier?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:set-model', { session: sessionName, modelId, effort, contextTier }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
+  // Native multi-select open-file dialog for message attachments; returns the
+  // chosen absolute paths (or [] when canceled). Mirrors pickFolder's wiring.
+  pickFiles: (): Promise<string[]> => ipcRenderer.invoke('cs:pick-files'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
   // Terminal clipboard goes through the main-process clipboard module (Electron's
@@ -265,6 +330,13 @@ const api = {
   clipboardWrite: (text: string): Promise<void> => ipcRenderer.invoke('cs:clipboard-write', text),
   clipboardRead: (): Promise<string> => ipcRenderer.invoke('cs:clipboard-read'),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
+  mcpRead: (): Promise<McpCatalog> => ipcRenderer.invoke('cs:mcp-read'),
+  mcpUpsertServer: (name: string, def: McpServerDef): Promise<McpCatalog> =>
+    ipcRenderer.invoke('cs:mcp-upsert-server', name, def),
+  mcpRemoveServer: (name: string): Promise<McpCatalog> =>
+    ipcRenderer.invoke('cs:mcp-remove-server', name),
+  mcpSetEnabled: (repoKey: string, name: string, enabled: boolean): Promise<McpCatalog> =>
+    ipcRenderer.invoke('cs:mcp-set-enabled', repoKey, name, enabled),
   // RDP blank-terminal mitigations: resolved compositing state used to select the
   // terminal renderer (canvas under software compositing) and gate diagnostics.
   getRenderInfo: (): Promise<RenderInfo> => ipcRenderer.invoke('cs:get-render-info'),
@@ -300,6 +372,10 @@ const api = {
   onHostReady: (callback: (info: HostReadyInfo) => void): Unsubscribe => on('cs:ready', callback),
   onClosed: (callback: (info: TermClosed) => void): Unsubscribe => on('term:closed', callback),
   onError: (callback: (info: TermError) => void): Unsubscribe => on('term:error', callback),
+  onRichFrame: (callback: (data: RichFrame) => void): Unsubscribe => on('rich:frame', callback),
+  onRichReady: (callback: (info: RichReady) => void): Unsubscribe => on('rich:ready', callback),
+  onRichClosed: (callback: (info: RichClosed) => void): Unsubscribe => on('rich:closed', callback),
+  onRichError: (callback: (info: RichError) => void): Unsubscribe => on('rich:error', callback),
   onUpdateStatus: (callback: (status: UpdateStatus) => void): Unsubscribe =>
     on('cs:update-status', callback),
   onFirstRun: (callback: () => void): Unsubscribe => on('cs:first-run', callback),
@@ -307,6 +383,8 @@ const api = {
     on('cs:focus-workspace', callback),
   onPlayNotificationSound: (callback: () => void): Unsubscribe =>
     on('cs:play-notification-sound', callback),
+  onMcpChanged: (callback: (catalog: McpCatalog) => void): Unsubscribe =>
+    on('mcp:changed', callback),
   completeSetup: (opts: { autoUpdate: boolean }): Promise<void> =>
     ipcRenderer.invoke('cs:complete-setup', opts),
   sendInput: (session: string, data: string): void =>

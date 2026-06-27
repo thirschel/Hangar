@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { memo, useRef, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RefObject } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { relativeTime } from '../lib/time';
@@ -27,6 +27,12 @@ type SidebarProps = {
   counts: StatusCounts;
   onStatusFilterChange: (value: StatusFilter) => void;
   searchInputRef?: RefObject<HTMLInputElement | null>;
+  // Optional labels so the same sidebar reads naturally for both surfaces: the
+  // standard view keeps "Workspaces", the agent view passes "Chats" / "chat".
+  // Defaults preserve the standard wording.
+  title?: string;
+  noun?: string;
+  emptyHint?: ReactNode;
   // Grid multi-select (optional so callers that don't use the grid stay simple).
   // Set of workspace ids currently chosen for the multi-agent grid view.
   gridSelectedIds?: ReadonlySet<string>;
@@ -34,6 +40,9 @@ type SidebarProps = {
   onToggleGridMember?: (id: string) => void;
   // Clear the entire grid selection.
   onClearGridSelection?: () => void;
+  // Ids whose removal is in flight: their rows show a "deleting" status and a
+  // click shows a "this <noun> is deleting" hint instead of selecting.
+  deletingIds?: ReadonlySet<string>;
 };
 
 type WorkspaceRowProps = {
@@ -47,6 +56,12 @@ type WorkspaceRowProps = {
   gridSelected?: boolean;
   // Provided only when grid selection is enabled; toggles this row's membership.
   onToggleGrid?: (id: string) => void;
+  // True while this row's removal is in flight: it renders a muted "Deleting…"
+  // status, hides its actions, and a click shows a transient hint instead of
+  // selecting it.
+  deleting?: boolean;
+  // Singular label used in the deleting hint ("This chat is deleting").
+  noun?: string;
 };
 
 function WorkspaceRowImpl({
@@ -58,6 +73,8 @@ function WorkspaceRowImpl({
   onSettings,
   gridSelected,
   onToggleGrid,
+  deleting = false,
+  noun = 'workspace',
 }: WorkspaceRowProps): JSX.Element {
   const status = workspaceStatus(w);
   const statusTitle =
@@ -68,16 +85,39 @@ function WorkspaceRowImpl({
         : status === 'busy'
           ? 'Working…'
           : 'Ready';
+
+  // Transient "this <noun> is deleting" hint shown when a deleting row is
+  // clicked. Ref-based timeout so repeated clicks reset the auto-hide cleanly.
+  const [hintShown, setHintShown] = useState(false);
+  const hintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (hintTimer.current) clearTimeout(hintTimer.current);
+    },
+    [],
+  );
+
+  const handleClick = (): void => {
+    if (deleting) {
+      setHintShown(true);
+      if (hintTimer.current) clearTimeout(hintTimer.current);
+      hintTimer.current = setTimeout(() => setHintShown(false), 1800);
+      return;
+    }
+    onSelect(w.id);
+  };
+
   return (
     <div
       className={`workspace-item${selected ? ' workspace-item--selected' : ''}${
-        onToggleGrid ? ' workspace-item--selectable' : ''
-      }`}
-      onClick={() => onSelect(w.id)}
+        onToggleGrid && !deleting ? ' workspace-item--selectable' : ''
+      }${deleting ? ' workspace-item--deleting' : ''}`}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
+      aria-disabled={deleting || undefined}
     >
-      {onToggleGrid && (
+      {onToggleGrid && !deleting && (
         <span className="workspace-item__grid-slot">
           {w.alive && (
             <input
@@ -94,7 +134,13 @@ function WorkspaceRowImpl({
           )}
         </span>
       )}
-      {status === 'busy' ? (
+      {deleting ? (
+        <span
+          className="workspace-item__spinner workspace-item__spinner--deleting"
+          title="Deleting…"
+          aria-label="Deleting…"
+        />
+      ) : status === 'busy' ? (
         <span className="workspace-item__spinner" title={statusTitle} aria-label={statusTitle} />
       ) : (
         <span
@@ -106,52 +152,65 @@ function WorkspaceRowImpl({
       <div className="workspace-item__body">
         <div className="workspace-item__name">{w.title}</div>
         <div className="workspace-item__detail">
-          <span className="workspace-item__branch">{w.branch}</span>
-          {w.hasWorktree && (
-            <span
-              className="workspace-item__worktree"
-              title="Isolated git worktree"
-              aria-label="Isolated git worktree"
-            >
-              ⎇
-            </span>
-          )}
-          {(w.added > 0 || w.removed > 0) && (
-            <span className="diffstat">
-              <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
-            </span>
-          )}
-          {relTime && (
-            <span className="workspace-item__time" title="Last agent output">
-              {relTime}
-            </span>
+          {deleting ? (
+            <span className="workspace-item__deleting-label">Deleting…</span>
+          ) : (
+            <>
+              <span className="workspace-item__branch">{w.branch}</span>
+              {w.hasWorktree && (
+                <span
+                  className="workspace-item__worktree"
+                  title="Isolated git worktree"
+                  aria-label="Isolated git worktree"
+                >
+                  ⎇
+                </span>
+              )}
+              {(w.added > 0 || w.removed > 0) && (
+                <span className="diffstat">
+                  <span className="add">+{w.added}</span> <span className="del">-{w.removed}</span>
+                </span>
+              )}
+              {relTime && (
+                <span className="workspace-item__time" title="Last agent output">
+                  {relTime}
+                </span>
+              )}
+            </>
           )}
         </div>
       </div>
-      <div className="workspace-item__actions">
-        <button
-          className="icon-button archive"
-          type="button"
-          title="Archive workspace (D)"
-          onClick={(e) => {
-            e.stopPropagation();
-            void onArchive(w.id);
-          }}
-        >
-          ×
-        </button>
-        <button
-          className="icon-button workspace-settings"
-          type="button"
-          title="Workspace settings"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSettings(w.id);
-          }}
-        >
-          ⚙
-        </button>
-      </div>
+      {!deleting && (
+        <div className="workspace-item__actions">
+          <button
+            className="icon-button archive"
+            type="button"
+            title="Archive workspace (D)"
+            onClick={(e) => {
+              e.stopPropagation();
+              void onArchive(w.id);
+            }}
+          >
+            ×
+          </button>
+          <button
+            className="icon-button workspace-settings"
+            type="button"
+            title="Workspace settings"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSettings(w.id);
+            }}
+          >
+            ⚙
+          </button>
+        </div>
+      )}
+      {deleting && hintShown && (
+        <span className="workspace-item__deleting-hint" role="status">
+          This {noun} is deleting
+        </span>
+      )}
     </div>
   );
 }
@@ -172,6 +231,8 @@ const WorkspaceRow = memo(WorkspaceRowImpl, (prev, next) => {
     prev.onSettings === next.onSettings &&
     prev.gridSelected === next.gridSelected &&
     prev.onToggleGrid === next.onToggleGrid &&
+    prev.deleting === next.deleting &&
+    prev.noun === next.noun &&
     prev.w.id === next.w.id &&
     prev.w.title === next.w.title &&
     prev.w.branch === next.w.branch &&
@@ -268,7 +329,25 @@ function buildGroupedList(
   onNewAtRepo?: (repoPath: string) => void,
   gridSelectedIds?: ReadonlySet<string>,
   onToggleGridMember?: (id: string) => void,
+  deletingIds?: ReadonlySet<string>,
+  noun?: string,
 ): ReactNode[] {
+  const renderRow = (w: WorkspaceInfo): JSX.Element => (
+    <WorkspaceRow
+      key={w.id}
+      w={w}
+      selected={w.id === selectedId}
+      relTime={rowRelTime(w)}
+      onSelect={onSelect}
+      onArchive={onArchive}
+      onSettings={onSettings}
+      gridSelected={gridSelectedIds?.has(w.id) ?? false}
+      onToggleGrid={onToggleGridMember}
+      deleting={deletingIds?.has(w.id) ?? false}
+      noun={noun}
+    />
+  );
+
   if (mode === 'group-by-repo') {
     const groups = new Map<string, WorkspaceInfo[]>();
     for (const w of workspaces) {
@@ -288,19 +367,7 @@ function buildGroupedList(
         />,
       );
       for (const w of items) {
-        nodes.push(
-          <WorkspaceRow
-            key={w.id}
-            w={w}
-            selected={w.id === selectedId}
-            relTime={rowRelTime(w)}
-            onSelect={onSelect}
-            onArchive={onArchive}
-            onSettings={onSettings}
-            gridSelected={gridSelectedIds?.has(w.id) ?? false}
-            onToggleGrid={onToggleGridMember}
-          />,
-        );
+        nodes.push(renderRow(w));
       }
     }
     return nodes;
@@ -313,59 +380,23 @@ function buildGroupedList(
     if (pending.length > 0) {
       nodes.push(<SectionHeader key="hdr-pending" label="Pending" />);
       for (const w of pending) {
-        nodes.push(
-          <WorkspaceRow
-            key={w.id}
-            w={w}
-            selected={w.id === selectedId}
-            relTime={rowRelTime(w)}
-            onSelect={onSelect}
-            onArchive={onArchive}
-            onSettings={onSettings}
-            gridSelected={gridSelectedIds?.has(w.id) ?? false}
-            onToggleGrid={onToggleGridMember}
-          />,
-        );
+        nodes.push(renderRow(w));
       }
     }
     if (rest.length > 0) {
       nodes.push(<SectionHeader key="hdr-other" label="Other" />);
       for (const w of rest) {
-        nodes.push(
-          <WorkspaceRow
-            key={w.id}
-            w={w}
-            selected={w.id === selectedId}
-            relTime={rowRelTime(w)}
-            onSelect={onSelect}
-            onArchive={onArchive}
-            onSettings={onSettings}
-            gridSelected={gridSelectedIds?.has(w.id) ?? false}
-            onToggleGrid={onToggleGridMember}
-          />,
-        );
+        nodes.push(renderRow(w));
       }
     }
     return nodes;
   }
 
   // Flat list for manual / recent-activity.
-  return workspaces.map((w) => (
-    <WorkspaceRow
-      key={w.id}
-      w={w}
-      selected={w.id === selectedId}
-      relTime={rowRelTime(w)}
-      onSelect={onSelect}
-      onArchive={onArchive}
-      onSettings={onSettings}
-      gridSelected={gridSelectedIds?.has(w.id) ?? false}
-      onToggleGrid={onToggleGridMember}
-    />
-  ));
+  return workspaces.map((w) => renderRow(w));
 }
 
-export function Sidebar({
+function SidebarImpl({
   workspaces,
   selectedId,
   onSelect,
@@ -381,18 +412,57 @@ export function Sidebar({
   counts,
   onStatusFilterChange,
   searchInputRef,
+  title = 'Workspaces',
+  noun = 'workspace',
+  emptyHint,
   gridSelectedIds,
   onToggleGridMember,
   onClearGridSelection,
+  deletingIds,
 }: SidebarProps): JSX.Element {
   const internalRef = useRef<HTMLInputElement>(null);
   const inputRef = searchInputRef ?? internalRef;
+
+  // Build the sorted/grouped row elements once and cache until a relevant prop
+  // changes. This memo + the React.memo wrapper on Sidebar itself prevent the
+  // full row list from being rebuilt on every 2s poll when nothing changed.
+  const groupedList = useMemo(
+    () =>
+      workspaces.length > 0
+        ? buildGroupedList(
+            workspaces,
+            sidebarMode,
+            selectedId,
+            onSelect,
+            onArchive,
+            onSettings,
+            onNewAtRepo,
+            gridSelectedIds,
+            onToggleGridMember,
+            deletingIds,
+            noun,
+          )
+        : null,
+    [
+      workspaces,
+      sidebarMode,
+      selectedId,
+      onSelect,
+      onArchive,
+      onSettings,
+      onNewAtRepo,
+      gridSelectedIds,
+      onToggleGridMember,
+      deletingIds,
+      noun,
+    ],
+  );
 
   return (
     <aside className="sidebar">
       <div className="panel-header">
         <span className="sidebar__title">
-          Workspaces
+          {title}
           <span className="sidebar__mode-label">{MODE_LABELS[sidebarMode]}</span>
         </span>
         <div className="panel-header__actions">
@@ -407,7 +477,7 @@ export function Sidebar({
           <button
             className="icon-button"
             type="button"
-            title="New workspace (n)"
+            title={`New ${noun} (n)`}
             onClick={onNewWorkspace}
           >
             +
@@ -433,7 +503,7 @@ export function Sidebar({
           ref={inputRef}
           className="sidebar-search__input"
           type="text"
-          placeholder="Filter workspaces… (/)"
+          placeholder={`Filter ${noun}s… (/)`}
           value={filter}
           onChange={(e) => onFilterChange(e.target.value)}
           data-is-input="true"
@@ -441,39 +511,82 @@ export function Sidebar({
       </div>
       <StatusFilterBar active={statusFilter} counts={counts} onChange={onStatusFilterChange} />
 
-      <nav className="workspace-list" aria-label="Workspaces">
+      <nav className="workspace-list" aria-label={title}>
         {workspaces.length === 0 && !filter && statusFilter === 'all' && (
           <div className="empty-state">
-            <div className="empty-state__title">No workspaces yet</div>
-            <p>
-              Click + to start a parallel agent — in its own git worktree, or in-place in a folder
-              you pick.
-            </p>
+            <div className="empty-state__title">No {noun}s yet</div>
+            {emptyHint ?? (
+              <p>
+                Click + to start a parallel agent — in its own git worktree, or in-place in a folder
+                you pick.
+              </p>
+            )}
           </div>
         )}
         {workspaces.length === 0 && (filter || statusFilter !== 'all') && (
           <div className="empty-state">
             <div className="empty-state__title">No matches</div>
             <p>
-              No workspaces match
+              No {noun}s match
               {filter ? <> &ldquo;{filter}&rdquo;</> : null}
               {statusFilter !== 'all' ? ` in ${STATUS_LABELS[statusFilter].toLowerCase()}` : null}
             </p>
           </div>
         )}
-        {workspaces.length > 0 &&
-          buildGroupedList(
-            workspaces,
-            sidebarMode,
-            selectedId,
-            onSelect,
-            onArchive,
-            onSettings,
-            onNewAtRepo,
-            gridSelectedIds,
-            onToggleGridMember,
-          )}
+        {workspaces.length > 0 && groupedList}
       </nav>
     </aside>
   );
 }
+
+/**
+ * Element-wise comparison of the workspace array on the fields that Sidebar
+ * actually renders. WorkspaceInfo objects are replaced wholesale each poll, so
+ * default reference equality always fails; this comparator lets Sidebar skip
+ * re-rendering when nothing changed.
+ */
+function workspacesEqualForMemo(a: WorkspaceInfo[], b: WorkspaceInfo[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const p = a[i];
+    const n = b[i];
+    if (
+      p.id !== n.id ||
+      p.title !== n.title ||
+      p.alive !== n.alive ||
+      p.busy !== n.busy ||
+      p.waiting !== n.waiting ||
+      p.added !== n.added ||
+      p.removed !== n.removed ||
+      p.regenerating !== n.regenerating ||
+      p.lastOutputUnix !== n.lastOutputUnix
+    )
+      return false;
+  }
+  return true;
+}
+
+export const Sidebar = memo(
+  SidebarImpl,
+  (prev, next) =>
+    workspacesEqualForMemo(prev.workspaces, next.workspaces) &&
+    prev.selectedId === next.selectedId &&
+    prev.filter === next.filter &&
+    prev.statusFilter === next.statusFilter &&
+    prev.sidebarMode === next.sidebarMode &&
+    prev.counts === next.counts &&
+    prev.gridSelectedIds === next.gridSelectedIds &&
+    prev.deletingIds === next.deletingIds &&
+    prev.title === next.title &&
+    prev.noun === next.noun &&
+    prev.onSelect === next.onSelect &&
+    prev.onArchive === next.onArchive &&
+    prev.onSettings === next.onSettings &&
+    prev.onNewWorkspace === next.onNewWorkspace &&
+    prev.onNewAtRepo === next.onNewAtRepo &&
+    prev.onCycleMode === next.onCycleMode &&
+    prev.onFilterChange === next.onFilterChange &&
+    prev.onStatusFilterChange === next.onStatusFilterChange &&
+    prev.onToggleGridMember === next.onToggleGridMember &&
+    prev.onClearGridSelection === next.onClearGridSelection,
+);

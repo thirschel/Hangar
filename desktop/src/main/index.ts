@@ -10,6 +10,7 @@ import {
   Request,
   Response,
   connectAttachStream,
+  connectEventStream,
   connectPipe,
   ensureHost,
   killHostProcess,
@@ -17,7 +18,9 @@ import {
   requestHostShutdown,
   verifyAuthenticatedHello,
   type DirEntry,
+  type EventFrame,
   type FileContents,
+  type ModelInfo,
 } from './host-client';
 import {
   getSettings,
@@ -28,6 +31,14 @@ import {
   type Settings,
   type ShellProfile,
 } from './settings';
+import {
+  readCatalog,
+  removeServer,
+  setRepoEnabled,
+  upsertServer,
+  type McpCatalog,
+  type McpServerDef,
+} from './mcpCatalog';
 import { createTray, destroyTray } from './tray';
 import { buildAsset } from './assets';
 import { isSoftwareCompositing, mergeDisableFeatures, isRemoteSession } from './render-detect';
@@ -240,11 +251,30 @@ let authenticatedHello: Response | null = null;
 // shell terminal can stream concurrently. Bounded in practice to the selected
 // workspace's agent (+ its shell), which are swapped when the selection changes.
 const attachments = new Map<string, net.Socket>();
+const eventStreams = new Map<string, net.Socket>();
+// Per-session generation counters: bumped at the START of every open/attach AND
+// every close/detach. After the async awaits in open/attach, we compare the
+// current generation to the one captured before the awaits — if they differ, a
+// close or a newer open raced us, so we destroy the just-connected socket and
+// bail instead of storing it (which would leak the socket forever).
+const attachGenerations = new Map<string, number>();
+const richStreamGenerations = new Map<string, number>();
 // Per-workspace shell program (sh_<workspaceId> -> program string), so an explicit
 // shell switch can detect a changed program and respawn while a reattached,
 // daemon-persisted shell is left intact.
 const shellSessionPrograms = new Map<string, string>();
 let setupPromise: Promise<ControlClient> | null = null;
+// Dedicated SECOND control connection used ONLY for the high-frequency workspace
+// list poll (ListWorkspaces). The host serves each pipe connection on its own
+// goroutine, so routing the poll here keeps the sidebar/list refresh responsive
+// even while a slow mutation (CreateWorkspace, OpenRichStream, …) is in flight on
+// the primary command connection. Reads are idempotent/eventually-consistent, so
+// racing a just-issued write on the other connection is harmless. See getReadControlClient.
+let readControl: ControlClient | null = null;
+let readSetupPromise: Promise<ControlClient> | null = null;
+// Control methods routed to the read connection. Keep to idempotent, high-frequency
+// polls; everything else (mutations, rich ops, attaches) stays on the command client.
+const READ_POLL_METHODS = new Set<string>(['ListWorkspaces']);
 let isQuitting = false;
 // Set once the quit teardown (host shutdown + cleanup) has run, so the second
 // `before-quit` pass — the one we re-issue after the async teardown — is allowed
@@ -311,6 +341,60 @@ async function getControlClient(): Promise<ControlClient> {
   return setupPromise;
 }
 
+// getReadControlClient returns a SECOND authenticated control connection dedicated
+// to the workspace-list poll (see READ_POLL_METHODS). It mirrors getControlClient
+// but keeps its own client/setup state so the two connections reconnect
+// independently; it intentionally does not emit 'cs:ready' (the primary owns that).
+async function getReadControlClient(): Promise<ControlClient> {
+  if (readControl && !readControl.isClosed()) {
+    return readControl;
+  }
+  // Drop a dead client so a daemon restart triggers a fresh connect.
+  readControl = null;
+  if (!readSetupPromise) {
+    readSetupPromise = (async () => {
+      try {
+        // Ensure the host is spawned and the primary command connection is up first,
+        // so this second connection never races host creation (avoids double-spawn);
+        // ensureHost then just reuses the now-running host.
+        await getControlClient();
+        const hostInfo = await ensureHost(CS_EXE, { verbose: hostVerbose() });
+        const client = new ControlClient(await connectPipe(hostInfo.pipeName));
+        try {
+          const clientNonce = randomClientNonce();
+          const hello = await client.call({ method: 'Hello', clientVersion: PROTO_VERSION, clientNonce });
+          verifyAuthenticatedHello(hostInfo, clientNonce, hello);
+          log.info('Hello (read) ->', hello.hostVersion, hello.ok);
+          readControl = client;
+          return client;
+        } catch (error) {
+          client.close();
+          throw error;
+        }
+      } finally {
+        // Always clear the in-flight promise so a future reconnect can re-run setup.
+        readSetupPromise = null;
+      }
+    })();
+  }
+  return readSetupPromise;
+}
+
+// callControl runs a command-client RPC with one reconnect-retry. ControlClient
+// marks itself closed on any pipe failure (write/socket error), so if fn fails on
+// a dropped pipe we drop the dead client and retry once on a fresh connection. A
+// still-open client (a genuine RPC error, or a call timeout on a live pipe)
+// rethrows immediately so real errors aren't masked and a timeout isn't doubled.
+async function callControl<T>(fn: (client: ControlClient) => Promise<T>): Promise<T> {
+  const client = await getControlClient();
+  try {
+    return await fn(client);
+  } catch (err) {
+    if (!client.isClosed()) throw err;
+    return fn(await getControlClient());
+  }
+}
+
 // attachSession opens a live stream to a daemon session (agent or shell) by name.
 // Streams are keyed by session so multiple can run at once; data/close/error are
 // reported to the renderer tagged with the session name. Re-attaching an already
@@ -322,13 +406,16 @@ async function attachSession(
 ): Promise<Response> {
   const start = Date.now();
   log.info('attachSession start', { session: sessionName, cols, rows });
-  const client = await getControlClient();
+  // Bump the generation BEFORE any await. A concurrent detach or re-attach bumps
+  // it too; capture it now to detect the race after the awaits complete.
+  const gen = (attachGenerations.get(sessionName) ?? 0) + 1;
+  attachGenerations.set(sessionName, gen);
   if (attachments.has(sessionName)) {
     log.info('attachSession already attached', { session: sessionName, elapsedMs: Date.now() - start });
     return { id: 0, ok: true };
   }
 
-  const attached = await client.call({ method: 'Attach', session: sessionName, cols, rows });
+  const attached = await callControl((c) => c.call({ method: 'Attach', session: sessionName, cols, rows }));
   log.info('attachSession Attach result', { session: sessionName, ...describeResponse(attached) });
   if (!attached.ok || !attached.attachPipe || !attached.attachToken) {
     throw new Error(`Attach: ${attached.error || 'missing attach pipe/token'}`);
@@ -346,6 +433,14 @@ async function attachSession(
       error: error instanceof Error ? error.message : String(error),
     });
     throw error;
+  }
+  // A concurrent detach or re-attach bumped the generation while we were
+  // awaiting above. Destroy the just-connected socket instead of storing it —
+  // otherwise nobody ever reads it and the daemon streams frames indefinitely.
+  if (attachGenerations.get(sessionName) !== gen) {
+    log.info('attachSession superseded; destroying socket', { session: sessionName });
+    socket.destroy();
+    return attached;
   }
   attachments.set(sessionName, socket);
   const dataStats = { total: 0, firstLogged: false };
@@ -372,7 +467,7 @@ async function attachSession(
     attachments.delete(sessionName);
     log.info('attachSession socket close', { session: sessionName, totalBytes: dataStats.total });
     try {
-      const has = await client.call({ method: 'HasSession', session: sessionName });
+      const has = await callControl((c) => c.call({ method: 'HasSession', session: sessionName }));
       const payload = has.exitCode === undefined ? { session: sessionName } : { session: sessionName, exitCode: has.exitCode };
       sendToRenderer('term:closed', payload);
     } catch (error) {
@@ -399,6 +494,8 @@ async function attachSession(
 }
 
 function detachSession(sessionName: string): void {
+  // Bump generation so any concurrent attach sees the mismatch after its awaits.
+  attachGenerations.set(sessionName, (attachGenerations.get(sessionName) ?? 0) + 1);
   terminalRects.delete(sessionName);
   const socket = attachments.get(sessionName);
   if (socket) {
@@ -407,9 +504,66 @@ function detachSession(sessionName: string): void {
   }
 }
 
+async function openRichStream(
+  sessionName: string,
+  since = 0,
+): Promise<{ attachPipe: string; attachToken: string }> {
+  // Bump the generation BEFORE any await. A concurrent close or re-open bumps
+  // it too; capture it now to detect the race after the awaits complete.
+  const gen = (richStreamGenerations.get(sessionName) ?? 0) + 1;
+  richStreamGenerations.set(sessionName, gen);
+  const existing = eventStreams.get(sessionName);
+  if (existing) {
+    existing.destroy();
+    eventStreams.delete(sessionName);
+  }
+
+  const stream = await callControl((c) => c.openRichStream(sessionName, since));
+  const socket = await connectEventStream(
+    stream.attachPipe,
+    stream.attachToken,
+    (frame: EventFrame) => sendToRenderer('rich:frame', { session: sessionName, frame }),
+    () => {
+      const current = eventStreams.get(sessionName);
+      if (current === socket) {
+        eventStreams.delete(sessionName);
+      }
+      sendToRenderer('rich:closed', { session: sessionName });
+    },
+  );
+  socket.once('error', (error) => {
+    sendToRenderer('rich:error', { session: sessionName, message: error.message });
+  });
+  // A concurrent close or re-open bumped the generation while we were awaiting
+  // above. Destroy the just-connected socket instead of storing it — otherwise
+  // nobody reads it and the daemon streams frames indefinitely.
+  if (richStreamGenerations.get(sessionName) !== gen) {
+    log.info('openRichStream superseded; destroying socket', { session: sessionName });
+    socket.destroy();
+    return stream;
+  }
+  eventStreams.set(sessionName, socket);
+  sendToRenderer('rich:ready', { session: sessionName });
+  return stream;
+}
+
+function closeRichStream(sessionName: string): void {
+  // Bump generation so any concurrent open sees the mismatch after its awaits.
+  richStreamGenerations.set(sessionName, (richStreamGenerations.get(sessionName) ?? 0) + 1);
+  const socket = eventStreams.get(sessionName);
+  if (socket) {
+    socket.destroy();
+    eventStreams.delete(sessionName);
+  }
+}
+
 function detachAll(): void {
   for (const socket of attachments.values()) socket.destroy();
   attachments.clear();
+  attachGenerations.clear();
+  for (const socket of eventStreams.values()) socket.destroy();
+  eventStreams.clear();
+  richStreamGenerations.clear();
 }
 
 function quoteProgramPart(part: string): string {
@@ -492,7 +646,18 @@ function sendToRenderer(channel: string, payload?: unknown): void {
 }
 
 ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
+  // High-frequency idempotent polls go on a dedicated read connection so a slow
+  // mutation in flight on the command connection can't head-of-line-block them.
+  const useRead = !!request.method && READ_POLL_METHODS.has(request.method);
   const callHost = async (): Promise<Response> => {
+    if (useRead) {
+      const client = await getReadControlClient();
+      return client.call(request);
+    }
+    // Command path: establish the primary client FIRST (its setup performs the
+    // authenticated Hello and caches it), THEN short-circuit a renderer Hello to
+    // that cache. The renderer's Hello carries no nonce, so forwarding it to the
+    // daemon would be rejected and surface as hostVersion=0 ("daemon is v0").
     const client = await getControlClient();
     if (request.method === 'Hello' && authenticatedHello) {
       return authenticatedHello;
@@ -504,9 +669,17 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
   let response: Response;
   try {
     response = await callHost();
-  } catch {
-    // If the pipe dropped (daemon restarted), reconnect and retry once.
-    if (control?.isClosed()) {
+  } catch (err) {
+    // Only retry (once) when the relevant pipe actually dropped (isClosed). If
+    // the client is still connected — e.g. a 120s call timeout on a wedged pipe
+    // — retrying on the same client doubles the hang; rethrow immediately.
+    const clientClosed = useRead ? (readControl?.isClosed() ?? true) : (control?.isClosed() ?? true);
+    if (!clientClosed) {
+      throw err;
+    }
+    if (useRead) {
+      readControl = null;
+    } else {
       control = null;
       authenticatedHello = null;
     }
@@ -539,19 +712,83 @@ ipcMain.handle('cs:detach-session', async (_event, sessionName: string) => {
 });
 
 ipcMain.handle(
+  'rich:open-stream',
+  async (_event, args: { session: string; since?: number }): Promise<{ attachPipe: string; attachToken: string }> => {
+    return openRichStream(args.session, args.since ?? 0);
+  },
+);
+
+ipcMain.handle('rich:close-stream', async (_event, session: string): Promise<void> => {
+  closeRichStream(session);
+});
+
+ipcMain.handle(
+  'rich:send-message',
+  async (
+    _event,
+    args: { session: string; message: string; attachments?: string[] },
+  ): Promise<void> => {
+    await callControl((c) => c.sendMessage(args.session, args.message, args.attachments));
+  },
+);
+
+ipcMain.handle('rich:abort-turn', async (_event, session: string): Promise<void> => {
+  await callControl((c) => c.abortTurn(session));
+});
+
+ipcMain.handle(
+  'rich:respond-permission',
+  async (
+    _event,
+    args: { session: string; requestId: string; decision: 'approve' | 'reject' },
+  ): Promise<void> => {
+    await callControl((c) => c.respondPermission(args.session, args.requestId, args.decision));
+  },
+);
+
+ipcMain.handle(
+  'rich:respond-user-input',
+  async (
+    _event,
+    args: { session: string; requestId: string; answer: string; wasFreeform: boolean },
+  ): Promise<void> => {
+    await callControl((c) => c.respondUserInput(args.session, args.requestId, args.answer, args.wasFreeform));
+  },
+);
+
+ipcMain.handle('rich:get-transcript', async (_event, args: { session: string; since?: number }): Promise<EventFrame[]> => {
+  return callControl((c) => c.getTranscript(args.session, args.since ?? 0));
+});
+
+ipcMain.handle('rich:list-models', async (_event, session: string): Promise<ModelInfo[]> => {
+  return callControl((c) => c.listModels(session));
+});
+
+ipcMain.handle(
+  'rich:set-model',
+  async (
+    _event,
+    args: { session: string; modelId: string; effort?: string; contextTier?: string },
+  ): Promise<void> => {
+    await callControl((c) => c.setModel(args.session, args.modelId, args.effort, args.contextTier));
+  },
+);
+
+ipcMain.handle(
   'cs:get-history',
   async (
     _event,
     args: { session: string; includeScreen?: boolean; cols?: number; rows?: number },
   ): Promise<{ ansi: string; altScreen: boolean; scrollbackLines: number }> => {
-    const client = await getControlClient();
-    const r = await client.call({
-      method: 'CaptureHistory',
-      session: args.session,
-      includeScreen: args.includeScreen ?? false,
-      cols: args.cols,
-      rows: args.rows,
-    });
+    const r = await callControl((c) =>
+      c.call({
+        method: 'CaptureHistory',
+        session: args.session,
+        includeScreen: args.includeScreen ?? false,
+        cols: args.cols,
+        rows: args.rows,
+      }),
+    );
     if (!r.ok) {
       // A workspace session that isn't live yet (e.g. just after a daemon
       // restart, before attach revives it) has no scrollback to prime. Treat
@@ -684,6 +921,18 @@ ipcMain.handle('cs:pick-folder', async (): Promise<string | null> => {
   return result.filePaths[0];
 });
 
+// Multi-select open-file dialog for message attachments. Returns the chosen
+// absolute paths (or [] when canceled), mirroring cs:pick-folder above.
+ipcMain.handle('cs:pick-files', async (): Promise<string[]> => {
+  if (!mainWindow) return [];
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select files to attach',
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (result.canceled) return [];
+  return result.filePaths;
+});
+
 // Returns the daemon's default agent program (from ~/.hangar/config.json)
 // so the create form can pre-fill a known-good agent instead of submitting a
 // blank field that silently falls back to whatever the config holds.
@@ -772,6 +1021,32 @@ ipcMain.handle('cs:get-settings', async (): Promise<Settings> => getSettings());
 ipcMain.handle('cs:set-settings', async (_event, patch: Partial<Settings>): Promise<Settings> => {
   return applySettings(patch);
 });
+
+ipcMain.handle('cs:mcp-read', async (): Promise<McpCatalog> => readCatalog());
+
+ipcMain.handle(
+  'cs:mcp-upsert-server',
+  async (_event, name: string, def: McpServerDef): Promise<McpCatalog> => {
+    const catalog = upsertServer(name, def);
+    sendToRenderer('mcp:changed', catalog);
+    return catalog;
+  },
+);
+
+ipcMain.handle('cs:mcp-remove-server', async (_event, name: string): Promise<McpCatalog> => {
+  const catalog = removeServer(name);
+  sendToRenderer('mcp:changed', catalog);
+  return catalog;
+});
+
+ipcMain.handle(
+  'cs:mcp-set-enabled',
+  async (_event, repoKey: string, name: string, on: boolean): Promise<McpCatalog> => {
+    const catalog = setRepoEnabled(repoKey, name, on);
+    sendToRenderer('mcp:changed', catalog);
+    return catalog;
+  },
+);
 
 ipcMain.handle('cs:detect-shells', async (): Promise<ShellProfile[]> => detectShells());
 
@@ -985,6 +1260,20 @@ app.whenReady().then(() => {
 // tree by PID so the daemon never lingers. Only the primary instance owns the host.
 async function shutdownHost(): Promise<void> {
   if (!isPrimaryInstance) return;
+  // In development (electron-vite) the app is killed and relaunched on every
+  // main-process code change. The session-host is a persistent singleton, so
+  // tearing it down on each reload would needlessly stop + re-revive every agent
+  // session (slow, especially with large/MCP-heavy chats). Leave it running across
+  // dev restarts: finalizeQuit still closes our client sockets, the next launch
+  // re-adopts the same host, and it idle-exits on its own if the dev server is
+  // fully stopped. Production (packaged) quit still stops the host so cs.exe exits
+  // with the app. ELECTRON_RENDERER_URL (set by electron-vite dev) is a reliable
+  // dev signal in case app.isPackaged is unexpectedly true for an unpacked run.
+  const isDev = !app.isPackaged || !!process.env.ELECTRON_RENDERER_URL;
+  if (isDev) {
+    log.info('shutdownHost skipped (dev): leaving session-host running for reload');
+    return;
+  }
   const hostPid = authenticatedHello?.hostPid;
   let stopped = false;
   if (control && !control.isClosed()) {
@@ -1007,6 +1296,10 @@ async function finalizeQuit(): Promise<void> {
     if (control) {
       control.close();
       control = null;
+    }
+    if (readControl) {
+      readControl.close();
+      readControl = null;
     }
   } catch (error) {
     log.error('finalizeQuit error', error);

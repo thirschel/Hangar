@@ -1,5 +1,5 @@
 import type { JSX } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { WorkspaceInfo } from '../../../main/host-client';
 import { TermView } from './TermView';
 import { effectiveColumns } from './grid-columns';
@@ -22,6 +22,10 @@ type GridPaneProps = {
   rowHeights?: number[];
   // Commit new per-row heights after a drag-resize (for persistence).
   onRowHeightsChange?: (heights: number[]) => void;
+  // Renders a tile's live body for a workspace. Defaults to a TermView bound to
+  // the workspace's terminal session; the rich agent view passes a ChatViewHost
+  // so the same grid can tile rich Copilot chats.
+  renderTile?: (w: WorkspaceInfo) => ReactNode;
 };
 
 // GridPane tiles several agents at once. Each tile is a self-contained, live,
@@ -37,6 +41,7 @@ export function GridPane({
   onReorder,
   rowHeights,
   onRowHeightsChange,
+  renderTile,
 }: GridPaneProps): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -47,6 +52,15 @@ export function GridPane({
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   // Live per-row heights during an active resize drag (null = use the prop).
   const [liveHeights, setLiveHeights] = useState<number[] | null>(null);
+  // Cleanup function for an active row-resize drag. Stored so that if GridPane
+  // unmounts mid-drag, the window listeners and userSelect override are torn down
+  // instead of leaking for the lifetime of the page.
+  const rowResizeCleanupRef = useRef<(() => void) | null>(null);
+
+  // On unmount, run any in-flight row-resize cleanup (removes window listeners,
+  // restores userSelect). Without this, an unmount during a drag leaves two
+  // permanent window event listeners AND a stuck `userSelect: none` app-wide.
+  useEffect(() => () => { rowResizeCleanupRef.current?.(); }, []);
 
   // Drop the dragged tile onto targetId. Because tiles are keyed by id (and each
   // TermView by sessionName), reordering only moves the keyed nodes — the live
@@ -74,12 +88,19 @@ export function GridPane({
     const update = (): void => setWidth(el.clientWidth);
     update();
     let observer: ResizeObserver | undefined;
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
     if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(update);
+      // Debounce the ResizeObserver callback (~50ms) so rapid container
+      // resize events (e.g. window drag) don't re-render N tiles per frame.
+      observer = new ResizeObserver(() => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(update, 50);
+      });
       observer.observe(el);
     }
     window.addEventListener('resize', update);
     return () => {
+      clearTimeout(debounceTimer);
       observer?.disconnect();
       window.removeEventListener('resize', update);
     };
@@ -101,17 +122,43 @@ export function GridPane({
 
     const compute = (clientY: number): number[] =>
       withRowHeight(base, rowCount, rowIndex, startHeight + (clientY - startY));
-    const onMove = (ev: MouseEvent): void => setLiveHeights(compute(ev.clientY));
-    const onUp = (ev: MouseEvent): void => {
+
+    // rAF-throttle onMove so rapid mousemove events (one per vsync) don't
+    // setState and re-render N tiles on every pixel of drag.
+    let lastClientY = startY;
+    let rafId: number | null = null;
+    const onMove = (ev: MouseEvent): void => {
+      lastClientY = ev.clientY;
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        setLiveHeights(compute(lastClientY));
+      });
+    };
+
+    // Centralised teardown: remove both listeners, cancel any pending rAF, and
+    // restore the body's userSelect. Stored in rowResizeCleanupRef so that an
+    // unmount mid-drag (which never reaches onUp) can still run it.
+    const cleanup = (): void => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       document.body.style.userSelect = prevUserSelect;
+      rowResizeCleanupRef.current = null;
+    };
+
+    const onUp = (ev: MouseEvent): void => {
+      cleanup();
       const finalHeights = compute(ev.clientY);
       setLiveHeights(null);
       onRowHeightsChange?.(finalHeights);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    rowResizeCleanupRef.current = cleanup;
   };
 
   return (
@@ -226,7 +273,11 @@ export function GridPane({
                 {w.regenerating && <span className="grid-tile__badge">Regenerating…</span>}
               </div>
               <div className="grid-tile__term">
-                <TermView key={w.sessionName} sessionName={w.sessionName} />
+                {renderTile ? (
+                  renderTile(w)
+                ) : (
+                  <TermView key={w.sessionName} sessionName={w.sessionName} />
+                )}
               </div>
               <div
                 className="grid-tile__resize"

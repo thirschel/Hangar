@@ -146,3 +146,63 @@ describe('Sidebar worktree icon', () => {
     expect(screen.getAllByLabelText('Isolated git worktree')).toHaveLength(1);
   });
 });
+
+describe('Sidebar labels', () => {
+  it('uses the standard wording by default', () => {
+    render(<Sidebar {...baseProps()} />);
+
+    expect(screen.getByText('Workspaces')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter workspaces… (/)')).toBeInTheDocument();
+    expect(screen.getByText('No workspaces yet')).toBeInTheDocument();
+  });
+
+  it('reads naturally for chats when title/noun/emptyHint are provided', () => {
+    render(
+      <Sidebar
+        {...baseProps({
+          title: 'Chats',
+          noun: 'chat',
+          emptyHint: <p>Start a Copilot chat.</p>,
+        })}
+      />,
+    );
+
+    expect(screen.getByText('Chats')).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Chats' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Filter chats… (/)')).toBeInTheDocument();
+    expect(screen.getByTitle('New chat (n)')).toBeInTheDocument();
+    expect(screen.getByText('No chats yet')).toBeInTheDocument();
+    expect(screen.getByText('Start a Copilot chat.')).toBeInTheDocument();
+  });
+});
+
+describe('Sidebar deleting status', () => {
+  it('shows a deleting row, hides its actions, and a click shows the hint instead of selecting', () => {
+    const onSelect = vi.fn();
+    const workspaces = [workspace({ id: 'a', title: 'Alpha' })];
+
+    render(
+      <Sidebar {...baseProps({ workspaces, onSelect, deletingIds: new Set(['a']), noun: 'chat' })} />,
+    );
+
+    // The row shows the deleting status and drops its archive/settings actions.
+    expect(screen.getByText('Deleting…')).toBeInTheDocument();
+    expect(screen.queryByTitle('Archive workspace (D)')).toBeNull();
+
+    // Clicking a deleting row surfaces a hint and does NOT select it.
+    fireEvent.click(screen.getByText('Alpha'));
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.getByText('This chat is deleting')).toBeInTheDocument();
+  });
+
+  it('selects normally and shows no hint when the row is not deleting', () => {
+    const onSelect = vi.fn();
+    const workspaces = [workspace({ id: 'a', title: 'Alpha' })];
+
+    render(<Sidebar {...baseProps({ workspaces, onSelect })} />);
+
+    fireEvent.click(screen.getByText('Alpha'));
+    expect(onSelect).toHaveBeenCalledWith('a');
+    expect(screen.queryByText(/is deleting/)).toBeNull();
+  });
+});

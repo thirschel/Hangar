@@ -1,0 +1,1035 @@
+// Package copilotsdk wraps the GitHub Copilot SDK (github.com/github/copilot-sdk/go)
+// as a Hangar agent session. It is the daemon-side backend for the opt-in,
+// Copilot-only "rich agent view": instead of running the copilot CLI in a ConPTY
+// and screen-scraping the terminal, it drives the CLI programmatically over
+// JSON-RPC and exposes a structured event stream.
+//
+// The package is intentionally free of winhost/proto coupling so it can be unit
+// tested in isolation; a thin adapter in session/winhost wraps a *Session to
+// satisfy the host's managedSession interface (the Phase 0.5 "adapter" design).
+package copilotsdk
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"runtime/debug"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	copilot "github.com/github/copilot-sdk/go"
+	csrpc "github.com/github/copilot-sdk/go/rpc"
+)
+
+// Status is the high-level agent state used for sidebar/status reporting. It is
+// derived from the SDK event stream rather than from scraped terminal output.
+type Status int
+
+const (
+	StatusLoading Status = iota // starting up / not yet ready
+	StatusReady                 // idle, awaiting user input
+	StatusRunning               // mid-turn (the agent is producing output)
+	StatusWaiting               // blocked on a permission/user-input decision
+	StatusExited                // the CLI child process exited/crashed (terminal)
+)
+
+func (s Status) String() string {
+	switch s {
+	case StatusReady:
+		return "ready"
+	case StatusRunning:
+		return "running"
+	case StatusWaiting:
+		return "waiting"
+	case StatusExited:
+		return "exited"
+	default:
+		return "loading"
+	}
+}
+
+// PermissionDecider lets the host decide a permission request synchronously and
+// WITHOUT blocking on IPC. Returning (approve=false, pend=true) declines to
+// answer so a (re)attaching client can resolve it later — the AutoYes-OFF /
+// detached model. (approve=false, pend=false) rejects.
+type PermissionDecider func(req copilot.PermissionRequest) (approve, pend bool)
+
+// Prompt is a daemon-synthesized interactive prompt that must be surfaced to a
+// client and correlated back with RespondUserInput.
+type Prompt struct {
+	Kind          string
+	RequestID     string
+	Question      string
+	Choices       []string
+	AllowFreeform bool
+}
+
+// Config configures a Session. Handlers are optional; safe non-blocking defaults
+// are used so the daemon never hangs when no interactive client is attached.
+type Config struct {
+	WorkDir   string   // ClientOptions.WorkingDirectory (the git worktree)
+	BaseDir   string   // ClientOptions.BaseDirectory (COPILOT_HOME); "" = default
+	CLIPath   string   // explicit copilot CLI path; "" = PATH / COPILOT_CLI_PATH
+	Env       []string // process env for the CLI; nil = inherit os.Environ()
+	Model     string   // optional model id
+	SessionID string   // stable id for resume (e.g. the Hangar workspace UUID)
+	AutoYes   bool     // when true, auto-approve permission requests
+
+	// ReasoningEffort/ContextTier (v18) ride along with Model so a (re)created
+	// session restores the user's selection. Both empty = unset (the SDK default),
+	// byte-for-byte the pre-v18 create/resume request. ContextTier is "default" /
+	// "long_context"; an empty/unknown value is left unset by the SDK (omitempty).
+	ReasoningEffort string // reasoning effort for models that support it ("low".."xhigh")
+	ContextTier     string // context window tier ("default"|"long_context")
+
+	// MCPConfigPath is the copilot mcp-config.json to forward; "" = the default
+	// ~/.copilot/mcp-config.json. Set DisableMCP to skip forwarding entirely.
+	MCPConfigPath string
+	DisableMCP    bool
+
+	// ExtraMCPServers are additional MCP servers to forward on top of the copilot
+	// CLI's mcp-config.json — the Hangar-owned catalog (~/.hangar/mcp.json) resolved
+	// per repo by the daemon (session/winhost). They are overlaid in
+	// forwardedMCPServers AFTER the base set, so on a name collision the catalog
+	// server WINS (replaces the CLI one). nil = none. DisableMCP suppresses both
+	// the base set and this overlay.
+	ExtraMCPServers map[string]copilot.MCPServerConfig
+
+	// OnEvent receives every SDK event (after internal status tracking). It is
+	// invoked on the SDK's single, serial event-delivery goroutine — the same
+	// goroutine that also delivers session RPC responses — so the callback MUST
+	// NOT block or call back into a session RPC (e.g. DiscoverSkills, MCPServers).
+	// Doing so stalls all further event delivery and can deadlock once the SDK's
+	// event queue fills during the round-trip; offload any such work to its own
+	// goroutine. A nil sink is tolerated (events are dropped) but yields no UI.
+	OnEvent func(copilot.SessionEvent)
+	// OnPrompt receives SDK handler prompts that are not emitted as SDK events
+	// (ask_user / elicitation). The handler then blocks until RespondUserInput.
+	OnPrompt func(Prompt)
+	// Decide overrides the permission policy. When nil, AutoYes governs: approve
+	// when AutoYes is set, otherwise leave the request pending.
+	Decide PermissionDecider
+
+	Logger *log.Logger
+}
+
+// Session is a Hangar agent session backed by the Copilot SDK.
+type Session struct {
+	cfg    Config
+	client *copilot.Client
+	sess   *copilot.Session
+	unsub  func()
+
+	mu         sync.RWMutex
+	status     Status
+	started    bool
+	liveCancel context.CancelFunc
+	mcpServers []string
+	mcpTools   map[string][]string // configured tool allowlist per server (best-effort, v13)
+	mcpDetail  []MCPServerDetail   // full per-server MCP detail for the rich MCP page (v13)
+	skills     []SkillDetail       // resolved skills for the rich Skills page (v13)
+	// Context-usage header + model selector (v14). currentModel is seeded from
+	// cfg.Model and updated on SessionModelChangeData (best-effort; "" when unknown).
+	// usage* hold the most recent context-window usage reported by the SDK.
+	currentModel string
+	usageCurrent int64
+	usageLimit   int64
+	usageAicNano float64
+	usageKnown   bool
+	autoYes      atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
+	lastOutput   atomic.Int64 // unix-ms of the last output-changing event
+
+	promptMu sync.Mutex
+	prompts  map[string]chan userInputReply
+	closing  bool
+}
+
+type userInputReply struct {
+	answer   string
+	freeform bool
+	ok       bool
+}
+
+// New builds a Session from cfg. Call Start (fresh) or Resume (existing id).
+func New(cfg Config) *Session {
+	if cfg.Logger == nil {
+		cfg.Logger = log.New(os.Stderr, "[copilotsdk] ", log.LstdFlags)
+	}
+	s := &Session{cfg: cfg, status: StatusLoading, currentModel: cfg.Model, prompts: make(map[string]chan userInputReply)}
+	s.autoYes.Store(cfg.AutoYes)
+	return s
+}
+
+// SetAutoYes toggles auto-approval at runtime (e.g. from the host's SetAutoYes RPC).
+func (s *Session) SetAutoYes(v bool) { s.autoYes.Store(v) }
+
+func (s *Session) clientOptions() *copilot.ClientOptions {
+	opts := &copilot.ClientOptions{
+		WorkingDirectory: s.cfg.WorkDir,
+		BaseDirectory:    s.cfg.BaseDir,
+	}
+	if len(s.cfg.Env) > 0 {
+		opts.Env = s.cfg.Env
+	}
+	if s.cfg.CLIPath != "" {
+		opts.Connection = copilot.StdioConnection{Path: s.cfg.CLIPath}
+	}
+	return opts
+}
+
+func (s *Session) sessionConfig() *copilot.SessionConfig {
+	sc := &copilot.SessionConfig{
+		Streaming:            copilot.Bool(true),
+		OnEvent:              s.handleEvent,
+		OnPermissionRequest:  s.onPermission,
+		OnUserInputRequest:   s.onUserInput,   // always register, else ask_user blocks
+		OnElicitationRequest: s.onElicitation, // always register, else elicitation blocks
+	}
+	if s.cfg.Model != "" {
+		sc.Model = s.cfg.Model
+	}
+	// ReasoningEffort/ContextTier (v18): empty = unset (the SDK omits empty values),
+	// so a session created without a selection is byte-for-byte the pre-v18 request.
+	sc.ReasoningEffort = s.cfg.ReasoningEffort
+	sc.ContextTier = copilot.ContextTier(s.cfg.ContextTier)
+	if s.cfg.SessionID != "" {
+		sc.SessionID = s.cfg.SessionID
+	}
+	if !s.cfg.DisableMCP {
+		if servers := s.forwardedMCPServers(); len(servers) > 0 {
+			sc.MCPServers = servers
+		}
+	} else {
+		s.setMCPServerNames(nil)
+	}
+	return sc
+}
+
+// resumeConfig builds the ResumeSessionConfig for a resume. The SDK "can change the
+// model when resuming", so it carries Model/ReasoningEffort/ContextTier (v18) — the
+// persisted selection a fresh daemon would otherwise drop, leaving the model blank.
+// Empty values are unset (omitempty), so a resume without a stored selection is
+// byte-for-byte the pre-v18 request. MCP forwarding mirrors sessionConfig.
+func (s *Session) resumeConfig() *copilot.ResumeSessionConfig {
+	rc := &copilot.ResumeSessionConfig{
+		Streaming:            copilot.Bool(true),
+		OnEvent:              s.handleEvent,
+		OnPermissionRequest:  s.onPermission,
+		OnUserInputRequest:   s.onUserInput,
+		OnElicitationRequest: s.onElicitation,
+	}
+	if s.cfg.Model != "" {
+		rc.Model = s.cfg.Model
+	}
+	rc.ReasoningEffort = s.cfg.ReasoningEffort
+	rc.ContextTier = copilot.ContextTier(s.cfg.ContextTier)
+	if !s.cfg.DisableMCP {
+		if servers := s.forwardedMCPServers(); len(servers) > 0 {
+			rc.MCPServers = servers
+		}
+	} else {
+		s.setMCPServerNames(nil)
+	}
+	return rc
+}
+
+// Start launches the CLI runtime and creates a fresh session.
+func (s *Session) Start(ctx context.Context) error { return s.start(ctx, false) }
+
+// Resume launches the runtime and resumes Config.SessionID, replaying its
+// transcript without re-running the model.
+func (s *Session) Resume(ctx context.Context) error {
+	if s.cfg.SessionID == "" {
+		return fmt.Errorf("resume requires Config.SessionID")
+	}
+	return s.start(ctx, true)
+}
+
+func (s *Session) start(ctx context.Context, resume bool) error {
+	s.mu.RLock()
+	already := s.started
+	s.mu.RUnlock()
+	if already {
+		return fmt.Errorf("session already started")
+	}
+
+	client := copilot.NewClient(s.clientOptions())
+	if err := client.Start(ctx); err != nil {
+		return fmt.Errorf("start copilot runtime: %w", err)
+	}
+
+	var (
+		sess *copilot.Session
+		err  error
+	)
+	if resume {
+		sess, err = client.ResumeSession(ctx, s.cfg.SessionID, s.resumeConfig())
+	} else {
+		sess, err = client.CreateSession(ctx, s.sessionConfig())
+	}
+	if err != nil {
+		_ = client.Stop()
+		return fmt.Errorf("create/resume session: %w", err)
+	}
+	_, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.client, s.sess, s.unsub, s.started, s.liveCancel, s.status = client, sess, nil, true, cancel, StatusReady
+	s.mu.Unlock()
+	s.promptMu.Lock()
+	s.closing = false
+	s.promptMu.Unlock()
+	s.touch()
+	return nil
+}
+
+// Send delivers a user message with optional file attachments. It returns once
+// the turn completes (the SDK resolves Send on idle); callers that want
+// fire-and-forget should run it in a goroutine and observe the event stream.
+// attachments are absolute file paths; an empty/nil slice sends a plain message
+// exactly as before.
+func (s *Session) Send(ctx context.Context, prompt string, attachments []string) error {
+	sess := s.session()
+	if sess == nil {
+		return fmt.Errorf("session not started")
+	}
+	s.setStatus(StatusRunning)
+	opts := copilot.MessageOptions{Prompt: prompt}
+	opts.Attachments = attachmentsFromPaths(attachments)
+	_, err := sess.Send(ctx, opts)
+	return s.noteErr(err)
+}
+
+// attachmentsFromPaths maps absolute file paths to Copilot SDK file attachments,
+// skipping empty entries. The display name is the path's base name and the
+// absolute path is forwarded as-is; file CONTENTS are never read or logged here.
+// Returns nil when no usable paths remain, so MessageOptions.Attachments stays
+// unset and the send behaves exactly like a plain message.
+func attachmentsFromPaths(paths []string) []copilot.Attachment {
+	var out []copilot.Attachment
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		out = append(out, &copilot.AttachmentFile{DisplayName: filepath.Base(p), Path: p})
+	}
+	return out
+}
+
+// Abort interrupts the current turn. Callers must let the session settle back to
+// idle (StatusReady) before the next Send (mid-turn abort does not auto-idle).
+func (s *Session) Abort(ctx context.Context) error {
+	sess := s.session()
+	if sess == nil {
+		return fmt.Errorf("session not started")
+	}
+	err := sess.Abort(ctx)
+	// Unblock any ask_user/elicitation handler parked on the aborted turn so the
+	// SDK handler goroutine returns promptly (declined) instead of waiting for an
+	// answer or session close — the turn it belonged to is gone.
+	s.abortPrompts()
+	return s.noteErr(err)
+}
+
+// RespondPermission resolves a pending permission request out-of-band by the
+// SDK requestID emitted on permission.requested events.
+func (s *Session) RespondPermission(ctx context.Context, requestID string, approve bool) error {
+	sess := s.session()
+	if sess == nil {
+		return fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Permissions == nil {
+		return fmt.Errorf("session permissions RPC is unavailable")
+	}
+	var decision csrpc.PermissionDecision
+	if approve {
+		decision = &csrpc.PermissionDecisionApproveOnce{}
+	} else {
+		decision = &csrpc.PermissionDecisionReject{}
+	}
+	_, err := sess.RPC.Permissions.HandlePendingPermissionRequest(ctx, &csrpc.PermissionDecisionRequest{
+		RequestID: requestID,
+		Result:    decision,
+	})
+	return s.noteErr(err)
+}
+
+// Transcript returns the persisted event history, used to repaint a (re)attaching
+// client without re-running the model. Survives compaction and daemon restarts.
+func (s *Session) Transcript(ctx context.Context) ([]copilot.SessionEvent, error) {
+	sess := s.session()
+	if sess == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	evs, err := sess.GetEvents(ctx)
+	return evs, s.noteErr(err)
+}
+
+// ListModels returns the models advertised by the underlying Copilot runtime
+// (Client.ListModels), reduced to the display-safe ModelDetail (id, name, and the
+// reasoning-effort options) used by the rich model selector (v14/v16). The SDK
+// caches the list after the first successful call.
+func (s *Session) ListModels(ctx context.Context) ([]ModelDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	out := make([]ModelDetail, 0, len(models))
+	for _, m := range models {
+		out = append(out, modelDetail(m))
+	}
+	return out, nil
+}
+
+// Instructions enumerates the custom-instruction sources for the rich Instructions
+// page (v23). It uses the server-level RPC.Instructions.Discover rather than the
+// session-scoped GetSources because Discover surfaces the host/user-level files
+// (~/.copilot/copilot-instructions.md) and plugin sources, plus repository and
+// working-directory sources for the session's WorkDir; GetSources did not return
+// the user-level files. The SDK marks this API experimental, so failures are
+// returned (winhost logs and skips) and a nil RPC surface yields no instructions.
+func (s *Session) Instructions(ctx context.Context) ([]InstructionDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if client.RPC == nil || client.RPC.Instructions == nil {
+		return nil, nil
+	}
+	req := &csrpc.InstructionsDiscoverRequest{}
+	if s.cfg.WorkDir != "" {
+		req.ProjectPaths = []string{s.cfg.WorkDir}
+	}
+	res, err := client.RPC.Instructions.Discover(ctx, req)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	out := make([]InstructionDetail, 0, len(res.Sources))
+	for _, src := range res.Sources {
+		out = append(out, instructionDetail(src))
+	}
+	return out, nil
+}
+
+// Agents enumerates the custom agents discovered for the session via the
+// server-level RPC.Agents.Discover for the rich Agents page (v24): user-level and
+// plugin agents always, plus project agents under the session's WorkDir. The SDK
+// marks this API experimental, so failures are returned (winhost logs and skips)
+// and a nil RPC surface yields no agents.
+func (s *Session) Agents(ctx context.Context) ([]AgentDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if client.RPC == nil || client.RPC.Agents == nil {
+		return nil, nil
+	}
+	req := &csrpc.AgentsDiscoverRequest{}
+	if s.cfg.WorkDir != "" {
+		req.ProjectPaths = []string{s.cfg.WorkDir}
+	}
+	res, err := client.RPC.Agents.Discover(ctx, req)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	out := make([]AgentDetail, 0, len(res.Agents))
+	for _, a := range res.Agents {
+		out = append(out, agentDetail(a))
+	}
+	return out, nil
+}
+
+// DiscoverSkills enumerates the skills available to the session via the
+// server-level RPC.Skills.Discover for the rich Skills page. Like instructions
+// and agents, it uses Discover rather than the session-scoped skills-loaded event
+// because Discover surfaces the host/user-level skills (~/.copilot/skills) plus
+// plugin/built-in skills, and adds project skills under the session's WorkDir; the
+// event stream did not report the full set. ExcludeHostSkills defaults to false so
+// personal/custom/plugin/built-in skills are included. The SDK marks this API
+// experimental, so failures are returned (winhost logs and skips) and a nil RPC
+// surface yields no skills.
+func (s *Session) DiscoverSkills(ctx context.Context) ([]SkillDetail, error) {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if client.RPC == nil || client.RPC.Skills == nil {
+		return nil, nil
+	}
+	req := &csrpc.SkillsDiscoverRequest{}
+	if s.cfg.WorkDir != "" {
+		req.ProjectPaths = []string{s.cfg.WorkDir}
+	}
+	res, err := client.RPC.Skills.Discover(ctx, req)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	out := make([]SkillDetail, 0, len(res.Skills))
+	for _, sk := range res.Skills {
+		out = append(out, SkillDetail{
+			Name:        sk.Name,
+			Description: sk.Description,
+			Enabled:     sk.Enabled,
+			Source:      string(sk.Source),
+			Path:        strDeref(sk.Path),
+		})
+	}
+	return out, nil
+}
+
+// MCPStatus returns the live MCP server status via the session-scoped RPC.MCP.List.
+// Unlike the servers-loaded event stream (which is not replayed on resume), List
+// reports the current connection status on demand, so the host can refresh the MCP
+// page after a resume — and poll it as servers connect asynchronously — without
+// waiting for the first turn. Each server is mapped to a display-safe detail with the
+// configured tool allowlist merged in. A nil RPC surface or not-started session yields
+// no servers.
+func (s *Session) MCPStatus(ctx context.Context) ([]MCPServerDetail, error) {
+	sess := s.session()
+	if sess == nil {
+		return nil, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.MCP == nil {
+		return nil, nil
+	}
+	res, err := sess.RPC.MCP.List(ctx)
+	if err != nil {
+		return nil, s.noteErr(err)
+	}
+	if res == nil {
+		return nil, nil
+	}
+	s.mu.RLock()
+	tools := s.mcpTools
+	s.mu.RUnlock()
+	out := make([]MCPServerDetail, 0, len(res.Servers))
+	for _, sv := range res.Servers {
+		d := MCPServerDetail{
+			Name:   sv.Name,
+			Status: string(sv.Status),
+			Error:  strDeref(sv.Error),
+			Tools:  append([]string(nil), tools[sv.Name]...),
+		}
+		if sv.Source != nil {
+			d.Source = string(*sv.Source)
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+// UsageMetrics returns the session-wide accumulated Copilot AI-unit cost via the
+// session-scoped RPC.Usage.GetMetrics, used to seed the usage display on resume (the
+// AssistantUsageData deltas that normally accumulate it are not replayed). It also
+// seeds the internal AIC accumulator to the reported total so later live deltas add on
+// top instead of starting from zero. known is false when the RPC surface is
+// unavailable.
+func (s *Session) UsageMetrics(ctx context.Context) (aic float64, known bool, err error) {
+	sess := s.session()
+	if sess == nil {
+		return 0, false, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Usage == nil {
+		return 0, false, nil
+	}
+	res, err := sess.RPC.Usage.GetMetrics(ctx)
+	if err != nil {
+		return 0, false, s.noteErr(err)
+	}
+	if res == nil {
+		return 0, false, nil
+	}
+	nano := 0.0
+	if res.TotalNanoAiu != nil {
+		nano = *res.TotalNanoAiu
+	}
+	s.mu.Lock()
+	s.usageAicNano = nano
+	s.mu.Unlock()
+	return nano / 1e9, true, nil
+}
+
+// ContextWindow returns the current context-window token usage via the session-scoped
+// RPC.Metadata.ContextInfo, used to seed the usage display on resume. The SDK returns
+// a null context info until the session runtime is initialized (i.e. before the first
+// turn), in which case known is false. cur is the tokens currently in the window,
+// limit the model's prompt-token limit. On success it also seeds the internal usage
+// snapshot so Session.Usage() is consistent before the first usage_info event.
+func (s *Session) ContextWindow(ctx context.Context) (cur, limit int64, known bool, err error) {
+	sess := s.session()
+	if sess == nil {
+		return 0, 0, false, fmt.Errorf("session not started")
+	}
+	if sess.RPC == nil || sess.RPC.Metadata == nil {
+		return 0, 0, false, nil
+	}
+	res, err := sess.RPC.Metadata.ContextInfo(ctx, &csrpc.MetadataContextInfoRequest{})
+	if err != nil {
+		return 0, 0, false, s.noteErr(err)
+	}
+	if res == nil || res.ContextInfo == nil {
+		return 0, 0, false, nil
+	}
+	ci := res.ContextInfo
+	limit = ci.PromptTokenLimit
+	if limit == 0 {
+		limit = ci.Limit
+	}
+	s.mu.Lock()
+	s.usageCurrent = ci.TotalTokens
+	s.usageLimit = limit
+	s.usageKnown = true
+	s.mu.Unlock()
+	return ci.TotalTokens, limit, true, nil
+}
+
+// modelDetail maps an SDK ModelInfo to the display-safe ModelDetail, carrying the
+// id, name, and the model's reasoning-effort options (v16). SupportedEfforts is a
+// defensive copy so callers never alias the SDK's slice.
+func modelDetail(m copilot.ModelInfo) ModelDetail {
+	return ModelDetail{
+		ID:               m.ID,
+		Name:             m.Name,
+		SupportedEfforts: append([]string(nil), m.SupportedReasoningEfforts...),
+		DefaultEffort:    m.DefaultReasoningEffort,
+	}
+}
+
+// SetModel switches the live session to modelID (v14). The optional per-model
+// reasoning effort and context tier (v16) are applied through SetModelOptions:
+// an empty effort/tier leaves that option unset, and when both are empty the
+// switch passes nil options — byte-for-byte the original v14 behavior. The
+// tracked current model is updated optimistically so the next usage frame reflects
+// the switch even if the SDK does not emit a SessionModelChangeData event; an
+// authoritative update still arrives through handleEvent when it does.
+func (s *Session) SetModel(ctx context.Context, modelID, effort, contextTier string) error {
+	sess := s.session()
+	if sess == nil {
+		return fmt.Errorf("session not started")
+	}
+	if err := sess.SetModel(ctx, modelID, setModelOptions(effort, contextTier)); err != nil {
+		return s.noteErr(err)
+	}
+	s.setCurrentModel(modelID)
+	return nil
+}
+
+// setModelOptions builds the SDK SetModelOptions for a model switch from the
+// optional per-model reasoning effort and context tier (v16). An empty effort
+// leaves ReasoningEffort unset; the context tier maps "default" -> ContextTierDefault
+// and "long_context" -> ContextTierLongContext, and an empty or unrecognized value
+// leaves ContextTier unset (defensive: an unknown tier never overrides normal model
+// behavior). When neither field selects anything it returns nil so SetModel is
+// byte-for-byte the original v14 call (nil options).
+func setModelOptions(effort, contextTier string) *copilot.SetModelOptions {
+	var opts copilot.SetModelOptions
+	set := false
+	if effort != "" {
+		eff := effort
+		opts.ReasoningEffort = &eff
+		set = true
+	}
+	switch contextTier {
+	case string(copilot.ContextTierDefault):
+		tier := copilot.ContextTierDefault
+		opts.ContextTier = &tier
+		set = true
+	case string(copilot.ContextTierLongContext):
+		tier := copilot.ContextTierLongContext
+		opts.ContextTier = &tier
+		set = true
+	default:
+		// Empty or unknown context tier: leave ContextTier unset (defensive).
+	}
+	if !set {
+		return nil
+	}
+	return &opts
+}
+
+// Close disconnects the session and stops the runtime.
+func (s *Session) Close() error {
+	s.mu.Lock()
+	unsub, sess, client, cancel := s.unsub, s.sess, s.client, s.liveCancel
+	s.sess, s.client, s.unsub, s.liveCancel, s.started = nil, nil, nil, nil, false
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	s.closePrompts()
+	if unsub != nil {
+		unsub()
+	}
+	if sess != nil {
+		_ = sess.Disconnect()
+	}
+	if client != nil {
+		return client.Stop()
+	}
+	return nil
+}
+
+// Status returns the current high-level state.
+func (s *Session) Status() Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.status
+}
+
+// LastOutputUnixMs is the unix-ms time of the last output-changing event (0 if none).
+func (s *Session) LastOutputUnixMs() int64 { return s.lastOutput.Load() }
+
+// MCPServerNames returns the names of MCP servers forwarded into the SDK session.
+// It intentionally exposes names only, never URLs, headers, tokens, or commands.
+func (s *Session) MCPServerNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.mcpServers) == 0 {
+		return nil
+	}
+	out := make([]string, len(s.mcpServers))
+	copy(out, s.mcpServers)
+	return out
+}
+
+func (s *Session) session() *copilot.Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sess
+}
+
+func (s *Session) forwardedMCPServers() map[string]copilot.MCPServerConfig {
+	servers, err := loadMCPServers(s.mcpConfigPath())
+	if err != nil {
+		s.cfg.Logger.Printf("mcp forward: %v (continuing without forwarded servers)", err)
+		s.setMCPServerNames(nil)
+		s.setMCPTools(nil)
+		return nil
+	}
+	// Overlay the Hangar MCP catalog (~/.hangar/mcp.json, resolved per repo by the
+	// daemon and threaded in as Config.ExtraMCPServers) on top of the copilot CLI's
+	// mcp-config.json base set. The overlay is applied AFTER the base set, so on a
+	// name collision the catalog server WINS (it replaces the CLI-configured one).
+	// This also lets the catalog forward servers when there is no CLI config at all
+	// (servers is nil from loadMCPServers).
+	if len(s.cfg.ExtraMCPServers) > 0 {
+		if servers == nil {
+			servers = make(map[string]copilot.MCPServerConfig, len(s.cfg.ExtraMCPServers))
+		}
+		for name, cfg := range s.cfg.ExtraMCPServers {
+			servers[name] = cfg
+		}
+	}
+	s.setMCPServerNames(sortedMCPServerNames(servers))
+	s.setMCPTools(mcpConfiguredTools(s.mcpConfigPath()))
+	return servers
+}
+
+func (s *Session) setMCPServerNames(names []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(names) == 0 {
+		s.mcpServers = nil
+		return
+	}
+	s.mcpServers = append([]string(nil), names...)
+}
+
+func (s *Session) setStatus(st Status) {
+	s.mu.Lock()
+	if s.status != StatusExited { // StatusExited is terminal/sticky
+		s.status = st
+	}
+	s.mu.Unlock()
+}
+
+// Exited reports whether the CLI child process has exited/crashed. SDK sessions
+// do not emit a semantic event for a dead child, so start() watches the SDK
+// process-done signal and noteErr keeps the older RPC-error fallback.
+func (s *Session) Exited() bool { return s.Status() == StatusExited }
+
+// watchClientProcessExit/clientProcessDoneValue were removed: they read the SDK
+// client's UNEXPORTED processDone channel via reflection and ran reflect.Select on
+// it, which panics ("value obtained using unexported field") and — in an
+// unrecovered goroutine — crashed the daemon on every session start. Liveness is
+// detected reactively via noteErr (the pre-existing behavior). watchProcessDone
+// below is the safe, channel-based helper kept for a future proactive wiring if
+// the SDK ever exposes a PUBLIC process-done signal.
+
+func (s *Session) watchProcessDone(ctx context.Context, client *copilot.Client, done <-chan struct{}) <-chan struct{} {
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		defer s.recoverPanic("watchProcessDone")
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			s.markExitedForClient(client)
+		}
+	}()
+	return finished
+}
+
+func (s *Session) markExitedForClient(client *copilot.Client) {
+	s.mu.Lock()
+	if s.client == client && s.started && s.status != StatusExited {
+		s.status = StatusExited
+	}
+	s.mu.Unlock()
+}
+
+// noteErr flags the session as exited when err indicates the CLI child process
+// died, so Exited()/alive() reflect the crash. Returns err unchanged.
+func (s *Session) noteErr(err error) error {
+	if isProcessExited(err) {
+		s.setStatus(StatusExited)
+	}
+	return err
+}
+
+// isProcessExited matches the SDK's child-process-death errors ("CLI process
+// exited", "CLI process exited unexpectedly", "process exited unexpectedly").
+// "client stopped" (our own Close) is deliberately excluded.
+func isProcessExited(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "process exited")
+}
+
+func (s *Session) touch() { s.lastOutput.Store(time.Now().UnixMilli()) }
+
+// handleEvent maps the SDK event stream onto Status, then forwards to the consumer.
+// recoverPanic logs a recovered panic from an SDK callback or goroutine so one
+// bad event/handler can't crash the whole daemon. The daemon's stderr is
+// discarded, so an unrecovered goroutine panic would otherwise vanish without a
+// trace (exactly how the old reflection-based liveness silently crashed it).
+func (s *Session) recoverPanic(where string) {
+	if r := recover(); r != nil {
+		s.cfg.Logger.Printf("recovered panic in %s: %v\n%s", where, r, debug.Stack())
+	}
+}
+
+func (s *Session) handleEvent(ev copilot.SessionEvent) {
+	defer s.recoverPanic("handleEvent")
+	if ev.Data != nil {
+		switch data := ev.Data.(type) {
+		case *copilot.AssistantTurnStartData:
+			s.setStatus(StatusRunning)
+		case *copilot.PermissionRequestedData:
+			s.setStatus(StatusWaiting)
+		case *copilot.PermissionCompletedData,
+			*copilot.UserInputCompletedData,
+			*copilot.ElicitationCompletedData,
+			*copilot.ToolExecutionStartData,
+			*copilot.AssistantMessageDeltaData,
+			*copilot.AssistantReasoningDeltaData,
+			*copilot.AssistantStreamingDeltaData:
+			s.setStatus(StatusRunning)
+		case *copilot.SessionIdleData:
+			s.setStatus(StatusReady)
+		case *copilot.SessionMCPServersLoadedData:
+			s.captureMCPServersLoaded(data)
+		case *copilot.SessionMCPServerStatusChangedData:
+			s.captureMCPServerStatusChanged(data)
+		case *copilot.SessionSkillsLoadedData:
+			s.captureSkillsLoaded(data)
+		case *copilot.SessionUsageInfoData:
+			s.captureUsage(data)
+		case *copilot.AssistantUsageData:
+			s.captureAssistantUsage(data)
+		case *copilot.SessionModelChangeData:
+			s.captureModelChange(data)
+		}
+		s.touch()
+	}
+	// The MCP-detail/skills snapshots are captured (above) BEFORE forwarding so the
+	// OnEvent consumer can read the fresh state through MCPServers()/Skills().
+	if s.cfg.OnEvent != nil {
+		s.cfg.OnEvent(ev)
+	}
+}
+
+// onPermission is the deadlock-free permission policy: it returns immediately,
+// either auto-approving or declining-to-pending (NoResult) so a (re)attaching
+// client can answer. It NEVER blocks on an IPC round-trip.
+func (s *Session) onPermission(req copilot.PermissionRequest, _ copilot.PermissionInvocation) (decision csrpc.PermissionDecision, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onPermission: %v\n%s", r, debug.Stack())
+			decision, err = &csrpc.PermissionDecisionReject{}, fmt.Errorf("internal error handling permission request")
+		}
+	}()
+	approve, pend := s.decide(req)
+	switch {
+	case approve:
+		return &csrpc.PermissionDecisionApproveOnce{}, nil
+	case pend:
+		return &csrpc.PermissionDecisionNoResult{}, nil // leave pending for another client
+	default:
+		return &csrpc.PermissionDecisionReject{}, nil
+	}
+}
+
+func (s *Session) decide(req copilot.PermissionRequest) (approve, pend bool) {
+	if s.cfg.Decide != nil {
+		return s.cfg.Decide(req)
+	}
+	if s.autoYes.Load() {
+		return true, false
+	}
+	return false, true // default: leave pending for an interactive client
+}
+
+// onUserInput must answer synchronously (ask_user has no requestID-keyed
+// out-of-band resolve). The SDK invokes it on its own goroutine, so it is safe to
+// block until the host answers through RespondUserInput.
+func (s *Session) onUserInput(req copilot.UserInputRequest, _ copilot.UserInputInvocation) (resp copilot.UserInputResponse, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onUserInput: %v\n%s", r, debug.Stack())
+			resp, err = copilot.UserInputResponse{}, fmt.Errorf("internal error handling user-input request")
+		}
+	}()
+	allowFreeform := false
+	if req.AllowFreeform != nil {
+		allowFreeform = *req.AllowFreeform
+	}
+	reply, err := s.promptAndWait(Prompt{
+		Kind:          "user_input",
+		Question:      req.Question,
+		Choices:       append([]string(nil), req.Choices...),
+		AllowFreeform: allowFreeform,
+	})
+	if err != nil {
+		return copilot.UserInputResponse{}, err
+	}
+	return copilot.UserInputResponse{Answer: reply.answer, WasFreeform: reply.freeform}, nil
+}
+
+func (s *Session) onElicitation(req copilot.ElicitationContext) (result copilot.ElicitationResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.cfg.Logger.Printf("recovered panic in onElicitation: %v\n%s", r, debug.Stack())
+			result, err = copilot.ElicitationResult{Action: copilot.ElicitationActionDecline}, fmt.Errorf("internal error handling elicitation request")
+		}
+	}()
+	reply, err := s.promptAndWait(Prompt{
+		Kind:          "elicitation",
+		Question:      req.Message,
+		AllowFreeform: true,
+	})
+	if err != nil {
+		return copilot.ElicitationResult{Action: copilot.ElicitationActionDecline}, err
+	}
+	field := "answer"
+	if req.RequestedSchema != nil {
+		for name := range req.RequestedSchema.Properties {
+			field = name
+			break
+		}
+	}
+	return copilot.ElicitationResult{
+		Action:  copilot.ElicitationActionAccept,
+		Content: map[string]copilot.ElicitationFieldValue{field: reply.answer},
+	}, nil
+}
+
+func (s *Session) promptAndWait(prompt Prompt) (userInputReply, error) {
+	if s.cfg.OnPrompt == nil {
+		return userInputReply{}, fmt.Errorf("no interactive client available to answer %s", prompt.Kind)
+	}
+	id, err := newPromptRequestID()
+	if err != nil {
+		return userInputReply{}, err
+	}
+	prompt.RequestID = id
+	ch := make(chan userInputReply, 1)
+
+	s.promptMu.Lock()
+	if s.closing {
+		s.promptMu.Unlock()
+		return userInputReply{}, fmt.Errorf("session is closing")
+	}
+	s.prompts[id] = ch
+	s.promptMu.Unlock()
+
+	s.setStatus(StatusWaiting)
+	s.touch()
+	s.cfg.OnPrompt(prompt)
+	reply := <-ch
+	if !reply.ok {
+		return userInputReply{}, fmt.Errorf("session closed before %s was answered", prompt.Kind)
+	}
+	return reply, nil
+}
+
+// RespondUserInput answers a pending ask_user or elicitation prompt generated by
+// this Session.
+func (s *Session) RespondUserInput(requestID, answer string, freeform bool) error {
+	s.promptMu.Lock()
+	ch, ok := s.prompts[requestID]
+	if ok {
+		delete(s.prompts, requestID)
+		ch <- userInputReply{answer: answer, freeform: freeform, ok: true}
+	}
+	s.promptMu.Unlock()
+	if !ok {
+		return fmt.Errorf("no pending user input request: %s", requestID)
+	}
+	return nil
+}
+
+func (s *Session) closePrompts() {
+	s.promptMu.Lock()
+	s.closing = true
+	for id, ch := range s.prompts {
+		delete(s.prompts, id)
+		ch <- userInputReply{ok: false}
+	}
+	s.promptMu.Unlock()
+}
+
+// abortPrompts unblocks pending user-input/elicitation prompts (declining them)
+// WITHOUT closing the session, so a mid-turn Abort does not leave handler
+// goroutines parked until the session ends. The session stays reusable.
+func (s *Session) abortPrompts() {
+	s.promptMu.Lock()
+	for id, ch := range s.prompts {
+		delete(s.prompts, id)
+		ch <- userInputReply{ok: false}
+	}
+	s.promptMu.Unlock()
+}
+
+func newPromptRequestID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generate prompt request id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
+}

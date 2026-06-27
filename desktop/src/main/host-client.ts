@@ -19,9 +19,11 @@ export interface SessionInfo {
 
 export interface WorkspaceInfo {
   id: string;
+  kind?: string;
   title: string;
   program: string;
   repoPath: string;
+  repoKey?: string;
   worktreePath: string;
   branch: string;
   sessionName: string;
@@ -62,6 +64,113 @@ export interface FileDiffInfo {
   path: string;
   added: number;
   removed: number;
+}
+
+// Structured MCP server snapshot carried on a frame with kind 'mcp.detail'
+// (proto v13). The daemon re-sends the FULL server list each time, so the
+// renderer replaces its MCP state wholesale (last-write-wins).
+export interface McpServerInfo {
+  name: string;
+  status?: string; // connected|failed|needs-auth|pending|disabled|not_configured
+  transport?: string; // stdio|http|sse|memory
+  source?: string; // user|workspace|plugin|builtin
+  error?: string;
+  tools?: string[]; // best-effort; may be absent
+}
+
+// Structured skill snapshot carried on a frame with kind 'skills' (proto v13).
+// The daemon re-sends the FULL skills list each time, so the renderer replaces
+// its skills state wholesale (last-write-wins).
+export interface SkillInfo {
+  name: string;
+  description?: string;
+  enabled: boolean;
+  source?: string; // project|personal-copilot|plugin|builtin
+  path?: string;
+}
+
+// One loaded custom-instruction source carried on a frame with kind 'instructions'
+// (proto v23). The daemon pulls the full list from the SDK and re-sends it, so the
+// renderer replaces its Instructions page wholesale (last-write-wins).
+export interface InstructionInfo {
+  label: string;
+  sourcePath?: string;
+  type?: string; // category used for merge logic
+  location?: string; // where the source lives (UI grouping)
+  description?: string;
+  applyTo?: string[]; // frontmatter globs; applies only to matching files
+  content?: string; // raw instruction file content
+}
+
+// One custom agent carried on a frame with kind 'agents' (proto v24). The daemon
+// discovers them from the SDK and re-sends the full list, so the renderer replaces
+// its Agents page wholesale (last-write-wins). MCP server names only — never configs.
+export interface AgentInfo {
+  name: string;
+  displayName?: string;
+  description?: string;
+  model?: string;
+  path?: string; // absolute file path (file-based agents only)
+  source?: string; // user|project|plugin|builtin|remote|inherited
+  skills?: string[];
+  tools?: string[];
+  mcpServerNames?: string[];
+  userInvocable: boolean; // false = subagent-only
+}
+
+export interface EventFrame {
+  seq: number;
+  kind: string;
+  text?: string;
+  toolName?: string;
+  mcpServer?: string;
+  toolCallId?: string;
+  requestId?: string;
+  question?: string;
+  choices?: string[];
+  title?: string;
+  status?: string;
+  aborted?: boolean;
+  ts?: number;
+  error?: string;
+  mcpServers?: McpServerInfo[]; // present on a frame with kind 'mcp.detail'
+  skills?: SkillInfo[]; // present on a frame with kind 'skills'
+  instructions?: InstructionInfo[]; // present on a frame with kind 'instructions'
+  agents?: AgentInfo[]; // present on a frame with kind 'agents'
+  // Context-usage snapshot carried on a frame with kind 'usage'. Context % is
+  // currentTokens / tokenLimit (guard divide-by-zero / missing). `model` is the
+  // active model id/name for the live model selector header.
+  model?: string;
+  currentTokens?: number;
+  tokenLimit?: number;
+  aic?: number;
+  // Resume-persistence frames for the rich Agent view. `decision` rides a
+  // 'permission.resolved' frame ('approve' | 'reject') so an answered permission
+  // replays as answered after a remount; 'input.resolved' carries only requestId.
+  // `effort` and `contextTier` ride a 'model' frame (alongside the shared `model`
+  // above) to restore the session's model selection on start/resume + live switch
+  // (`contextTier` is 'default' | 'long_context').
+  decision?: string;
+  effort?: string;
+  contextTier?: string;
+  // Concise tool detail for the Agent transcript's CLI-style tool line. toolArgs
+  // rides a 'tool.start' frame (e.g. a path/query); toolResult rides a
+  // 'tool.complete' frame (e.g. "150 lines read") and carries the error message
+  // when the tool failed. Both optional -- absent on non-tool frames.
+  toolArgs?: string;
+  toolResult?: string;
+}
+
+// A selectable agent model, returned by the ListModels RPC and switched live via
+// SetModel. `name` is an optional human-friendly label; fall back to `id`.
+// `supportedEfforts` lists the reasoning-effort tiers the model accepts (raw SDK
+// values, e.g. ["low","medium","high","xhigh"]); empty/absent means the model
+// does not support a reasoning effort. `defaultEffort` is the model's default.
+export interface ModelInfo {
+  id: string;
+  name?: string;
+  supportedEfforts?: string[];
+  defaultEffort?: string;
 }
 
 export interface HostInfo {
@@ -109,6 +218,14 @@ export interface Request {
     | 'RegenerateAgent'
     | 'ForceRegenerate'
     | 'CaptureHistory'
+    | 'OpenRichStream'
+    | 'SendMessage'
+    | 'AbortTurn'
+    | 'GetTranscript'
+    | 'RespondPermission'
+    | 'RespondUserInput'
+    | 'ListModels'
+    | 'SetModel'
     | string;
   session?: string;
   program?: string;
@@ -118,6 +235,19 @@ export interface Request {
   autoYes?: boolean;
   enabled?: boolean;
   message?: string;
+  // SendMessage: optional absolute file paths to attach to the message. The
+  // daemon reads Request.attachments alongside the message text.
+  attachments?: string[];
+  requestId?: string;
+  decision?: 'approve' | 'reject';
+  answer?: string;
+  freeform?: boolean;
+  // SetModel: the target model id to switch the session to (live), plus the
+  // optional reasoning effort and context tier to apply with it. `contextTier`
+  // is 'default' | 'long_context'.
+  model?: string;
+  effort?: string;
+  contextTier?: string;
   data?: string;
   mode?: string;
   withANSI?: boolean;
@@ -136,9 +266,11 @@ export interface Request {
   // CreateWorkspace (v10): when true, open the session in-place against repoPath
   // without creating a git worktree.
   noWorktree?: boolean;
+  rich?: boolean;
   // Run methods (v3)
   command?: string;
   sinceOffset?: number;
+  since?: number;
   // Regenerate (v5)
   handoff?: boolean;
   // Shell selection
@@ -183,6 +315,10 @@ export interface Response {
   // Cross-repo resume confirmation (v8)
   needsConfirm?: boolean;
   absPath?: string;
+  // Rich agent event stream (v11)
+  frames?: EventFrame[];
+  // Live model selector: ListModels returns the selectable models.
+  models?: ModelInfo[];
 }
 
 type PendingCall = {
@@ -328,10 +464,13 @@ export class ControlClient {
       try {
         this.decoder.push(chunk);
       } catch (error) {
-        this.rejectAll(error instanceof Error ? error : new Error(String(error)));
+        this.socket.destroy(error instanceof Error ? error : new Error(String(error)));
       }
     });
-    socket.once('error', (error) => this.rejectAll(error));
+    socket.once('error', (error) => {
+      this.closed = true;
+      this.rejectAll(error);
+    });
     socket.once('close', () => {
       this.closed = true;
       this.rejectAll(new Error('control pipe closed'));
@@ -360,9 +499,15 @@ export class ControlClient {
       }
       this.pending.set(id, pending);
       this.socket.write(frame(Buffer.from(JSON.stringify(payload), 'utf8')), (error) => {
-        if (error && this.pending.delete(id)) {
-          if (pending.timer) clearTimeout(pending.timer);
-          reject(error);
+        if (error) {
+          // A write failure (e.g. EOF once the daemon went away) means this pipe is
+          // dead; mark the client closed so getControlClient reconnects next call
+          // instead of handing back this dead client again.
+          this.closed = true;
+          if (this.pending.delete(id)) {
+            if (pending.timer) clearTimeout(pending.timer);
+            reject(error);
+          }
         }
       });
     });
@@ -376,6 +521,95 @@ export class ControlClient {
 
   public isClosed(): boolean {
     return this.closed;
+  }
+
+  public async openRichStream(session: string, since = 0): Promise<{ attachPipe: string; attachToken: string }> {
+    const response = await this.call({ method: 'OpenRichStream', session, since });
+    if (!response.ok || !response.attachPipe || !response.attachToken) {
+      throw new Error(response.error || 'OpenRichStream failed');
+    }
+    return { attachPipe: response.attachPipe, attachToken: response.attachToken };
+  }
+
+  public async sendMessage(
+    session: string,
+    message: string,
+    attachments?: string[],
+  ): Promise<void> {
+    const response = await this.call({ method: 'SendMessage', session, message, attachments });
+    if (!response.ok) {
+      throw new Error(response.error || 'SendMessage failed');
+    }
+  }
+
+  public async abortTurn(session: string): Promise<void> {
+    const response = await this.call({ method: 'AbortTurn', session });
+    if (!response.ok) {
+      throw new Error(response.error || 'AbortTurn failed');
+    }
+  }
+
+  public async respondPermission(
+    session: string,
+    requestId: string,
+    decision: 'approve' | 'reject',
+  ): Promise<void> {
+    const response = await this.call({ method: 'RespondPermission', session, requestId, decision });
+    if (!response.ok) {
+      throw new Error(response.error || 'RespondPermission failed');
+    }
+  }
+
+  public async respondUserInput(
+    session: string,
+    requestId: string,
+    answer: string,
+    wasFreeform: boolean,
+  ): Promise<void> {
+    const response = await this.call({
+      method: 'RespondUserInput',
+      session,
+      requestId,
+      answer,
+      freeform: wasFreeform,
+    });
+    if (!response.ok) {
+      throw new Error(response.error || 'RespondUserInput failed');
+    }
+  }
+
+  public async getTranscript(session: string, since = 0): Promise<EventFrame[]> {
+    const response = await this.call({ method: 'GetTranscript', session, since });
+    if (!response.ok) {
+      throw new Error(response.error || 'GetTranscript failed');
+    }
+    return response.frames ?? [];
+  }
+
+  public async listModels(session: string): Promise<ModelInfo[]> {
+    const response = await this.call({ method: 'ListModels', session });
+    if (!response.ok) {
+      throw new Error(response.error || 'ListModels failed');
+    }
+    return response.models ?? [];
+  }
+
+  public async setModel(
+    session: string,
+    modelId: string,
+    effort?: string,
+    contextTier?: string,
+  ): Promise<void> {
+    const response = await this.call({
+      method: 'SetModel',
+      session,
+      model: modelId,
+      effort,
+      contextTier,
+    });
+    if (!response.ok) {
+      throw new Error(response.error || 'SetModel failed');
+    }
   }
 
   private rejectAll(error: Error): void {
@@ -607,6 +841,11 @@ export async function ensureHost(csExe: string, opts?: { verbose?: boolean }): P
     // HANGAR_DEBUG only affects a newly spawned daemon; a running daemon is unaffected until it restarts.
     env: { ...process.env, ...(opts?.verbose ? { HANGAR_DEBUG: '1' } : {}) },
   });
+  // Guard against a missing/unexecutable binary (e.g. AV-blocked). Without this
+  // handler the async 'error' event would become an uncaughtException and
+  // hard-crash the Electron main process. waitForValidHostInfo below times out
+  // and rejects gracefully.
+  child.on('error', (err) => log.error('ensureHost spawn error', err));
   log.info('ensureHost spawned session-host', { pipeName, pid: child.pid, verbose: !!opts?.verbose });
   child.unref();
 
@@ -686,6 +925,66 @@ export async function connectAttachStream(
     return socket;
   } catch (error) {
     log.error('connectAttachStream failed', {
+      pipeName: attachPipe,
+      elapsedMs: Date.now() - start,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+export async function connectEventStream(
+  attachPipe: string,
+  attachToken: string | undefined,
+  onFrame: (frame: EventFrame) => void,
+  onClose?: () => void,
+): Promise<net.Socket> {
+  const start = Date.now();
+  log.info('connectEventStream start', { pipeName: attachPipe });
+  try {
+    const socket = await connectPipe(attachPipe);
+    if (attachToken !== undefined) {
+      socket.write(frame(Buffer.from(attachToken, 'utf8')));
+    }
+
+    let done = false;
+    const finish = (): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      socket.removeAllListeners('data');
+      onClose?.();
+    };
+    const decoder = new FrameDecoder((payload) => {
+      const parsed = JSON.parse(payload.toString('utf8')) as EventFrame;
+      onFrame(parsed);
+    });
+
+    socket.on('data', (chunk: Buffer) => {
+      try {
+        decoder.push(chunk);
+      } catch (error) {
+        log.error('connectEventStream frame error', {
+          pipeName: attachPipe,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        socket.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+    socket.once('error', (error) => {
+      log.error('connectEventStream socket error', { pipeName: attachPipe, error: error.message });
+      finish();
+    });
+    socket.once('close', () => {
+      log.info('connectEventStream closed', { pipeName: attachPipe });
+      finish();
+    });
+
+    log.info('connectEventStream connected', { pipeName: attachPipe, elapsedMs: Date.now() - start });
+    return socket;
+  } catch (error) {
+    log.error('connectEventStream failed', {
       pipeName: attachPipe,
       elapsedMs: Date.now() - start,
       error: error instanceof Error ? error.message : String(error),

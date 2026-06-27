@@ -116,13 +116,24 @@ func TestWorkspaceLifecycle(t *testing.T) {
 		t.Fatalf("ListWorkspaces: err=%v list=%+v", err, list)
 	}
 
-	// Archive removes the worktree and the agent session.
+	// Archive removes the worktree and the agent session. The teardown (kill +
+	// RemoveAll + git) now runs in the background so the control pipe isn't blocked,
+	// so poll for the worktree to disappear instead of expecting it synchronously.
 	if err := c.ArchiveWorkspace(ws.ID, true); err != nil {
 		t.Fatalf("ArchiveWorkspace: %v", err)
 	}
-	if _, err := os.Stat(ws.WorktreePath); !os.IsNotExist(err) {
-		t.Fatalf("expected worktree removed after archive, stat err=%v", err)
+	removed := false
+	for i := 0; i < 100; i++ {
+		if _, err := os.Stat(ws.WorktreePath); os.IsNotExist(err) {
+			removed = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
+	if !removed {
+		t.Fatalf("expected worktree removed after archive (waited 5s), path still present: %s", ws.WorktreePath)
+	}
+	// The registry removal is synchronous, so the list is empty immediately.
 	list, err = c.ListWorkspaces()
 	if err != nil || len(list) != 0 {
 		t.Fatalf("expected empty list after archive, got err=%v list=%+v", err, list)
@@ -325,6 +336,130 @@ func TestCopilotWorkspaceLaunchCommands(t *testing.T) {
 	}
 	if got, want := sessionProgram(), "copilot.cmd --resume="+agentID; got != want {
 		t.Fatalf("revive command = %q, want %q", got, want)
+	}
+}
+
+func TestRevivePlanRoutesRichAndTerminal(t *testing.T) {
+	const validID = "123e4567-e89b-12d3-a456-426614174000"
+
+	cases := []struct {
+		name          string
+		w             *workspace
+		wantRich      bool
+		wantResume    bool
+		wantProgram   string
+		wantAgentID   string
+		wantInvalidID bool
+		wantMissingID bool
+	}{
+		{
+			name:        "rich valid resumes via sdk",
+			w:           &workspace{Kind: proto.WorkspaceKindRich, Program: "copilot", AgentSessionID: validID},
+			wantRich:    true,
+			wantResume:  true,
+			wantProgram: "copilot",
+			wantAgentID: validID,
+		},
+		{
+			name:          "rich invalid launches fresh",
+			w:             &workspace{Kind: proto.WorkspaceKindRich, Program: "copilot", AgentSessionID: "bad;id"},
+			wantRich:      true,
+			wantProgram:   "copilot",
+			wantInvalidID: true,
+		},
+		{
+			name:          "rich missing launches fresh",
+			w:             &workspace{Kind: proto.WorkspaceKindRich, Program: "copilot"},
+			wantRich:      true,
+			wantProgram:   "copilot",
+			wantMissingID: true,
+		},
+		{
+			name:        "terminal copilot resumes via command flag",
+			w:           &workspace{Program: "cpa", CopilotResume: true, AgentSessionID: validID},
+			wantProgram: "cpa --resume=" + validID,
+		},
+		{
+			name:          "terminal invalid launches fresh",
+			w:             &workspace{Program: "copilot", AgentSessionID: "bad;id"},
+			wantProgram:   "copilot",
+			wantInvalidID: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := revivePlanForWorkspace(tc.w)
+			if got.rich != tc.wantRich || got.resume != tc.wantResume ||
+				got.program != tc.wantProgram || got.agentSessionID != tc.wantAgentID ||
+				got.invalidSessionID != tc.wantInvalidID || got.missingSessionID != tc.wantMissingID {
+				t.Fatalf("revivePlanForWorkspace() = %+v", got)
+			}
+		})
+	}
+}
+
+// TestResumeCopilotSessionReportsRichKind guards the session-browser "open as
+// rich" resume path: a browser-resumed Copilot session must (a) start through the
+// SDK ("rich") backend so the live session is a *sdkSession the desktop can attach
+// to via OpenRichStream, and (b) report Kind == rich through toInfo so AgentMode
+// keeps it. Previously this path started a TERMINAL ConPTY session yet persisted
+// Kind=rich, so OpenRichStream's *sdkSession assertion failed and AgentMode still
+// worked only by luck of the Kind tag. The SDK hook keeps this a fast unit test
+// (no real copilot CLI spawn) and records the resume routing. [#1]
+func TestResumeCopilotSessionReportsRichKind(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	repo := initTempRepo(t)
+
+	h := newHost(io.Discard, time.Minute)
+	// Resume routes through the rich SDK backend, not the ConPTY factory, so stub
+	// startSDKSession: record the resume flag/session id and register a fake live
+	// session under the workspace name (no real copilot CLI).
+	var gotResume bool
+	var gotSessionID, gotName string
+	h.startSDKSessionHook = func(p sdkSessionParams) error {
+		gotResume = p.resume
+		gotSessionID = p.sessionID
+		gotName = p.name
+		h.mu.Lock()
+		h.sessions[p.name] = &fakeSession{name: p.name, program: p.program, workDir: p.workDir, autoYes: p.autoYes, aliveFlag: true}
+		h.mu.Unlock()
+		return nil
+	}
+	m := h.workspaces
+
+	const validID = "123e4567-e89b-12d3-a456-426614174000"
+	resp := m.resumeCopilotSession(&proto.Request{
+		ID:        1,
+		SessionID: validID,
+		RepoPath:  repo,
+		// The test cwd is not the temp repo, so this is a cross-repo resume; the
+		// host requires explicit confirmation before creating the worktree.
+		Confirmed: true,
+		Title:     "Resumed",
+	})
+	if !resp.OK {
+		t.Fatalf("resumeCopilotSession failed: error=%q needsConfirm=%v", resp.Error, resp.NeedsConfirm)
+	}
+	if resp.Workspace == nil {
+		t.Fatalf("resumeCopilotSession returned OK with no workspace")
+	}
+	if got := resp.Workspace.Kind; got != proto.WorkspaceKindRich {
+		t.Fatalf("resumed workspace Kind = %q, want %q", got, proto.WorkspaceKindRich)
+	}
+	// The bug was the live session being terminal, not just the metadata tag: assert
+	// the resume actually went through the SDK backend with resume=true.
+	if !gotResume {
+		t.Fatalf("resume did not route through the SDK backend with resume=true")
+	}
+	if gotSessionID != validID {
+		t.Fatalf("SDK resume session id = %q, want %q", gotSessionID, validID)
+	}
+	if gotName != resp.Workspace.SessionName {
+		t.Fatalf("SDK session name = %q, want workspace session name %q", gotName, resp.Workspace.SessionName)
 	}
 }
 
@@ -616,12 +751,12 @@ func TestToInfoMapsLastOutput(t *testing.T) {
 	h.sessions[sessName] = &fakeSession{name: sessName, aliveFlag: true, lastOutputMs: lastMs}
 	h.mu.Unlock()
 
-	if got, want := m.toInfo(&workspace{ID: "ws1", SessionName: sessName}).LastOutputUnix, lastMs/1000; got != want {
+	if got, want := m.toInfo(&workspace{ID: "ws1", SessionName: sessName}, false, "").LastOutputUnix, lastMs/1000; got != want {
 		t.Fatalf("LastOutputUnix = %d, want %d", got, want)
 	}
 
 	// No live session for this workspace -> 0 (unknown).
-	if got := m.toInfo(&workspace{ID: "ws2", SessionName: "missing"}).LastOutputUnix; got != 0 {
+	if got := m.toInfo(&workspace{ID: "ws2", SessionName: "missing"}, false, "").LastOutputUnix; got != 0 {
 		t.Fatalf("LastOutputUnix (no session) = %d, want 0", got)
 	}
 }
@@ -658,10 +793,10 @@ func TestToInfoHasWorktree(t *testing.T) {
 	h := newHost(io.Discard, time.Minute)
 	m := h.workspaces
 
-	if !m.toInfo(&workspace{ID: "w1", SessionName: "s1"}).HasWorktree {
+	if !m.toInfo(&workspace{ID: "w1", SessionName: "s1"}, false, "").HasWorktree {
 		t.Fatalf("worktree-backed workspace should report HasWorktree=true")
 	}
-	if m.toInfo(&workspace{ID: "w2", SessionName: "s2", NoWorktree: true}).HasWorktree {
+	if m.toInfo(&workspace{ID: "w2", SessionName: "s2", NoWorktree: true}, false, "").HasWorktree {
 		t.Fatalf("in-place workspace should report HasWorktree=false")
 	}
 }
@@ -713,6 +848,74 @@ func TestLoadKeepsInPlaceSkipsUncontained(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("expected exactly 1 workspace loaded, got %d", n)
+	}
+}
+
+// TestRichModelSelectionPersistsAndReloads proves a rich session's model selection
+// (v18) survives a daemon restart: setRichModelSelection stores Model/ReasoningEffort/
+// ContextTier on the workspace by session name and saves, and a fresh manager
+// reloads them from workspaces.json so reviveBySession can restore the selection.
+func TestRichModelSelectionPersistsAndReloads(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	// saveLocked silently no-ops if the config dir is missing, so create it.
+	p, err := workspacesPath()
+	if err != nil {
+		t.Fatalf("workspacesPath: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	h1 := newHost(io.Discard, time.Minute)
+	m1 := h1.workspaces
+	m1.mu.Lock()
+	m1.wss = map[string]*workspace{
+		"rich1": {ID: "rich1", SessionName: "ws_rich1", Kind: "rich", NoWorktree: true},
+	}
+	m1.saveLocked()
+	m1.mu.Unlock()
+
+	// The SetModel persistence path: store a selection keyed by session name.
+	m1.setRichModelSelection("ws_rich1", "gpt-5", "high", "long_context")
+
+	// A fresh manager reloads from the same workspaces.json.
+	h2 := newHost(io.Discard, time.Minute)
+	m2 := h2.workspaces
+	m2.mu.Lock()
+	w := m2.wss["rich1"]
+	m2.mu.Unlock()
+	if w == nil {
+		t.Fatal("rich workspace not reloaded")
+	}
+	if w.Model != "gpt-5" || w.ReasoningEffort != "high" || w.ContextTier != "long_context" {
+		t.Fatalf("reloaded selection = %q/%q/%q, want gpt-5/high/long_context", w.Model, w.ReasoningEffort, w.ContextTier)
+	}
+}
+
+// TestSetRichModelSelectionUnknownSessionNoop proves setRichModelSelection is a
+// no-op (and does not panic) when no workspace owns the named session.
+func TestSetRichModelSelectionUnknownSessionNoop(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	h := newHost(io.Discard, time.Minute)
+	h.workspaces.mu.Lock()
+	h.workspaces.wss = map[string]*workspace{
+		"rich1": {ID: "rich1", SessionName: "ws_rich1", Kind: "rich", NoWorktree: true},
+	}
+	h.workspaces.mu.Unlock()
+
+	h.workspaces.setRichModelSelection("ghost", "gpt-5", "high", "long_context") // must not panic
+
+	h.workspaces.mu.Lock()
+	w := h.workspaces.wss["rich1"]
+	h.workspaces.mu.Unlock()
+	if w.Model != "" || w.ReasoningEffort != "" || w.ContextTier != "" {
+		t.Fatalf("unrelated workspace mutated: %q/%q/%q", w.Model, w.ReasoningEffort, w.ContextTier)
 	}
 }
 

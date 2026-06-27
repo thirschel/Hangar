@@ -1,9 +1,12 @@
 import type { JSX } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 import { CenterPane } from './components/CenterPane';
 import { RightPanel } from './components/RightPanel';
 import { Sidebar } from './components/Sidebar';
 import { GridPane } from './components/GridPane';
+import { AgentMode } from './components/AgentMode';
+import { ChatViewHost } from './components/ChatViewHost';
 import { SIDEBAR_MODES, type SidebarMode } from './components/sidebar-modes';
 import { BreadcrumbCopy } from './components/BreadcrumbCopy';
 import { CreateWorkspaceModal } from './components/CreateWorkspaceModal';
@@ -29,6 +32,10 @@ import { PROTO_VERSION } from '../../shared/proto-version';
 
 type ConnectionState = 'connecting' | 'connected' | 'error';
 
+// App-level experience mode: the existing workspace UI ('standard') or the
+// full-screen Copilot Agent surface ('agent'). Persisted across launches.
+type AppMode = 'standard' | 'agent';
+
 // Right-panel resize bounds (the panel width is user-draggable and persisted).
 const SIDE_MIN = 320;
 const SIDE_DEFAULT = 420;
@@ -44,6 +51,9 @@ const STATUS_FILTER_KEY = 'cs.statusFilter';
 const GRID_COLUMNS_KEY = 'cs.gridColumns';
 const GRID_ORDER_KEY = 'cs.gridOrder';
 const GRID_ROW_HEIGHTS_KEY = 'cs.gridRowHeights';
+
+// App-mode persistence key.
+const APP_MODE_KEY = 'cs.appMode';
 
 // Largest the right panel may grow to for the current window, keeping the sidebar
 // and a usable center pane visible.
@@ -67,6 +77,10 @@ export function App(): JSX.Element {
   const [showRegen, setShowRegen] = useState(false);
   const [optimisticRegenId, setOptimisticRegenId] = useState<string | null>(null);
   const [workspaceToRemove, setWorkspaceToRemove] = useState<WorkspaceInfo | null>(null);
+  // Ids whose removal is in flight. Removal is slow (esp. worktree deletion), so
+  // we mark the row "deleting" and run the archive in the background instead of
+  // blocking the whole app behind the confirm modal.
+  const [deletingIds, setDeletingIds] = useState<ReadonlySet<string>>(() => new Set());
   const [workspaceToEdit, setWorkspaceToEdit] = useState<WorkspaceInfo | null>(null);
   const [showBrowser, setShowBrowser] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
@@ -93,6 +107,10 @@ export function App(): JSX.Element {
     }
   });
   const [showHelp, setShowHelp] = useState(false);
+  const [appMode, setAppMode] = useState<AppMode>(() => {
+    const saved = localStorage.getItem(APP_MODE_KEY);
+    return saved === 'agent' ? 'agent' : 'standard';
+  });
   const [gridMode, setGridMode] = useState(false);
   const [gridSelectedIds, setGridSelectedIds] = useState<Set<string>>(() => new Set());
   const [gridColumns, setGridColumns] = useState<number>(() => {
@@ -125,6 +143,11 @@ export function App(): JSX.Element {
   const connectionRef = useRef<ConnectionState>('connecting');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const refreshInFlightRef = useRef<Promise<WorkspaceInfo[]> | null>(null);
+  // Dirty-check refs: prevWorkspacesRef tracks the last list committed to state so
+  // no-op polls skip setWorkspaces; rawWorkspacesRef tracks the unfiltered workspace
+  // list for mode-switch selection normalisation.
+  const prevWorkspacesRef = useRef<WorkspaceInfo[]>([]);
+  const rawWorkspacesRef = useRef<WorkspaceInfo[]>([]);
 
   const refreshOnce = useCallback(async (): Promise<WorkspaceInfo[]> => {
     try {
@@ -172,7 +195,38 @@ export function App(): JSX.Element {
       sessionNameRef.current = nextSessionName;
       regeneratingRef.current = nextRegenerating;
       waitingRef.current = nextWaiting;
-      setWorkspaces(list);
+
+      // Dirty-check: compare every UI-relevant field before committing to state so
+      // a no-op poll (same data returned by the daemon) doesn't replace the array
+      // reference and invalidate downstream useMemos / Sidebar memo.
+      const prev = prevWorkspacesRef.current;
+      const listChanged =
+        prev.length !== list.length ||
+        list.some((n, i) => {
+          const p = prev[i];
+          return (
+            p.id !== n.id ||
+            p.title !== n.title ||
+            p.branch !== n.branch ||
+            p.sessionName !== n.sessionName ||
+            p.alive !== n.alive ||
+            p.autoYes !== n.autoYes ||
+            p.added !== n.added ||
+            p.removed !== n.removed ||
+            p.lastOutputUnix !== n.lastOutputUnix ||
+            p.running !== n.running ||
+            p.busy !== n.busy ||
+            p.waiting !== n.waiting ||
+            p.regenerating !== n.regenerating ||
+            p.regenPhase !== n.regenPhase ||
+            p.kind !== n.kind ||
+            p.hasWorktree !== n.hasWorktree
+          );
+        });
+      if (listChanged) {
+        prevWorkspacesRef.current = list;
+        setWorkspaces(list);
+      }
       // Recover the status banner if a previous poll had errored (e.g. the daemon
       // restarted and the control pipe reconnected).
       if (connectionRef.current !== 'connected') {
@@ -439,12 +493,20 @@ export function App(): JSX.Element {
   }, [selectedId, sidebarMode]);
 
   workspacesRef.current = workspaces;
+  rawWorkspacesRef.current = workspaces;
   connectionRef.current = connection;
 
   // Derive the displayed workspace list by applying mode sorting, custom order, and filter.
-  const statusCounts = useMemo(() => countByStatus(workspaces), [workspaces]);
+  // The sidebar serves both surfaces: standard mode lists every workspace, agent
+  // mode lists only rich (Copilot SDK) chats. Switching the base list by appMode
+  // lets the same Sidebar + the same sort/search/status state drive both screens.
+  const baseWorkspaces = useMemo(
+    () => (appMode === 'agent' ? workspaces.filter((w) => w.kind === 'rich') : workspaces),
+    [appMode, workspaces],
+  );
+  const statusCounts = useMemo(() => countByStatus(baseWorkspaces), [baseWorkspaces]);
   const displayedWorkspaces = useMemo(() => {
-    let list = [...workspaces];
+    let list = [...baseWorkspaces];
 
     // Apply mode-based sorting.
     switch (sidebarMode) {
@@ -484,7 +546,7 @@ export function App(): JSX.Element {
     list = filterByStatus(list, statusFilter);
 
     return list;
-  }, [workspaces, sidebarMode, workspaceOrder, sidebarFilter, statusFilter]);
+  }, [baseWorkspaces, sidebarMode, workspaceOrder, sidebarFilter, statusFilter]);
 
   // Keep workspacesRef in sync with display order for hotkey navigation.
   workspacesRef.current = displayedWorkspaces;
@@ -530,6 +592,39 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (gridMode && gridWorkspaces.length === 0) setGridMode(false);
   }, [gridMode, gridWorkspaces.length]);
+
+  // Keep the grid selection mode-local: terminal and rich chats can't be tiled in
+  // the same grid (standard tiles a TermView, agent tiles a ChatViewHost), and the
+  // standard list includes rich chats — so a selection carried across the surface
+  // toggle could mount the wrong tile type. Reset the grid whenever appMode flips.
+  // Also normalise selectedId: in agent mode only 'rich' workspaces are shown, so
+  // a standard workspace that was selected before the switch must be cleared.
+  useEffect(() => {
+    setGridMode(false);
+    setGridSelectedIds(new Set());
+    setSelectedId((cur) => {
+      if (!cur) return cur;
+      const all = rawWorkspacesRef.current;
+      const visible = appMode === 'agent' ? all.filter((w) => w.kind === 'rich') : all;
+      return visible.some((w) => w.id === cur) ? cur : null;
+    });
+  }, [appMode]);
+
+  // Prune the "deleting" set once a row is actually gone (or if it reappears for
+  // some reason), so the optimistic markers never leak across refreshes.
+  useEffect(() => {
+    setDeletingIds((s) => {
+      if (s.size === 0) return s;
+      const live = new Set(workspaces.map((w) => w.id));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of s) {
+        if (live.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : s;
+    });
+  }, [workspaces]);
 
   useEffect(() => {
     if (!selected) setShowRegen(false);
@@ -614,15 +709,58 @@ export function App(): JSX.Element {
     localStorage.setItem(GRID_ROW_HEIGHTS_KEY, JSON.stringify(heights));
   }, []);
 
+  // Stable handlers for Sidebar props that were previously inline lambdas. These
+  // only call stable setState dispatchers so they never need to be recreated, which
+  // allows the Sidebar React.memo comparator to skip re-renders on no-op polls.
+  const onNewWorkspace = useCallback((): void => {
+    setCreateRepoPath(undefined);
+    setShowCreate(true);
+  }, []);
+
+  const onNewAtRepo = useCallback((repoPath: string): void => {
+    setCreateRepoPath(repoPath);
+    setShowCreate(true);
+  }, []);
+
+  const onStatusFilterChange = useCallback((v: StatusFilter): void => {
+    localStorage.setItem(STATUS_FILTER_KEY, v);
+    setStatusFilter(v);
+  }, []);
+
+  // Stable tile renderer for the agent-mode GridPane. Defined once so GridPane
+  // prop identity is preserved across polls.
+  const renderTile = useCallback(
+    (w: WorkspaceInfo) => <ChatViewHost key={w.id} workspace={w} findHotkeyScope="active" />,
+    [],
+  );
+
   const onConfirmRemove = useCallback(
     async (deleteWorktree: boolean): Promise<void> => {
       if (!workspaceToRemove) return;
       const id = workspaceToRemove.id;
-      await window.cs.archiveWorkspace(id, { deleteWorktree });
-      void window.cs.closeShell(id);
+      // Optimistically mark the row "deleting" and close the chat if it's open,
+      // then return immediately so the confirm modal closes without waiting on
+      // the slow archive RPC. The removal runs in the background below.
+      setDeletingIds((s) => new Set(s).add(id));
       setSelectedId((cur) => (cur === id ? null : cur));
-      setWorkspaceToRemove(null);
-      await refresh();
+      void (async () => {
+        try {
+          await window.cs.archiveWorkspace(id, { deleteWorktree });
+          void window.cs.closeShell(id);
+          await refresh();
+        } catch (e) {
+          // No toast surface exists; revert so the row becomes interactive again
+          // (the finally block prunes it) and the user can retry.
+          diag('archiveWorkspace failed', { id, error: e instanceof Error ? e.message : String(e) });
+        } finally {
+          setDeletingIds((s) => {
+            if (!s.has(id)) return s;
+            const next = new Set(s);
+            next.delete(id);
+            return next;
+          });
+        }
+      })();
     },
     [workspaceToRemove, refresh],
   );
@@ -699,6 +837,24 @@ export function App(): JSX.Element {
         </div>
         <button
           type="button"
+          className={`top-bar__mode${appMode === 'agent' ? ' is-active' : ''}`}
+          title={
+            appMode === 'agent'
+              ? 'Switch to the standard workspace view'
+              : 'Switch to the Copilot Agent view'
+          }
+          aria-label="Toggle app mode"
+          aria-pressed={appMode === 'agent'}
+          onClick={() => {
+            const next: AppMode = appMode === 'agent' ? 'standard' : 'agent';
+            localStorage.setItem(APP_MODE_KEY, next);
+            setAppMode(next);
+          }}
+        >
+          {appMode === 'agent' ? '⌂ Standard' : '💬 Agent'}
+        </button>
+        <button
+          type="button"
           className={`top-bar__grid${gridMode ? ' is-active' : ''}`}
           title={gridMode ? 'Close agent grid' : 'Open a grid of the selected agents (select 2+)'}
           aria-label="Toggle agent grid"
@@ -727,6 +883,48 @@ export function App(): JSX.Element {
         </button>
       </header>
 
+      {appMode === 'agent' ? (
+        <main className="app-mode-agent">
+          <Sidebar
+            workspaces={displayedWorkspaces}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onArchive={onArchive}
+            onSettings={onSettings}
+            onNewWorkspace={onNewWorkspace}
+            onNewAtRepo={onNewAtRepo}
+            onCycleMode={onCycleMode}
+            sidebarMode={sidebarMode}
+            filter={sidebarFilter}
+            onFilterChange={setSidebarFilter}
+            statusFilter={statusFilter}
+            counts={statusCounts}
+            onStatusFilterChange={onStatusFilterChange}
+            searchInputRef={searchInputRef}
+            title="Chats"
+            noun="chat"
+            emptyHint={<p>Click + to start a Copilot chat in its own git worktree.</p>}
+            deletingIds={deletingIds}
+            gridSelectedIds={gridSelectedIds}
+            onToggleGridMember={toggleGridMember}
+            onClearGridSelection={clearGridSelection}
+          />
+          {gridMode ? (
+            <GridPane
+              workspaces={gridWorkspaces}
+              columns={gridColumns}
+              onColumnsChange={onGridColumnsChange}
+              onReorder={onGridReorder}
+              rowHeights={gridRowHeights}
+              onRowHeightsChange={onGridRowHeightsChange}
+              onLeave={() => setGridMode(false)}
+              renderTile={renderTile}
+            />
+          ) : (
+            <AgentMode selectedChat={selected?.kind === 'rich' ? selected : null} />
+          )}
+        </main>
+      ) : (
       <main
         className="workspace"
         style={{
@@ -741,28 +939,20 @@ export function App(): JSX.Element {
           onSelect={setSelectedId}
           onArchive={onArchive}
           onSettings={onSettings}
-          onNewWorkspace={() => {
-            setCreateRepoPath(undefined);
-            setShowCreate(true);
-          }}
-          onNewAtRepo={(repoPath) => {
-            setCreateRepoPath(repoPath);
-            setShowCreate(true);
-          }}
+          onNewWorkspace={onNewWorkspace}
+          onNewAtRepo={onNewAtRepo}
           onCycleMode={onCycleMode}
           sidebarMode={sidebarMode}
           filter={sidebarFilter}
           onFilterChange={setSidebarFilter}
           statusFilter={statusFilter}
           counts={statusCounts}
-          onStatusFilterChange={(v) => {
-            localStorage.setItem(STATUS_FILTER_KEY, v);
-            setStatusFilter(v);
-          }}
+          onStatusFilterChange={onStatusFilterChange}
           searchInputRef={searchInputRef}
           gridSelectedIds={gridSelectedIds}
           onToggleGridMember={toggleGridMember}
           onClearGridSelection={clearGridSelection}
+          deletingIds={deletingIds}
         />
         {gridMode ? (
           <GridPane
@@ -799,6 +989,7 @@ export function App(): JSX.Element {
           </>
         )}
       </main>
+      )}
 
       <footer className="status-bar">
         <span>Protocol v{hostVersion ?? '?'}</span>
@@ -816,6 +1007,7 @@ export function App(): JSX.Element {
           }}
           onCreate={onCreate}
           initialRepoPath={createRepoPath}
+          rich={appMode === 'agent'}
         />
       )}
 

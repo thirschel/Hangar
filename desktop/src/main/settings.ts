@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { isRemoteSession } from './render-detect';
 
 // The daemon's config (read by the Go core-daemon). We preserve unknown keys on
 // write so the daemon's own fields aren't clobbered.
@@ -62,11 +63,14 @@ export type Settings = {
   terminalRenderer?: TerminalRenderer;
 };
 
+const LOCAL_DEFAULT_UI_REFRESH_MS = 2000;
+const REMOTE_DEFAULT_UI_REFRESH_MS = 4000;
+
 const APP_DEFAULTS: AppSettings = {
   notifications: true,
   notificationSound: true,
   minimizeToTray: true,
-  uiRefreshMs: 2000,
+  uiRefreshMs: LOCAL_DEFAULT_UI_REFRESH_MS,
   autoUpdate: false,
   setupComplete: false,
   terminalProfiles: [],
@@ -77,7 +81,7 @@ const APP_DEFAULTS: AppSettings = {
   terminalRenderer: 'auto',
 };
 
-function csDir(): string {
+export function csDir(): string {
   return path.join(os.homedir(), '.hangar');
 }
 
@@ -99,6 +103,17 @@ function readJson<T>(file: string, fallback: T): T {
 
 export function readDaemonConfig(): DaemonConfig {
   return readJson<DaemonConfig>(configPath(), {});
+}
+
+function readJsonObject(file: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function commandExists(command: string): boolean {
@@ -175,19 +190,21 @@ function seedTerminalSettings(app: AppSettings): AppSettings {
   return app;
 }
 
-export function isFirstRun(): boolean {
-  return !readAppSettings().setupComplete;
+function resolvedDefaultUiRefreshMs(): number {
+  return isRemoteSession() ? REMOTE_DEFAULT_UI_REFRESH_MS : LOCAL_DEFAULT_UI_REFRESH_MS;
 }
 
-export function markSetupComplete(): void {
-  mkdirSync(csDir(), { recursive: true });
-  const app = readAppSettings();
-  app.setupComplete = true;
-  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n');
+function writeAppSettings(app: AppSettings): void {
+  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n', { mode: 0o600 });
 }
 
-export function readAppSettings(): AppSettings {
-  const app = readJson<AppSettings>(appSettingsPath(), { ...APP_DEFAULTS });
+function loadAppSettings(): AppSettings {
+  const raw = readJsonObject(appSettingsPath());
+  const hasExplicitUiRefreshMs = !!raw && Object.prototype.hasOwnProperty.call(raw, 'uiRefreshMs');
+  const app = { ...APP_DEFAULTS, ...(raw ?? {}) } as AppSettings;
+  if (!hasExplicitUiRefreshMs) {
+    app.uiRefreshMs = resolvedDefaultUiRefreshMs();
+  }
   const needsProfiles = !Array.isArray(app.terminalProfiles) || app.terminalProfiles.length === 0;
   const needsDefault =
     !app.defaultTerminalProfileId ||
@@ -195,9 +212,24 @@ export function readAppSettings(): AppSettings {
   seedTerminalSettings(app);
   if (needsProfiles || needsDefault) {
     mkdirSync(csDir(), { recursive: true, mode: 0o700 });
-    writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n', { mode: 0o600 });
+    writeAppSettings(app);
   }
   return app;
+}
+
+export function isFirstRun(): boolean {
+  return !readAppSettings().setupComplete;
+}
+
+export function markSetupComplete(): void {
+  mkdirSync(csDir(), { recursive: true });
+  const app = loadAppSettings();
+  app.setupComplete = true;
+  writeAppSettings(app);
+}
+
+export function readAppSettings(): AppSettings {
+  return loadAppSettings();
 }
 
 export function getSettings(): Settings {
@@ -242,7 +274,7 @@ export function applySettings(patch: Partial<Settings>): Settings {
   }
   writeFileSync(configPath(), JSON.stringify(cfg, null, 2) + '\n', { mode: 0o600 });
 
-  const app = readAppSettings();
+  const app = loadAppSettings();
   if (patch.notifications !== undefined) app.notifications = patch.notifications;
   if (patch.notificationSound !== undefined) app.notificationSound = patch.notificationSound;
   if (patch.minimizeToTray !== undefined) app.minimizeToTray = patch.minimizeToTray;
@@ -259,9 +291,9 @@ export function applySettings(patch: Partial<Settings>): Settings {
     const n = Number(patch.uiRefreshMs);
     app.uiRefreshMs = Number.isFinite(n)
       ? Math.min(60000, Math.max(500, n))
-      : APP_DEFAULTS.uiRefreshMs;
+      : resolvedDefaultUiRefreshMs();
   }
-  writeFileSync(appSettingsPath(), JSON.stringify(app, null, 2) + '\n', { mode: 0o600 });
+  writeAppSettings(app);
 
   return getSettings();
 }

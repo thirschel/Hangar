@@ -3,6 +3,7 @@
 package winhost
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -62,13 +63,41 @@ type managedSession interface {
 	unsubscribe(sub *subscriber)
 }
 
+// startReservation is a cancellable claim on a session name held in host.starting
+// while its (possibly slow) start/resume runs without h.mu. A lifecycle op that
+// races a mid-start session (killSession during ArchiveWorkspace teardown, or
+// triggerShutdown) marks the reservation canceled; finishSessionStart then closes
+// the freshly-started session instead of registering it, so no Copilot child is
+// orphaned outside ListWorkspaces' ownership. [HOL-1]
+type startReservation struct {
+	canceled bool
+}
+
 type host struct {
-	mu          sync.RWMutex
-	sessions    map[string]managedSession
-	newSession  func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
-	activeConns int
-	lastActive  time.Time
-	idleTimeout time.Duration
+	mu       sync.RWMutex
+	sessions map[string]managedSession
+	// starting holds session names whose (possibly slow) start/resume is in
+	// progress. It is guarded by mu and lets startSDKSession /
+	// startManagedSessionWithShell reserve a name, release mu across the slow
+	// launch, then register the live session — so a slow start never holds mu and
+	// blocks getSession/list (the ListWorkspaces poll). See reserveSessionStart.
+	// The value is a cancellable reservation so lifecycle ops (kill/shutdown) can
+	// abort a start in flight.
+	starting map[string]*startReservation
+	// shuttingDown is set under mu by triggerShutdown so a session whose start is
+	// in flight is closed rather than registered when its start finishes.
+	shuttingDown bool
+	newSession   func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
+	// startSDKSessionHook, when non-nil, replaces the real rich (Copilot SDK)
+	// backend in startSDKSession. Production leaves it nil; unit tests set it to
+	// register a fake session and record the call (e.g. the resume flag), so the
+	// rich create/resume/regenerate routing can be tested without launching a real
+	// copilot CLI (startSDKSession otherwise calls newSDKSession directly, with no
+	// factory seam like newSession).
+	startSDKSessionHook func(p sdkSessionParams) error
+	activeConns         int
+	lastActive          time.Time
+	idleTimeout         time.Duration
 
 	ln           net.Listener
 	logger       *log.Logger
@@ -84,6 +113,7 @@ type host struct {
 func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
+		starting: make(map[string]*startReservation),
 		newSession: func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
 			return newConptySession(name, program, workDir, shell, cols, rows, autoYes, logger)
 		},
@@ -108,6 +138,76 @@ func (h *host) touch() {
 	h.mu.Lock()
 	h.lastActive = time.Now()
 	h.mu.Unlock()
+}
+
+// reserveSessionStart claims a session name so its (possibly slow) start/resume
+// can run WITHOUT holding h.mu. It fails if the name is already live or already
+// being started. On success the caller MUST pair it with finishSessionStart so
+// the reservation is always released (even on a failed start). This is what keeps
+// a slow Copilot SDK launch / ConPTY spawn from blocking getSession/list — and
+// thus the ListWorkspaces poll — for the whole start. [HOL-1]
+func (h *host) reserveSessionStart(name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, exists := h.sessions[name]; exists {
+		return fmt.Errorf("session already exists: %s", name)
+	}
+	if _, starting := h.starting[name]; starting {
+		return fmt.Errorf("session already starting: %s", name)
+	}
+	h.starting[name] = &startReservation{}
+	return nil
+}
+
+// finishSessionStart releases the reservation taken by reserveSessionStart and,
+// when the start succeeded, registers the live session. It must be called exactly
+// once per successful reserveSessionStart (success or failure) so a failed start
+// frees the name for a retry.
+//
+// If the reservation was canceled while the start was in flight (killSession,
+// e.g. during ArchiveWorkspace teardown) or the host is shutting down, a
+// successfully-started session is closed instead of registered so its Copilot
+// child is not orphaned outside ListWorkspaces' ownership. A start aborted this
+// way is not a user-facing failure, so callers should not surface an error for
+// it. [HOL-1]
+//
+// It returns true when the session was registered, false when it was discarded
+// (canceled/shutting-down) or the start failed.
+func (h *host) finishSessionStart(name string, s managedSession, startErr error) bool {
+	h.mu.Lock()
+	res := h.starting[name]
+	delete(h.starting, name)
+	if startErr != nil || s == nil {
+		h.mu.Unlock()
+		return false
+	}
+	canceled := h.shuttingDown || (res != nil && res.canceled)
+	if canceled {
+		// Drop the lock before closing: close() may block on child teardown and
+		// must never be held across h.mu (which getSession/list take).
+		h.mu.Unlock()
+		_ = s.close()
+		h.logger.Printf("discarded session %q started after cancel/shutdown", name)
+		return false
+	}
+	h.sessions[name] = s
+	h.lastActive = time.Now()
+	h.mu.Unlock()
+	return true
+}
+
+// abortSessionStart frees a reservation whose start unwound before
+// finishSessionStart ran — e.g. a panic during launch recovered upstream by
+// safeDispatch. Without it the name would stay wedged in h.starting forever
+// ("session already starting"). Any partially-created session is closed so a
+// half-spawned child is not leaked. [HOL-1]
+func (h *host) abortSessionStart(name string, s managedSession) {
+	h.mu.Lock()
+	delete(h.starting, name)
+	h.mu.Unlock()
+	if s != nil {
+		_ = s.close()
+	}
 }
 
 func (h *host) serve(ln net.Listener) {
@@ -301,6 +401,22 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodAttach:
 		return h.attachSession(req)
+	case proto.MethodOpenRichStream:
+		return h.openRichStream(req)
+	case proto.MethodSendMessage:
+		return h.sendRichMessage(req)
+	case proto.MethodAbortTurn:
+		return h.abortRichTurn(req)
+	case proto.MethodGetTranscript:
+		return h.getRichTranscript(req)
+	case proto.MethodRespondPermission:
+		return h.respondRichPermission(req)
+	case proto.MethodRespondUserInput:
+		return h.respondRichUserInput(req)
+	case proto.MethodListModels:
+		return h.listRichModels(req)
+	case proto.MethodSetModel:
+		return h.setRichModel(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodListWorkspaces:
@@ -366,19 +482,94 @@ func (h *host) startManagedSession(name, program, workDir string, cols, rows int
 // startManagedSessionWithShell is like startManagedSession but accepts a shell
 // parameter ("cmd", "powershell", "pwsh") controlling how the program is launched.
 func (h *host) startManagedSessionWithShell(name, program, workDir, shell string, cols, rows int, autoYes bool) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, exists := h.sessions[name]; exists {
-		return fmt.Errorf("session already exists: %s", name)
+	if err := h.reserveSessionStart(name); err != nil {
+		return err
 	}
-	s := h.newSession(name, program, workDir, shell, cols, rows, autoYes, h.logger)
-	if err := s.start(); err != nil {
-		return fmt.Errorf("start session: %w", err)
+	var s managedSession
+	done := false
+	// If a panic (recovered upstream by safeDispatch) unwinds before
+	// finishSessionStart runs, free the reservation and close any partial
+	// session so the name isn't wedged as "already starting". [HOL-1]
+	defer func() {
+		if !done {
+			h.abortSessionStart(name, s)
+		}
+	}()
+	// newSession + start() run WITHOUT h.mu: a slow ConPTY/agent launch must not
+	// block getSession/list (the ListWorkspaces poll) on other connections. [HOL-1]
+	s = h.newSession(name, program, workDir, shell, cols, rows, autoYes, h.logger)
+	startErr := s.start()
+	registered := h.finishSessionStart(name, s, startErr)
+	done = true
+	if startErr != nil {
+		return fmt.Errorf("start session: %w", startErr)
 	}
-	h.sessions[name] = s
-	h.lastActive = time.Now()
+	if !registered {
+		// The start was canceled (kill/shutdown raced the launch); the session
+		// was already closed by finishSessionStart. Not a user-facing error.
+		return nil
+	}
 	programName, argCount := safeProgramSummary(program, shell)
 	h.logger.Printf("created session %q (programName=%q argCount=%d shell=%q cols=%d rows=%d)", name, programName, argCount, shell, cols, rows)
+	return nil
+}
+
+// startSDKSession creates, starts/resumes and registers a Copilot SDK-backed
+// "rich" session (the opt-in structured backend, parallel to
+// startManagedSessionWithShell). p.sessionID seeds or resumes the SDK session id so
+// a later resume continues the same conversation; p.baseDir overrides COPILOT_HOME
+// ("" = default). p.model/effort/contextTier (v18) seed the SDK model selection so a
+// revived session restores the user's choice ("" = a fresh chat / the SDK default).
+// p.extraMCP are the per-repo Hangar MCP catalog servers (resolved by the caller via
+// enabledMCPFor). p.resume selects resume vs fresh start.
+func (h *host) startSDKSession(p sdkSessionParams) error {
+	// Test seam: bypass the real SDK backend (which spawns a copilot CLI) so the
+	// rich create/resume/regenerate routing is unit-testable. Nil in production.
+	if h.startSDKSessionHook != nil {
+		return h.startSDKSessionHook(p)
+	}
+	if err := h.reserveSessionStart(p.name); err != nil {
+		return err
+	}
+	var started managedSession
+	done := false
+	// A panic during the SDK launch (recovered upstream by safeDispatch) must not
+	// leave p.name wedged in h.starting. Free the reservation and close any
+	// partial session if finishSessionStart never runs. [HOL-1]
+	defer func() {
+		if !done {
+			h.abortSessionStart(p.name, started)
+		}
+	}()
+	// newSDKSession + start/startResumed (the Copilot SDK launch, transcript replay
+	// and MCP connect) run WITHOUT h.mu. These can take many seconds; holding h.mu
+	// across them froze every ListWorkspaces/getSession poll for the whole start. [HOL-1]
+	s := newSDKSession(p, nil, h.logger)
+	started = s
+	var startErr error
+	if p.resume {
+		startErr = s.startResumed()
+	} else {
+		startErr = s.start()
+	}
+	if startErr == nil {
+		// Emit the active model after start/resume (and after any transcript replay)
+		// so a (re)attaching desktop restores the model selector (v18). A no-op for a
+		// fresh chat with no selection yet. Done before registering, mirroring the
+		// previous order.
+		s.emitModelFrame()
+	}
+	registered := h.finishSessionStart(p.name, s, startErr)
+	done = true
+	if startErr != nil {
+		return fmt.Errorf("start sdk session: %w", startErr)
+	}
+	if !registered {
+		// The start was canceled (kill/shutdown raced the launch); the session was
+		// already closed by finishSessionStart. Not a user-facing error.
+		return nil
+	}
+	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", p.name, filepath.Base(p.program), p.workDir, p.resume)
 	return nil
 }
 
@@ -417,6 +608,13 @@ func (h *host) killSession(name string) {
 	s, ok := h.sessions[name]
 	if ok {
 		delete(h.sessions, name)
+	}
+	// If the session's start is still in flight, cancel its reservation so
+	// finishSessionStart closes the freshly-started session instead of
+	// registering it for an already-killed workspace (ArchiveWorkspace teardown
+	// calls killSession). [HOL-1]
+	if res, starting := h.starting[name]; starting {
+		res.canceled = true
 	}
 	h.mu.Unlock()
 	if ok {
@@ -476,6 +674,249 @@ func (h *host) attachSession(req *proto.Request) *proto.Response {
 	h.logger.Printf("attach pipe created session=%q seq=%d pipe=%q alive=%v", req.Session, seq, pipe, alive)
 	go h.runAttach(sess, ln, token, req.Cols, req.Rows)
 	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token, Alive: alive, ExitCode: info.ExitCode}
+}
+
+func (h *host) richSession(req *proto.Request) (*sdkSession, *proto.Response) {
+	sess, ok := h.getSession(req.Session)
+	if !ok {
+		// The session may have died (e.g. the daemon restarted); revive it from the
+		// persisted workspace so ANY rich RPC works without first issuing an explicit
+		// OpenRichStream. Bounded: once revived, later calls take the getSession path.
+		if revived, rerr := h.workspaces.reviveBySession(req.Session, req.Cols, req.Rows); rerr == nil && revived {
+			sess, ok = h.getSession(req.Session)
+		}
+	}
+	if !ok {
+		return nil, proto.Errorf(req.ID, "no such session: %s", req.Session)
+	}
+	rich, ok := sess.(*sdkSession)
+	if !ok {
+		return nil, proto.Errorf(req.ID, "session %q is not a rich session", req.Session)
+	}
+	return rich, nil
+}
+
+func (h *host) openRichStream(req *proto.Request) *proto.Response {
+	revived, rerr := h.workspaces.reviveBySession(req.Session, req.Cols, req.Rows)
+	if rerr != nil {
+		h.logger.Printf("rich stream revive failed session=%q err=%v", req.Session, rerr)
+		return proto.Errorf(req.ID, "revive workspace session: %v", rerr)
+	}
+	if revived {
+		h.logger.Printf("rich stream revived workspace session=%q", req.Session)
+	}
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	sid, err := currentUserSID()
+	if err != nil {
+		h.logger.Printf("rich stream current user sid failed session=%q err=%v", req.Session, err)
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	sddl, err := currentUserSDDL()
+	if err != nil {
+		h.logger.Printf("rich stream current user sddl failed session=%q err=%v", req.Session, err)
+		return proto.Errorf(req.ID, "%v", err)
+	}
+	seq := h.attachSeq.Add(1)
+	pipe := fmt.Sprintf(`\\.\pipe\hangar-rich-%s-%s-%d`, sid, req.Session, seq)
+	ln, err := winio.ListenPipe(pipe, &winio.PipeConfig{SecurityDescriptor: sddl})
+	if err != nil {
+		h.logger.Printf("rich stream listen failed session=%q seq=%d err=%v", req.Session, seq, err)
+		return proto.Errorf(req.ID, "rich stream listen: %v", err)
+	}
+	token, err := randomNonceHex(16)
+	if err != nil {
+		_ = ln.Close()
+		h.logger.Printf("rich stream token failed session=%q seq=%d err=%v", req.Session, seq, err)
+		return proto.Errorf(req.ID, "rich stream token: %v", err)
+	}
+	alive := sess.alive()
+	info := sess.info()
+	h.logger.Printf("rich stream pipe created session=%q seq=%d pipe=%q alive=%v", req.Session, seq, pipe, alive)
+	go h.runRichStream(sess, ln, token, req.Since)
+	return &proto.Response{ID: req.ID, OK: true, AttachPipe: pipe, AttachToken: token, Alive: alive, ExitCode: info.ExitCode}
+}
+
+func (h *host) sendRichMessage(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	go func() {
+		defer recoverGoroutine("host.sendRichMessage")
+		if err := sess.richSend(context.Background(), req.Message, req.Attachments); err != nil {
+			h.logger.Printf("rich send failed session=%q err=%v", req.Session, err)
+		}
+	}()
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) abortRichTurn(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richAbort(context.Background()); err != nil {
+		return proto.Errorf(req.ID, "abort rich turn: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) getRichTranscript(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	return &proto.Response{ID: req.ID, OK: true, Frames: sess.richTranscript(req.Since)}
+}
+
+func (h *host) respondRichPermission(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richRespondPermission(context.Background(), req.RequestID, req.Decision == proto.DecisionApprove); err != nil {
+		return proto.Errorf(req.ID, "respond permission: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) respondRichUserInput(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richRespondUserInput(req.RequestID, req.Answer, req.Freeform); err != nil {
+		return proto.Errorf(req.ID, "respond user input: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) listRichModels(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	models, err := sess.richListModels(context.Background())
+	if err != nil {
+		return proto.Errorf(req.ID, "list models: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true, Models: models}
+}
+
+func (h *host) setRichModel(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	if err := sess.richSetModel(context.Background(), req.Model, req.Effort, req.ContextTier); err != nil {
+		return proto.Errorf(req.ID, "set model: %v", err)
+	}
+	// Persist the selection so a later revive restores it (v18): without this the
+	// model is blank after a daemon restart. Keyed by session name like the switch.
+	h.workspaces.setRichModelSelection(req.Session, req.Model, req.Effort, req.ContextTier)
+	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) runRichStream(sess *sdkSession, ln net.Listener, token string, since uint64) {
+	defer ln.Close()
+	defer recoverGoroutine("host.runRichStream")
+	info := sess.info()
+	sessionName := info.Name
+	reason := "completed"
+	defer func() {
+		h.logger.Printf("rich stream teardown session=%q reason=%s", sessionName, reason)
+	}()
+
+	connected := make(chan struct{})
+	go func() {
+		select {
+		case <-connected:
+		case <-time.After(10 * time.Second):
+			h.logger.Printf("rich stream watchdog teardown session=%q reason=no-client-timeout", sessionName)
+			_ = ln.Close()
+		case <-h.shutdownCh:
+			h.logger.Printf("rich stream watchdog teardown session=%q reason=host-shutdown", sessionName)
+			_ = ln.Close()
+		}
+	}()
+
+	conn, err := ln.Accept()
+	close(connected)
+	if err != nil {
+		reason = fmt.Sprintf("accept failed: %v", err)
+		h.logger.Printf("rich stream accept failed session=%q err=%v", sessionName, err)
+		return
+	}
+	h.logger.Printf("rich stream client connected session=%q remote=%q", sessionName, conn.RemoteAddr())
+	defer conn.Close()
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	tok, err := proto.ReadFrameBytes(conn)
+	_ = conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		reason = fmt.Sprintf("token read failed: %v", err)
+		h.logger.Printf("rich stream token read failed session=%q err=%v", sessionName, err)
+		return
+	}
+	if string(tok) != token {
+		reason = "token mismatch"
+		h.logger.Printf("rich stream token mismatch session=%q tokenBytes=%d", sessionName, len(tok))
+		return
+	}
+
+	snapshot, sub := sess.richSubscribe(since)
+	defer sess.richUnsubscribe(sub)
+
+	for _, frame := range snapshot {
+		_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+		err := proto.WriteFrame(conn, frame)
+		_ = conn.SetWriteDeadline(time.Time{})
+		if err != nil {
+			reason = fmt.Sprintf("snapshot write failed: %v", err)
+			h.logger.Printf("rich stream snapshot write failed session=%q seq=%d err=%v", sessionName, frame.Seq, err)
+			return
+		}
+	}
+	h.logger.Printf("rich stream snapshot written session=%q frames=%d", sessionName, len(snapshot))
+
+	clientGone := make(chan struct{})
+	go func() {
+		defer recoverGoroutine("host.runRichStream.disconnect")
+		var one [1]byte
+		for {
+			if _, err := conn.Read(one[:]); err != nil {
+				close(clientGone)
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case b, ok := <-sub.ch:
+			if !ok {
+				reason = "session-unsubscribed"
+				return
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+			err := proto.WriteRawFrame(conn, b)
+			_ = conn.SetWriteDeadline(time.Time{})
+			if err != nil {
+				reason = fmt.Sprintf("stream write failed: %v", err)
+				h.logger.Printf("rich stream output ended session=%q err=%v", sessionName, err)
+				return
+			}
+		case <-clientGone:
+			reason = "client detached"
+			return
+		case <-h.shutdownCh:
+			reason = "host shutdown"
+			return
+		}
+	}
 }
 
 func (h *host) runAttach(sess managedSession, ln net.Listener, token string, cols, rows int) {
@@ -589,6 +1030,13 @@ func (h *host) triggerShutdown() {
 	h.shutdownOnce.Do(func() {
 		// Tear down any live sessions so no child processes are orphaned.
 		h.mu.Lock()
+		// Cancel any in-flight starts so a session that finishes launching after
+		// this point is closed by finishSessionStart, not registered (and thus
+		// orphaned) past shutdown. [HOL-1]
+		h.shuttingDown = true
+		for _, res := range h.starting {
+			res.canceled = true
+		}
 		sessions := make([]managedSession, 0, len(h.sessions))
 		for _, s := range h.sessions {
 			sessions = append(sessions, s)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"hangar/session/agentcmd"
+	"hangar/session/winhost/proto"
 )
 
 func testHome(t *testing.T) string {
@@ -315,19 +316,163 @@ func TestArchiveDuringRegenerateNoZombie(t *testing.T) {
 	if err := c.ArchiveWorkspace(w.ID, true); err != nil {
 		t.Fatalf("archive: %v", err)
 	}
+	// The workspace is removed from the registry synchronously, so ListWorkspaces
+	// reflects the archive on the very next poll even though teardown is deferred. [#3]
 	h.workspaces.mu.Lock()
 	_, stillWorkspace := h.workspaces.wss[w.ID]
-	_, stillRegen := h.workspaces.regens[w.ID]
 	h.workspaces.mu.Unlock()
-	if stillWorkspace || stillRegen {
-		t.Fatalf("workspace/regeneration still present: workspace=%v regen=%v", stillWorkspace, stillRegen)
+	if stillWorkspace {
+		t.Fatalf("workspace still present in registry immediately after archive")
+	}
+	// The regen wind-down + session kill now run in the archive teardown goroutine
+	// (archive returns immediately instead of blocking the serial control pipe on
+	// regen.done for up to 60s), so poll for the regeneration to clear and the
+	// session to disappear rather than expecting them synchronously. [#3]
+	waitRegenDone(t, h, w.ID)
+	zombie := ""
+	for i := 0; i < 60; i++ {
+		zombie = ""
+		h.mu.RLock()
+		for name := range h.sessions {
+			if strings.Contains(name, w.ID) {
+				zombie = name
+				break
+			}
+		}
+		h.mu.RUnlock()
+		if zombie == "" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if zombie != "" {
+		t.Fatalf("zombie session remains after archive (waited 3s): %s", zombie)
+	}
+}
+
+// TestArchiveReturnsWhileRegenActive proves #3: archive must NOT block the serial
+// control pipe waiting on an in-flight regeneration. It injects a regenState whose
+// done channel is never closed (no goroutine), then asserts archive still returns
+// promptly and removes the workspace from the registry synchronously, with the
+// regen wind-down deferred to the background teardown goroutine.
+func TestArchiveReturnsWhileRegenActive(t *testing.T) {
+	home := testHome(t)
+	_, h, cleanup := startTestHostWithHandle(t)
+	defer cleanup()
+	m := h.workspaces
+	w := injectWorkspace(t, h, "archfast1", "copilot", filepath.Join(home, ".hangar", "worktrees", "wt"))
+
+	// A regeneration that never completes: nothing ever closes done. Pre-#3 archive
+	// waited inline on this channel (up to 60s), stalling every other RPC on the
+	// connection; post-#3 it tombstones, removes from the registry, and returns,
+	// moving the done-wait into the teardown goroutine (which unblocks at cleanup
+	// via shutdownCh).
+	regen := &regenState{force: make(chan struct{}), done: make(chan struct{})}
+	m.mu.Lock()
+	m.regens[w.ID] = regen
+	m.mu.Unlock()
+
+	start := time.Now()
+	resp := m.archive(&proto.Request{ID: 1, WorkspaceID: w.ID})
+	elapsed := time.Since(start)
+	if resp == nil || !resp.OK {
+		t.Fatalf("archive failed: %+v", resp)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("archive blocked %v on regen.done; it must return immediately and defer the wait", elapsed)
+	}
+
+	// Removed from the registry synchronously (so ListWorkspaces reflects it now),
+	// tombstoned (so a concurrent archive is a no-op), and the regen was signalled
+	// to cancel.
+	m.mu.Lock()
+	_, stillWorkspace := m.wss[w.ID]
+	tombstoned := m.tombstone[w.ID]
+	m.mu.Unlock()
+	if stillWorkspace {
+		t.Fatalf("workspace not removed from registry synchronously")
+	}
+	if !tombstoned {
+		t.Fatalf("tombstone not set while a regeneration is in flight")
+	}
+	select {
+	case <-regen.force:
+	default:
+		t.Fatalf("archive did not signal the in-flight regeneration to cancel")
+	}
+}
+
+// TestRestartAgentRichRoutesToSDK proves #2: regenerating a rich (Copilot SDK)
+// workspace must restart it through the SDK backend, not the ConPTY terminal
+// factory. Pre-#2 restartAgent always used startManagedSessionWithShell, so a rich
+// workspace's live session silently became a terminal one (Kind stayed rich) and
+// the desktop's OpenRichStream then failed its *sdkSession assertion. Regenerate
+// is a FRESH conversation, so the SDK start must use resume=false while carrying
+// the workspace's persisted model selection.
+func TestRestartAgentRichRoutesToSDK(t *testing.T) {
+	home := testHome(t)
+	_, h, cleanup := startTestHostWithHandle(t)
+	defer cleanup()
+	m := h.workspaces
+	w := injectWorkspace(t, h, "richregen1", "copilot", filepath.Join(home, "wt"))
+	// Mark it rich (the create/resume path sets Kind; injectWorkspace defaults to
+	// terminal) and give it a persisted model selection to carry across the restart.
+	m.mu.Lock()
+	w.Kind = proto.WorkspaceKindRich
+	w.Model = "gpt-5"
+	m.saveLocked()
+	m.mu.Unlock()
+	oldName := w.SessionName
+
+	// The terminal factory must never be used for a rich regenerate.
+	h.newSession = func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
+		t.Errorf("rich regenerate used the ConPTY terminal factory (newSession) for %q", name)
+		return newFake(name, program, workDir, shell, cols, rows, autoYes, logger)
+	}
+
+	var calls int
+	var gotResume bool
+	var gotName, gotModel string
+	h.startSDKSessionHook = func(p sdkSessionParams) error {
+		calls++
+		gotResume, gotName, gotModel = p.resume, p.name, p.model
+		h.mu.Lock()
+		h.sessions[p.name] = &fakeSession{name: p.name, program: p.program, workDir: p.workDir, autoYes: p.autoYes, aliveFlag: true}
+		h.mu.Unlock()
+		return nil
+	}
+
+	if err := m.restartAgent(w.ID, 80, 24); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly one SDK start, got %d", calls)
+	}
+	if gotResume {
+		t.Fatalf("rich regenerate must start a FRESH conversation (resume=false), got resume=true")
+	}
+	if gotModel != "gpt-5" {
+		t.Fatalf("rich regenerate dropped the persisted model: got %q, want %q", gotModel, "gpt-5")
+	}
+
+	m.mu.Lock()
+	newName := m.wss[w.ID].SessionName
+	m.mu.Unlock()
+	if newName == oldName {
+		t.Fatalf("session name did not rotate: %q", newName)
+	}
+	if gotName != newName {
+		t.Fatalf("SDK session registered under %q, but workspace points at %q", gotName, newName)
 	}
 	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for name := range h.sessions {
-		if strings.Contains(name, w.ID) {
-			t.Fatalf("zombie session remains: %s", name)
-		}
+	_, oldAlive := h.sessions[oldName]
+	_, newAlive := h.sessions[newName]
+	h.mu.RUnlock()
+	if oldAlive {
+		t.Fatalf("old session %q not killed", oldName)
+	}
+	if !newAlive {
+		t.Fatalf("new SDK session %q not registered", newName)
 	}
 }
 

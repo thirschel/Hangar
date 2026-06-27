@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,6 +49,14 @@ type workspace struct {
 	Shell          string `json:"shell,omitempty"`         // "cmd", "powershell", "pwsh"; empty = config default
 	CopilotResume  bool   `json:"copilotResume,omitempty"` // agent is copilot or a detected copilot wrapper (e.g. "cpa") -> resumable
 	NoWorktree     bool   `json:"noWorktree,omitempty"`    // in-place session: opened directly against RepoPath, no managed worktree
+	Kind           string `json:"kind,omitempty"`          // "" / "terminal" = ConPTY backend; "rich" = Copilot SDK backend
+
+	// Rich model selection (v18). Persisted so a revived rich session restores the
+	// user's SetModel choice; without these the model is blank after a daemon
+	// restart. Empty = no explicit selection (a fresh chat / the SDK default).
+	Model           string `json:"model,omitempty"`           // selected model id
+	ReasoningEffort string `json:"reasoningEffort,omitempty"` // selected reasoning effort
+	ContextTier     string `json:"contextTier,omitempty"`     // selected context tier ("default"|"long_context")
 }
 
 type workspaceManager struct {
@@ -71,10 +80,14 @@ type workspaceManager struct {
 	diffCache map[string]cachedDiff
 }
 
-// cachedDiff is a last-known added/removed line count for a workspace.
+// cachedDiff is the last-known diff result for a workspace: the added/removed
+// line totals (sidebar) and the per-file changed list (Changes tab). Both come
+// from a single `git diff --numstat` run by the background refresher, so neither
+// the ListWorkspaces nor the WorkspaceDiff request path has to spawn git. [#5]
 type cachedDiff struct {
 	added   int
 	removed int
+	files   []proto.FileDiffInfo
 }
 
 const (
@@ -162,6 +175,21 @@ func (m *workspaceManager) saveLocked() {
 	}
 	if data, err := json.MarshalIndent(list, "", "  "); err == nil {
 		_ = os.WriteFile(p, data, 0o600)
+	}
+}
+
+// setRichModelSelection persists a rich session's model selection (v18) by session
+// name so a later revive restores it (see reviveBySession). A no-op when no
+// workspace owns the session name. Locks m.mu and saves the registry.
+func (m *workspaceManager) setRichModelSelection(sessionName, model, effort, contextTier string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, w := range m.wss {
+		if w.SessionName == sessionName {
+			w.Model, w.ReasoningEffort, w.ContextTier = model, effort, contextTier
+			m.saveLocked()
+			return
+		}
 	}
 }
 
@@ -472,7 +500,56 @@ func inPlaceGitInfo(dir string) (repoPath, branch, baseSHA string) {
 	return repoPath, branch, baseSHA
 }
 
-func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
+// kindOrTerminal returns the workspace's session backend, defaulting to terminal
+// for records persisted before the rich (Copilot SDK) backend existed.
+func (w *workspace) kindOrTerminal() string {
+	if w.Kind == proto.WorkspaceKindRich {
+		return proto.WorkspaceKindRich
+	}
+	return proto.WorkspaceKindTerminal
+}
+
+type workspaceRevivePlan struct {
+	rich             bool
+	resume           bool
+	program          string
+	agentSessionID   string
+	invalidSessionID bool
+	missingSessionID bool
+}
+
+func revivePlanForWorkspace(w *workspace) workspaceRevivePlan {
+	if w.kindOrTerminal() == proto.WorkspaceKindRich {
+		plan := workspaceRevivePlan{rich: true, program: w.Program}
+		switch {
+		case w.AgentSessionID == "":
+			plan.missingSessionID = true
+		case agentcmd.ValidSessionID(w.AgentSessionID):
+			plan.resume = true
+			plan.agentSessionID = w.AgentSessionID
+		default:
+			plan.invalidSessionID = true
+		}
+		return plan
+	}
+
+	plan := workspaceRevivePlan{program: w.Program}
+	if w.copilotResumable() && w.AgentSessionID != "" {
+		if agentcmd.ValidSessionID(w.AgentSessionID) {
+			plan.program = agentcmd.ResumeFlagCommand(w.Program, w.AgentSessionID)
+		} else {
+			plan.invalidSessionID = true
+		}
+	}
+	return plan
+}
+
+// toInfo builds the wire WorkspaceInfo for w. regenerating/phase are passed in
+// (rather than read from m.regens) so this can run WITHOUT holding m.mu: list
+// snapshots them under m.mu and then releases it before this per-session work. It
+// still reads live session state (host.mu via getSession), the run manager, and
+// the diff cache, each behind its own short-lived lock. [#6]
+func (m *workspaceManager) toInfo(w *workspace, regenerating bool, phase string) proto.WorkspaceInfo {
 	alive := false
 	busy, waiting := false, false
 	var lastOutMs int64
@@ -480,10 +557,6 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		alive = s.alive()
 		busy, waiting = s.agentStatus()
 		lastOutMs = s.lastOutputUnixMs()
-	}
-	regenerating, phase := false, ""
-	if regen, ok := m.regens[w.ID]; ok {
-		regenerating, phase = true, regen.phase
 	}
 	running, previewURL := m.host.runs.info(w.ID)
 	// Diff stats are served from the cache populated by the background refresher,
@@ -498,7 +571,18 @@ func (m *workspaceManager) toInfo(w *workspace) proto.WorkspaceInfo {
 		Busy: busy, Waiting: waiting,
 		Regenerating: regenerating, RegenPhase: phase, Shell: w.Shell,
 		HasWorktree: !w.NoWorktree,
+		Kind:        w.kindOrTerminal(),
+		RepoKey:     canonRepoKey(w.RepoPath),
 	}
+}
+
+// regenInfoLocked reports whether a workspace is regenerating and its phase.
+// Callers must hold m.mu.
+func (m *workspaceManager) regenInfoLocked(id string) (regenerating bool, phase string) {
+	if regen, ok := m.regens[id]; ok {
+		return true, regen.phase
+	}
+	return false, ""
 }
 
 // --- diff stat cache (kept warm off the request path) ---
@@ -511,6 +595,22 @@ func (m *workspaceManager) cachedDiffFor(id string) (added, removed int) {
 	defer m.diffMu.Unlock()
 	d := m.diffCache[id]
 	return d.added, d.removed
+}
+
+// cachedFilesFor returns the last-known changed-file list for a workspace and
+// whether the refresher has computed it yet. The WorkspaceDiff handler serves
+// this so the Changes-tab poll never spawns git on the serial request path; a
+// cold miss (ok == false) tells the caller to fall back to a live compute. The
+// stored slice is replaced wholesale on each refresh and never mutated in place,
+// so returning it without copying is race-free. [#5]
+func (m *workspaceManager) cachedFilesFor(id string) (files []proto.FileDiffInfo, ok bool) {
+	m.diffMu.Lock()
+	defer m.diffMu.Unlock()
+	d, ok := m.diffCache[id]
+	if !ok {
+		return nil, false
+	}
+	return d.files, true
 }
 
 // startDiffRefresh launches the background goroutine that keeps diffCache warm.
@@ -537,8 +637,9 @@ func (m *workspaceManager) diffRefreshLoop() {
 	}
 }
 
-// refreshAllDiffs recomputes diff stats for every current workspace without
-// holding m.mu during the git work, then stores the results and drops stale keys.
+// refreshAllDiffs recomputes diff results for every current workspace without
+// holding m.mu during the git work, then prunes entries for archived workspaces,
+// so ListWorkspaces and WorkspaceDiff are always fast cache reads.
 func (m *workspaceManager) refreshAllDiffs() {
 	m.mu.Lock()
 	type job struct {
@@ -553,20 +654,47 @@ func (m *workspaceManager) refreshAllDiffs() {
 	}
 	m.mu.Unlock()
 
-	for _, j := range jobs {
-		select {
-		case <-m.host.shutdownCh:
-			return
-		default:
+	// Run the per-workspace git work in a bounded worker pool instead of strictly
+	// sequentially. Each workspace spawns git (`git add -N .` then `git diff`), and
+	// on Windows every CreateProcess is costly, so N workspaces previously cost
+	// N*(two-process latency) on every ~4s tick — serialized on this single
+	// goroutine. A small pool (half the CPUs, min 1) overlaps that I/O-bound work
+	// without oversubscribing the machine the user is also coding on. [#4a]
+	if len(jobs) > 0 {
+		workers := runtime.NumCPU() / 2
+		if workers < 1 {
+			workers = 1
 		}
-		stats := j.wt.DiffNumstatTimeout(diffComputeTimeout)
-		if stats == nil || stats.Error != nil {
-			// Keep the previous value on error/timeout rather than flapping to 0.
-			continue
+		if workers > len(jobs) {
+			workers = len(jobs)
 		}
-		m.diffMu.Lock()
-		m.diffCache[j.id] = cachedDiff{added: stats.Added, removed: stats.Removed}
-		m.diffMu.Unlock()
+		ch := make(chan job)
+		var wg sync.WaitGroup
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer recoverGoroutine("workspace.refreshDiffWorker")
+				for j := range ch {
+					select {
+					case <-m.host.shutdownCh:
+						continue // drain remaining jobs without spawning git
+					default:
+					}
+					m.refreshOneDiff(j.id, j.wt)
+				}
+			}()
+		}
+	feed:
+		for _, j := range jobs {
+			select {
+			case <-m.host.shutdownCh:
+				break feed
+			case ch <- j:
+			}
+		}
+		close(ch)
+		wg.Wait()
 	}
 
 	// Drop cache entries for workspaces that no longer exist.
@@ -579,14 +707,54 @@ func (m *workspaceManager) refreshAllDiffs() {
 	m.diffMu.Unlock()
 }
 
+// refreshOneDiff recomputes one workspace's changed files (and the derived
+// added/removed totals) from a single `git diff --numstat` and stores them in the
+// cache. On error/timeout it keeps the previous value rather than flapping to
+// zero. The totals equal parseNumstat's (binary files contribute 0), so the
+// sidebar counts are unchanged by sourcing them here. [#4a/#5]
+func (m *workspaceManager) refreshOneDiff(id string, wt *git.GitWorktree) {
+	files, err := wt.ChangedFilesTimeout(diffComputeTimeout)
+	if err != nil {
+		return
+	}
+	added, removed := 0, 0
+	infos := make([]proto.FileDiffInfo, 0, len(files))
+	for _, f := range files {
+		added += f.Added
+		removed += f.Removed
+		infos = append(infos, proto.FileDiffInfo{Path: f.Path, Added: f.Added, Removed: f.Removed})
+	}
+	m.diffMu.Lock()
+	m.diffCache[id] = cachedDiff{added: added, removed: removed, files: infos}
+	m.diffMu.Unlock()
+}
+
 // --- RPC handlers ---
 
 func (m *workspaceManager) list(req *proto.Request) *proto.Response {
+	// Snapshot a value copy of each workspace plus its regen state under m.mu, then
+	// release m.mu BEFORE the per-session work. Previously m.mu was held across every
+	// toInfo call, and each toInfo separately RLocked host.mu (getSession) and
+	// touched the run manager + diff cache — so one slow session/run/diff lookup
+	// blocked all workspace mutations (create/archive/regenerate) for the whole list.
+	// The workspace struct has only scalar fields, so the value copies are
+	// self-contained and race-free to read after the unlock. [#6]
+	type snapshot struct {
+		w            workspace
+		regenerating bool
+		phase        string
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]proto.WorkspaceInfo, 0, len(m.wss))
+	snaps := make([]snapshot, 0, len(m.wss))
 	for _, w := range m.wss {
-		out = append(out, m.toInfo(w))
+		regenerating, phase := m.regenInfoLocked(w.ID)
+		snaps = append(snaps, snapshot{w: *w, regenerating: regenerating, phase: phase})
+	}
+	m.mu.Unlock()
+
+	out := make([]proto.WorkspaceInfo, 0, len(snaps))
+	for i := range snaps {
+		out = append(out, m.toInfo(&snaps[i].w, snaps[i].regenerating, snaps[i].phase))
 	}
 	// Map iteration order is random; sort by creation time (then ID) so the list
 	// is stable across polls and the sidebar doesn't reshuffle.
@@ -601,12 +769,16 @@ func (m *workspaceManager) list(req *proto.Request) *proto.Response {
 
 func (m *workspaceManager) get(req *proto.Request) *proto.Response {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	w, ok := m.wss[req.WorkspaceID]
 	if !ok {
+		m.mu.Unlock()
 		return proto.Errorf(req.ID, "no such workspace: %s", req.WorkspaceID)
 	}
-	info := m.toInfo(w)
+	// Snapshot under m.mu, then release before the per-session toInfo work. [#6]
+	wCopy := *w
+	regenerating, phase := m.regenInfoLocked(w.ID)
+	m.mu.Unlock()
+	info := m.toInfo(&wCopy, regenerating, phase)
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
 
@@ -647,15 +819,26 @@ func (m *workspaceManager) reviveBySession(sessionName string, cols, rows int) (
 	// tampered workspaces.json could otherwise smuggle a poisoned id back into
 	// the launch path (F-01); if it no longer passes the trust-boundary gate we
 	// launch fresh (no resume) rather than trusting stored state.
-	program := w.Program
-	if w.copilotResumable() && w.AgentSessionID != "" {
-		if agentcmd.ValidSessionID(w.AgentSessionID) {
-			program = agentcmd.ResumeFlagCommand(w.Program, w.AgentSessionID)
-		} else {
-			m.host.logger.Printf("workspace %s: rejecting invalid persisted AgentSessionID %q; launching without resume", w.ID, w.AgentSessionID)
-		}
+	plan := revivePlanForWorkspace(w)
+	if plan.invalidSessionID {
+		m.host.logger.Printf("workspace %s: rejecting invalid persisted AgentSessionID %q; launching without resume", w.ID, w.AgentSessionID)
 	}
-	if err := m.host.startManagedSessionWithShell(w.SessionName, program, w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
+	if plan.missingSessionID {
+		m.host.logger.Printf("workspace %s: missing persisted AgentSessionID; launching without resume", w.ID)
+	}
+	if plan.rich {
+		extraMCP := m.enabledMCPFor(w.RepoPath)
+		if err := m.host.startSDKSession(sdkSessionParams{
+			name: w.SessionName, program: plan.program, workDir: w.WorktreePath,
+			autoYes: w.AutoYes, sessionID: plan.agentSessionID,
+			model: w.Model, effort: w.ReasoningEffort, contextTier: w.ContextTier,
+			resume: plan.resume, extraMCP: extraMCP,
+		}); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := m.host.startManagedSessionWithShell(w.SessionName, plan.program, w.WorktreePath, shell, cols, rows, w.AutoYes); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1158,8 +1341,9 @@ func tailRows(screen string, n int) string {
 }
 
 func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
-	var oldName, newName, program, worktree, agentSessionID, shell string
-	var autoYes bool
+	var oldName, newName, program, worktree, agentSessionID, shell, repoPath string
+	var model, effort, contextTier string
+	var autoYes, rich bool
 	m.mu.Lock()
 	w := m.wss[id]
 	if m.tombstone[id] || w == nil {
@@ -1174,11 +1358,40 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 		w.AgentSessionID = ""
 	}
 	newName, program, worktree, agentSessionID, autoYes, shell = w.SessionName, w.Program, w.WorktreePath, w.AgentSessionID, w.AutoYes, w.Shell
+	rich = w.kindOrTerminal() == proto.WorkspaceKindRich
+	model, effort, contextTier = w.Model, w.ReasoningEffort, w.ContextTier
+	repoPath = w.RepoPath
 	if shell == "" {
 		shell = "cmd"
 	}
 	m.saveLocked()
 	m.mu.Unlock()
+
+	// (Re)start using the same backend the workspace was created/revived with: the
+	// Copilot SDK ("rich") backend for a rich workspace, the ConPTY terminal backend
+	// otherwise. Previously this always used the terminal backend, so regenerating a
+	// rich workspace swapped its live session for a ConPTY one while metadata stayed
+	// Kind=rich, and the desktop's OpenRichStream then failed with "session is not a
+	// rich session" (richSession asserts *sdkSession). Regenerate is a FRESH
+	// conversation: AgentSessionID was rotated above and resume=false, so the rich
+	// path starts a new SDK session seeded with the user's persisted model selection.
+	// The closure reads newName by reference so the "session already exists" retry
+	// loop below (which rotates newName) reuses it. [#2]
+	// extraMCP is the per-repo Hangar MCP catalog overlay; repoPath was captured
+	// under the lock above and the catalog read is lock-free, so computing it once
+	// here (and reusing it across the retry loop) is safe. [#2]
+	extraMCP := m.enabledMCPFor(repoPath)
+	start := func() error {
+		if rich {
+			return m.host.startSDKSession(sdkSessionParams{
+				name: newName, program: program, workDir: worktree,
+				autoYes: autoYes, sessionID: agentSessionID,
+				model: model, effort: effort, contextTier: contextTier,
+				resume: false, extraMCP: extraMCP,
+			})
+		}
+		return m.host.startManagedSessionWithShell(newName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+	}
 
 	oldKilled := false
 	defer func() {
@@ -1191,7 +1404,7 @@ func (m *workspaceManager) restartAgent(id string, cols, rows int) error {
 
 	var lastErr error
 	for attempt := 0; attempt < 8; attempt++ {
-		err := m.host.startManagedSessionWithShell(newName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, sizeOr(cols, 120), sizeOr(rows, 30), autoYes)
+		err := start()
 		if err == nil {
 			return nil
 		}
@@ -1301,6 +1514,30 @@ func classifyProbeExit(err error) (found, isCopilot bool) {
 	return false, false
 }
 
+// richBackend reports whether a new workspace should use the Copilot SDK "rich"
+// backend: the client request or the server config opted in AND the agent is
+// Copilot. Off by default (both gates false), so terminal remains the default.
+func richBackend(reqRich, cfgEnabled, copilotAgent bool) bool {
+	return (reqRich || cfgEnabled) && copilotAgent
+}
+
+// startWorkspaceSession starts a workspace's agent session using the rich (Copilot
+// SDK) backend when rich is set, or the default ConPTY terminal backend otherwise.
+// repoPath is the workspace's repo root, used to resolve the per-repo Hangar MCP
+// catalog overlay for the rich backend (ignored by the terminal backend).
+func (m *workspaceManager) startWorkspaceSession(rich bool, sessionName, program, worktree, shell string, cols, rows int, autoYes bool, agentSessionID string, resume bool, repoPath string) error {
+	if rich {
+		// A fresh chat has no persisted model selection yet; pass empty model/effort/
+		// tier so the SDK uses its default. Revive threads the stored selection (v18).
+		return m.host.startSDKSession(sdkSessionParams{
+			name: sessionName, program: program, workDir: worktree,
+			autoYes: autoYes, sessionID: agentSessionID, resume: resume,
+			extraMCP: m.enabledMCPFor(repoPath),
+		})
+	}
+	return m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktree, shell, cols, rows, autoYes)
+}
+
 func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 	if req.RepoPath == "" {
 		return proto.Errorf(req.ID, "repoPath required")
@@ -1376,6 +1613,14 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 
 	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
 
+	// Route to the opt-in Copilot SDK "rich" backend when enabled (off by default);
+	// otherwise use the default ConPTY terminal backend.
+	rich := richBackend(req.Rich, cfg.CopilotRichView, copilotResume)
+	kind := ""
+	if rich {
+		kind = proto.WorkspaceKindRich
+	}
+
 	var (
 		repoPath, worktreePath, branch, baseSHA string
 		existingBranch                          bool
@@ -1398,7 +1643,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 			repoPath = dir
 		}
 		phase("resolve-folder")
-		if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), worktreePath, shell, cols, rows, req.AutoYes); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, worktreePath, shell, cols, rows, req.AutoYes, agentSessionID, false, repoPath); err != nil {
 			return proto.Errorf(req.ID, "start agent: %v", err)
 		}
 		phase("start-agent")
@@ -1422,7 +1667,7 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		}
 		phase("setup-worktree")
 
-		if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.SeedFlagCommand(program, agentSessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+		if err := m.startWorkspaceSession(rich, sessionName, program, wt.GetWorktreePath(), shell, cols, rows, req.AutoYes, agentSessionID, false, wt.GetRepoPath()); err != nil {
 			// Roll back the worktree so a failed create leaves no orphan.
 			_ = wt.Remove()
 			_ = wt.Prune()
@@ -1439,10 +1684,11 @@ func (m *workspaceManager) create(req *proto.Request) *proto.Response {
 		SessionName: sessionName, AutoYes: req.AutoYes, ExistingBranch: existingBranch,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: agentSessionID, Shell: shell,
 		CopilotResume: copilotResume, NoWorktree: req.NoWorktree,
+		Kind: kind,
 	}
 	m.mu.Lock()
 	m.wss[id] = w
-	info := m.toInfo(w)
+	info := m.toInfo(w, false, "")
 	m.saveLocked()
 	m.mu.Unlock()
 
@@ -1461,85 +1707,106 @@ func (m *workspaceManager) archive(req *proto.Request) *proto.Response {
 		m.mu.Unlock()
 		return &proto.Response{ID: req.ID, OK: true, Content: "archive already in progress"}
 	}
+	// If a regeneration is in flight, signal it to stop and capture its done
+	// channel; we wait on it in the background (never inline) before tearing the
+	// session down, so the FINAL (regen-rotated) session name is the one we kill.
 	var done chan struct{}
 	if regen := m.regens[w.ID]; regen != nil {
 		m.tombstone[w.ID] = true
 		regen.closeOnce.Do(func() { close(regen.force) })
 		done = regen.done
 	}
-	m.mu.Unlock()
-
-	if done != nil {
-		select {
-		case <-done:
-		case <-time.After(60 * time.Second):
-		case <-m.host.shutdownCh:
-		}
-	}
-
-	m.mu.Lock()
-	w, ok = m.wss[req.WorkspaceID]
-	if !ok {
-		delete(m.tombstone, req.WorkspaceID)
-		m.mu.Unlock()
-		return &proto.Response{ID: req.ID, OK: true}
-	}
+	// Remove from the registry NOW so ListWorkspaces reflects the deletion on the
+	// next poll, then return immediately. The previous code waited INLINE on
+	// regen.done (up to 60s) before removing + tearing down, which stalled every
+	// other RPC on the serial control connection (see handleConn) for the whole
+	// regen wind-down. The tombstone stays set until the background teardown
+	// completes so a concurrent archive is a no-op and an in-flight regen keeps
+	// seeing the cancellation. [#3]
 	delete(m.wss, w.ID)
-	delete(m.tombstone, w.ID)
-	sessionName := w.SessionName
 	m.saveLocked()
 	m.mu.Unlock()
 
-	// Three-phase archive:
-	// 1. Stop agent: remove from manager + stop run + kill session
-	// 2. Optional filesystem cleanup (if DeleteWorktree == true)
-	// 3. Persist state
+	deleteWorktree := req.DeleteWorktree
 
-	// Phase 1: Stop the agent session
-	m.host.runs.stop(w.ID)
-	m.host.killSession(sessionName)
+	// Tear down the agent session and (optionally) its worktree in the background.
+	// This is the slow part (regen wind-down + process kill + RemoveAll + git), and
+	// the host handles a connection's requests serially (see handleConn), so doing
+	// it inline would block ListWorkspaces polling and AttachSession for every other
+	// chat until it finished. The workspace is already removed from the registry +
+	// persisted above, so the list reflects the deletion immediately; only the
+	// teardown is deferred. Mirrors the runAttach / runRichStream "return fast, work
+	// in a goroutine" pattern.
+	go func() {
+		defer recoverGoroutine("workspace.archiveTeardown")
 
-	// Phase 2: Optional worktree/branch deletion. An in-place session never owns
-	// a managed worktree or branch (WorktreePath is the user's folder), so we must
-	// never delete anything for it — archiving only stops the agent.
-	switch {
-	case w.NoWorktree:
-		m.host.logger.Printf("archived in-place workspace %q (%s) - left folder %s untouched", w.Title, w.ID, w.WorktreePath)
-	case req.DeleteWorktree:
-		wt := w.worktreeFor()
-
-		// Refuse to delete a worktree path that is not contained within the
-		// managed worktrees directory. workspaces.json is untrusted on-disk
-		// state, so a poisoned worktreePath must never reach a destructive
-		// `git worktree remove`/RemoveAll here (F-09).
-		if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
-			m.host.logger.Printf("SECURITY: refusing to delete uncontained worktree %q for workspace %s: %v", w.WorktreePath, w.ID, err)
-			return proto.Errorf(req.ID, "refusing to delete unsafe worktree path: %v", err)
-		}
-
-		// Remove worktree directory (retry loop for Windows handle release)
-		for i := 0; i < 10; i++ {
-			if err := wt.Remove(); err == nil {
-				break
+		// Wait for an in-flight regeneration to wind down before tearing the session
+		// down, so we kill the final (possibly rotated) session and leave no zombie.
+		// This wait used to run inline on the serial control pipe. [#3]
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(60 * time.Second):
+			case <-m.host.shutdownCh:
 			}
-			time.Sleep(150 * time.Millisecond)
 		}
 
-		// Prune worktree references
-		_ = wt.Prune()
+		// Re-read the (possibly regen-rotated) session name now that the regen has
+		// stopped mutating it, and clear the tombstone. restartAgent mutates the
+		// workspace in place (never replaces the pointer), so the captured w is the
+		// same object the regen rotated.
+		m.mu.Lock()
+		sessionName := w.SessionName
+		delete(m.tombstone, w.ID)
+		m.mu.Unlock()
 
-		// Best-effort branch deletion (local only, non-fatal if fails)
-		// We use git CLI directly here instead of worktree methods
-		cmd := exec.Command("git", "-C", w.RepoPath, "branch", "-D", w.Branch)
-		_ = cmd.Run() // Ignore errors - branch might not exist locally
+		// Phase 1: Stop the agent session.
+		m.host.runs.stop(w.ID)
+		m.host.killSession(sessionName)
 
-		m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
-	default:
-		// Keep worktree and branch - just prune references
-		wt := w.worktreeFor()
-		_ = wt.Prune()
-		m.host.logger.Printf("archived workspace %q (%s) - kept worktree and branch %s", w.Title, w.ID, w.Branch)
-	}
+		// Phase 2: Optional worktree/branch deletion. An in-place session never owns
+		// a managed worktree or branch (WorktreePath is the user's folder), so we must
+		// never delete anything for it — archiving only stops the agent.
+		switch {
+		case w.NoWorktree:
+			m.host.logger.Printf("archived in-place workspace %q (%s) - left folder %s untouched", w.Title, w.ID, w.WorktreePath)
+		case deleteWorktree:
+			wt := w.worktreeFor()
+
+			// Refuse to delete a worktree path that is not contained within the
+			// managed worktrees directory. workspaces.json is untrusted on-disk
+			// state, so a poisoned worktreePath must never reach a destructive
+			// `git worktree remove`/RemoveAll here (F-09). We have already returned
+			// OK to the client, so log and skip rather than surfacing an RPC error.
+			if err := git.AssertWorktreePathContained(w.WorktreePath); err != nil {
+				m.host.logger.Printf("SECURITY: refusing to delete uncontained worktree %q for workspace %s: %v", w.WorktreePath, w.ID, err)
+				return
+			}
+
+			// Remove worktree directory (retry loop for Windows handle release)
+			for i := 0; i < 10; i++ {
+				if err := wt.Remove(); err == nil {
+					break
+				}
+				time.Sleep(150 * time.Millisecond)
+			}
+
+			// Prune worktree references
+			_ = wt.Prune()
+
+			// Best-effort branch deletion (local only, non-fatal if fails)
+			// We use git CLI directly here instead of worktree methods
+			cmd := exec.Command("git", "-C", w.RepoPath, "branch", "-D", w.Branch)
+			_ = cmd.Run() // Ignore errors - branch might not exist locally
+
+			m.host.logger.Printf("archived workspace %q (%s) - deleted worktree and branch %s", w.Title, w.ID, w.Branch)
+		default:
+			// Keep worktree and branch - just prune references
+			wt := w.worktreeFor()
+			_ = wt.Prune()
+			m.host.logger.Printf("archived workspace %q (%s) - kept worktree and branch %s", w.Title, w.ID, w.Branch)
+		}
+	}()
 
 	return &proto.Response{ID: req.ID, OK: true}
 }
@@ -1558,6 +1825,13 @@ func (m *workspaceManager) diff(req *proto.Request) *proto.Response {
 			return proto.Errorf(req.ID, "file diff: %v", err)
 		}
 		return &proto.Response{ID: req.ID, OK: true, Diff: d}
+	}
+	// Serve the changed-files list from the cache the background refresher keeps
+	// warm, so the Changes-tab 2.5s poll never spawns git on the serial control
+	// pipe. Fall back to a live compute on a cold miss — a just-created workspace
+	// the refresher has not visited yet, or unit tests where it is not running. [#5]
+	if files, ok := m.cachedFilesFor(w.ID); ok {
+		return &proto.Response{ID: req.ID, OK: true, Files: files}
 	}
 	files, err := wt.ChangedFiles()
 	if err != nil {
@@ -1675,8 +1949,9 @@ func (m *workspaceManager) updateWorkspace(req *proto.Request) *proto.Response {
 	if req.Shell != "" {
 		w.Shell = req.Shell
 	}
+	regenerating, phase := m.regenInfoLocked(w.ID)
 	m.saveLocked()
-	info := m.toInfo(w)
+	info := m.toInfo(w, regenerating, phase)
 	m.mu.Unlock()
 	return &proto.Response{ID: req.ID, OK: true, Workspace: &info}
 }
@@ -1765,10 +2040,14 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 	repoPath = absRepo
 
 	cfg := config.LoadConfig()
-	// These are Copilot sessions — always use "copilot" for the resume command
-	// (even if the user's default program is a wrapper like "cpa"). The workspace
-	// stores the user's configured program so regenerate uses their preference.
-	resumeProgram := "copilot"
+	// A browser-resumed Copilot session is a rich (Copilot SDK) chat. Start it
+	// through the SDK backend so the live session is actually a *sdkSession — the
+	// desktop then calls OpenRichStream, which asserts exactly that. Previously this
+	// started a TERMINAL ConPTY session yet persisted Kind=rich below, so
+	// host.richSession's type assertion failed with "session is not a rich session".
+	// The SDK launches copilot internally and resumes via the session id, so no
+	// resume command line is built; displayProgram is the user's configured program,
+	// kept as session metadata so a later regenerate uses their preference. [#1]
 	displayProgram := cfg.GetProgram()
 
 	shell := req.Shell
@@ -1796,8 +2075,11 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 		return proto.Errorf(req.ID, "create worktree: %v", err)
 	}
 
-	cols, rows := sizeOr(req.Cols, 120), sizeOr(req.Rows, 30)
-	if err := m.host.startManagedSessionWithShell(sessionName, agentcmd.ResumeCommand(resumeProgram, req.SessionID), wt.GetWorktreePath(), shell, cols, rows, req.AutoYes); err != nil {
+	extraMCP := m.enabledMCPFor(wt.GetRepoPath())
+	if err := m.host.startSDKSession(sdkSessionParams{
+		name: sessionName, program: displayProgram, workDir: wt.GetWorktreePath(),
+		autoYes: req.AutoYes, sessionID: req.SessionID, resume: true, extraMCP: extraMCP,
+	}); err != nil {
 		_ = wt.Remove()
 		_ = wt.Prune()
 		return proto.Errorf(req.ID, "start agent: %v", err)
@@ -1809,10 +2091,15 @@ func (m *workspaceManager) resumeCopilotSession(req *proto.Request) *proto.Respo
 		SessionName: sessionName, AutoYes: req.AutoYes,
 		CreatedUnix: time.Now().Unix(), AgentSessionID: req.SessionID, Shell: shell,
 		CopilotResume: true,
+		// A browser-resumed Copilot session is a rich (SDK) chat, so tag it as
+		// such. Without this the struct defaults Kind to "" -> kindOrTerminal()
+		// reports "terminal" and the workspace is filtered out of AgentMode (the
+		// normal create path sets Kind too).
+		Kind: proto.WorkspaceKindRich,
 	}
 	m.mu.Lock()
 	m.wss[id] = w
-	info := m.toInfo(w)
+	info := m.toInfo(w, false, "")
 	m.saveLocked()
 	m.mu.Unlock()
 

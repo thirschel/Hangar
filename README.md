@@ -58,6 +58,8 @@ Agents keep working and auto-accept prompts even while the desktop app or TUI is
 
 ![Copilot Session Browser](web/public/browser.png)
 
+**Rich agent view (experimental, Windows)** — for GitHub Copilot CLI sessions, optionally render a structured chat transcript (streaming assistant text, reasoning, tool cards, MCP server status, and inline permission & `ask_user` prompts) driven by the official Copilot SDK instead of the raw terminal. Opt in per workspace from the **New workspace** dialog, or globally via `copilot_rich_view` in `config.json`; the terminal backend stays the default for every agent. See [`docs/rich-agent-view.md`](docs/rich-agent-view.md).
+
 **Regenerate with handoff** — restart an agent in place, optionally writing a HANDOFF.md so the fresh agent keeps its context.
 
 ![Regenerate an agent with an optional handoff document](web/public/regenerate.png)
