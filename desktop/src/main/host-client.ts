@@ -467,7 +467,10 @@ export class ControlClient {
         this.socket.destroy(error instanceof Error ? error : new Error(String(error)));
       }
     });
-    socket.once('error', (error) => this.rejectAll(error));
+    socket.once('error', (error) => {
+      this.closed = true;
+      this.rejectAll(error);
+    });
     socket.once('close', () => {
       this.closed = true;
       this.rejectAll(new Error('control pipe closed'));
@@ -496,9 +499,15 @@ export class ControlClient {
       }
       this.pending.set(id, pending);
       this.socket.write(frame(Buffer.from(JSON.stringify(payload), 'utf8')), (error) => {
-        if (error && this.pending.delete(id)) {
-          if (pending.timer) clearTimeout(pending.timer);
-          reject(error);
+        if (error) {
+          // A write failure (e.g. EOF once the daemon went away) means this pipe is
+          // dead; mark the client closed so getControlClient reconnects next call
+          // instead of handing back this dead client again.
+          this.closed = true;
+          if (this.pending.delete(id)) {
+            if (pending.timer) clearTimeout(pending.timer);
+            reject(error);
+          }
         }
       });
     });

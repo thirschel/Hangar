@@ -380,6 +380,21 @@ async function getReadControlClient(): Promise<ControlClient> {
   return readSetupPromise;
 }
 
+// callControl runs a command-client RPC with one reconnect-retry. ControlClient
+// marks itself closed on any pipe failure (write/socket error), so if fn fails on
+// a dropped pipe we drop the dead client and retry once on a fresh connection. A
+// still-open client (a genuine RPC error, or a call timeout on a live pipe)
+// rethrows immediately so real errors aren't masked and a timeout isn't doubled.
+async function callControl<T>(fn: (client: ControlClient) => Promise<T>): Promise<T> {
+  const client = await getControlClient();
+  try {
+    return await fn(client);
+  } catch (err) {
+    if (!client.isClosed()) throw err;
+    return fn(await getControlClient());
+  }
+}
+
 // attachSession opens a live stream to a daemon session (agent or shell) by name.
 // Streams are keyed by session so multiple can run at once; data/close/error are
 // reported to the renderer tagged with the session name. Re-attaching an already
@@ -395,13 +410,12 @@ async function attachSession(
   // it too; capture it now to detect the race after the awaits complete.
   const gen = (attachGenerations.get(sessionName) ?? 0) + 1;
   attachGenerations.set(sessionName, gen);
-  const client = await getControlClient();
   if (attachments.has(sessionName)) {
     log.info('attachSession already attached', { session: sessionName, elapsedMs: Date.now() - start });
     return { id: 0, ok: true };
   }
 
-  const attached = await client.call({ method: 'Attach', session: sessionName, cols, rows });
+  const attached = await callControl((c) => c.call({ method: 'Attach', session: sessionName, cols, rows }));
   log.info('attachSession Attach result', { session: sessionName, ...describeResponse(attached) });
   if (!attached.ok || !attached.attachPipe || !attached.attachToken) {
     throw new Error(`Attach: ${attached.error || 'missing attach pipe/token'}`);
@@ -453,7 +467,7 @@ async function attachSession(
     attachments.delete(sessionName);
     log.info('attachSession socket close', { session: sessionName, totalBytes: dataStats.total });
     try {
-      const has = await client.call({ method: 'HasSession', session: sessionName });
+      const has = await callControl((c) => c.call({ method: 'HasSession', session: sessionName }));
       const payload = has.exitCode === undefined ? { session: sessionName } : { session: sessionName, exitCode: has.exitCode };
       sendToRenderer('term:closed', payload);
     } catch (error) {
@@ -498,14 +512,13 @@ async function openRichStream(
   // it too; capture it now to detect the race after the awaits complete.
   const gen = (richStreamGenerations.get(sessionName) ?? 0) + 1;
   richStreamGenerations.set(sessionName, gen);
-  const client = await getControlClient();
   const existing = eventStreams.get(sessionName);
   if (existing) {
     existing.destroy();
     eventStreams.delete(sessionName);
   }
 
-  const stream = await client.openRichStream(sessionName, since);
+  const stream = await callControl((c) => c.openRichStream(sessionName, since));
   const socket = await connectEventStream(
     stream.attachPipe,
     stream.attachToken,
@@ -715,14 +728,12 @@ ipcMain.handle(
     _event,
     args: { session: string; message: string; attachments?: string[] },
   ): Promise<void> => {
-    const client = await getControlClient();
-    await client.sendMessage(args.session, args.message, args.attachments);
+    await callControl((c) => c.sendMessage(args.session, args.message, args.attachments));
   },
 );
 
 ipcMain.handle('rich:abort-turn', async (_event, session: string): Promise<void> => {
-  const client = await getControlClient();
-  await client.abortTurn(session);
+  await callControl((c) => c.abortTurn(session));
 });
 
 ipcMain.handle(
@@ -731,8 +742,7 @@ ipcMain.handle(
     _event,
     args: { session: string; requestId: string; decision: 'approve' | 'reject' },
   ): Promise<void> => {
-    const client = await getControlClient();
-    await client.respondPermission(args.session, args.requestId, args.decision);
+    await callControl((c) => c.respondPermission(args.session, args.requestId, args.decision));
   },
 );
 
@@ -742,19 +752,16 @@ ipcMain.handle(
     _event,
     args: { session: string; requestId: string; answer: string; wasFreeform: boolean },
   ): Promise<void> => {
-    const client = await getControlClient();
-    await client.respondUserInput(args.session, args.requestId, args.answer, args.wasFreeform);
+    await callControl((c) => c.respondUserInput(args.session, args.requestId, args.answer, args.wasFreeform));
   },
 );
 
 ipcMain.handle('rich:get-transcript', async (_event, args: { session: string; since?: number }): Promise<EventFrame[]> => {
-  const client = await getControlClient();
-  return client.getTranscript(args.session, args.since ?? 0);
+  return callControl((c) => c.getTranscript(args.session, args.since ?? 0));
 });
 
 ipcMain.handle('rich:list-models', async (_event, session: string): Promise<ModelInfo[]> => {
-  const client = await getControlClient();
-  return client.listModels(session);
+  return callControl((c) => c.listModels(session));
 });
 
 ipcMain.handle(
@@ -763,8 +770,7 @@ ipcMain.handle(
     _event,
     args: { session: string; modelId: string; effort?: string; contextTier?: string },
   ): Promise<void> => {
-    const client = await getControlClient();
-    await client.setModel(args.session, args.modelId, args.effort, args.contextTier);
+    await callControl((c) => c.setModel(args.session, args.modelId, args.effort, args.contextTier));
   },
 );
 
@@ -774,14 +780,15 @@ ipcMain.handle(
     _event,
     args: { session: string; includeScreen?: boolean; cols?: number; rows?: number },
   ): Promise<{ ansi: string; altScreen: boolean; scrollbackLines: number }> => {
-    const client = await getControlClient();
-    const r = await client.call({
-      method: 'CaptureHistory',
-      session: args.session,
-      includeScreen: args.includeScreen ?? false,
-      cols: args.cols,
-      rows: args.rows,
-    });
+    const r = await callControl((c) =>
+      c.call({
+        method: 'CaptureHistory',
+        session: args.session,
+        includeScreen: args.includeScreen ?? false,
+        cols: args.cols,
+        rows: args.rows,
+      }),
+    );
     if (!r.ok) {
       // A workspace session that isn't live yet (e.g. just after a daemon
       // restart, before attach revives it) has no scrollback to prime. Treat

@@ -13,13 +13,14 @@ vi.mock('node:child_process', () => ({
 class MockSocket extends EventEmitter {
   public readonly writes: Buffer[] = [];
   public ended = false;
+  public writeError: Error | null = null;
 
   public write(
     chunk: string | Uint8Array,
     callback?: ((error: Error | null | undefined) => void) | undefined,
   ): boolean {
     this.writes.push(Buffer.isBuffer(chunk) ? Buffer.from(chunk) : Buffer.from(chunk));
-    callback?.(undefined);
+    callback?.(this.writeError ?? undefined);
     return true;
   }
 
@@ -261,6 +262,21 @@ describe('ControlClient', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('marks itself closed when a write fails so getControlClient can reconnect', async () => {
+    const socket = new MockSocket();
+    socket.writeError = new Error('write EOF');
+    const client = new ControlClient(socket as unknown as net.Socket);
+    await expect(client.call({ method: 'Hello' })).rejects.toThrow(/write EOF/);
+    expect(client.isClosed()).toBe(true);
+  });
+
+  it('marks itself closed on a socket error', () => {
+    const socket = new MockSocket();
+    const client = new ControlClient(socket as unknown as net.Socket);
+    socket.emit('error', new Error('pipe error'));
+    expect(client.isClosed()).toBe(true);
   });
 });
 
