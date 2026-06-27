@@ -257,6 +257,17 @@ const eventStreams = new Map<string, net.Socket>();
 // daemon-persisted shell is left intact.
 const shellSessionPrograms = new Map<string, string>();
 let setupPromise: Promise<ControlClient> | null = null;
+// Dedicated SECOND control connection used ONLY for the high-frequency workspace
+// list poll (ListWorkspaces). The host serves each pipe connection on its own
+// goroutine, so routing the poll here keeps the sidebar/list refresh responsive
+// even while a slow mutation (CreateWorkspace, OpenRichStream, …) is in flight on
+// the primary command connection. Reads are idempotent/eventually-consistent, so
+// racing a just-issued write on the other connection is harmless. See getReadControlClient.
+let readControl: ControlClient | null = null;
+let readSetupPromise: Promise<ControlClient> | null = null;
+// Control methods routed to the read connection. Keep to idempotent, high-frequency
+// polls; everything else (mutations, rich ops, attaches) stays on the command client.
+const READ_POLL_METHODS = new Set<string>(['ListWorkspaces']);
 let isQuitting = false;
 // Set once the quit teardown (host shutdown + cleanup) has run, so the second
 // `before-quit` pass — the one we re-issue after the async teardown — is allowed
@@ -321,6 +332,45 @@ async function getControlClient(): Promise<ControlClient> {
     })();
   }
   return setupPromise;
+}
+
+// getReadControlClient returns a SECOND authenticated control connection dedicated
+// to the workspace-list poll (see READ_POLL_METHODS). It mirrors getControlClient
+// but keeps its own client/setup state so the two connections reconnect
+// independently; it intentionally does not emit 'cs:ready' (the primary owns that).
+async function getReadControlClient(): Promise<ControlClient> {
+  if (readControl && !readControl.isClosed()) {
+    return readControl;
+  }
+  // Drop a dead client so a daemon restart triggers a fresh connect.
+  readControl = null;
+  if (!readSetupPromise) {
+    readSetupPromise = (async () => {
+      try {
+        // Ensure the host is spawned and the primary command connection is up first,
+        // so this second connection never races host creation (avoids double-spawn);
+        // ensureHost then just reuses the now-running host.
+        await getControlClient();
+        const hostInfo = await ensureHost(CS_EXE, { verbose: hostVerbose() });
+        const client = new ControlClient(await connectPipe(hostInfo.pipeName));
+        try {
+          const clientNonce = randomClientNonce();
+          const hello = await client.call({ method: 'Hello', clientVersion: PROTO_VERSION, clientNonce });
+          verifyAuthenticatedHello(hostInfo, clientNonce, hello);
+          log.info('Hello (read) ->', hello.hostVersion, hello.ok);
+          readControl = client;
+          return client;
+        } catch (error) {
+          client.close();
+          throw error;
+        }
+      } finally {
+        // Always clear the in-flight promise so a future reconnect can re-run setup.
+        readSetupPromise = null;
+      }
+    })();
+  }
+  return readSetupPromise;
 }
 
 // attachSession opens a live stream to a daemon session (agent or shell) by name.
@@ -546,11 +596,14 @@ function sendToRenderer(channel: string, payload?: unknown): void {
 }
 
 ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
+  // High-frequency idempotent polls go on a dedicated read connection so a slow
+  // mutation in flight on the command connection can't head-of-line-block them.
+  const useRead = !!request.method && READ_POLL_METHODS.has(request.method);
   const callHost = async (): Promise<Response> => {
-    const client = await getControlClient();
-    if (request.method === 'Hello' && authenticatedHello) {
+    if (!useRead && request.method === 'Hello' && authenticatedHello) {
       return authenticatedHello;
     }
+    const client = useRead ? await getReadControlClient() : await getControlClient();
     return client.call(request);
   };
 
@@ -560,7 +613,9 @@ ipcMain.handle('cs:call', async (_event, request: Omit<Request, 'id'>) => {
     response = await callHost();
   } catch {
     // If the pipe dropped (daemon restarted), reconnect and retry once.
-    if (control?.isClosed()) {
+    if (useRead) {
+      if (readControl?.isClosed()) readControl = null;
+    } else if (control?.isClosed()) {
       control = null;
       authenticatedHello = null;
     }
@@ -1159,6 +1214,10 @@ async function finalizeQuit(): Promise<void> {
     if (control) {
       control.close();
       control = null;
+    }
+    if (readControl) {
+      readControl.close();
+      readControl = null;
     }
   } catch (error) {
     log.error('finalizeQuit error', error);

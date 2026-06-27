@@ -120,9 +120,27 @@ func newSDKSession(p sdkSessionParams, onEvent func(copilot.SessionEvent), logge
 	return s
 }
 
+// slowPhaseThreshold: log a start/resume sub-phase that takes at least this long
+// so the dominant cost of a slow rich start is visible in host.log (Fix 0 — pin
+// what makes a resume slow: the SDK Resume/Start handshake, the transcript fetch,
+// the replay loop, or the instructions/agents/skills RPC pulls). The host
+// separately logs the whole dispatch when >= slowDispatchThreshold (750ms).
+const slowPhaseThreshold = 400 * time.Millisecond
+
+// logPhase logs the elapsed time since t0 for a named start/resume sub-phase when
+// it is at least slowPhaseThreshold.
+func (s *sdkSession) logPhase(phase string, t0 time.Time, err error) {
+	if d := time.Since(t0); d >= slowPhaseThreshold {
+		s.logf("sdk session %q phase %q took %s (err=%v)", s.name, phase, d.Round(time.Millisecond), err)
+	}
+}
+
 func (s *sdkSession) start() error {
 	s.beginMCPStartupBuffer()
-	if err := s.sess.Start(s.ctx); err != nil {
+	t0 := time.Now()
+	err := s.sess.Start(s.ctx)
+	s.logPhase("create", t0, err)
+	if err != nil {
 		s.cancelMCPStartupBuffer()
 		return err
 	}
@@ -137,13 +155,19 @@ func (s *sdkSession) start() error {
 
 func (s *sdkSession) startResumed() error {
 	s.beginMCPStartupBuffer()
-	if err := s.sess.Resume(s.ctx); err != nil {
+	tResume := time.Now()
+	rerr := s.sess.Resume(s.ctx)
+	s.logPhase("resume", tResume, rerr)
+	if rerr != nil {
 		s.cancelMCPStartupBuffer()
-		s.logf("SDK resume failed for session %q: %v; starting fresh", s.name, err)
+		s.logf("SDK resume failed for session %q: %v; starting fresh", s.name, rerr)
 		s.beginMCPStartupBuffer()
-		if startErr := s.sess.Start(s.ctx); startErr != nil {
+		tFresh := time.Now()
+		startErr := s.sess.Start(s.ctx)
+		s.logPhase("resume-fresh-start", tFresh, startErr)
+		if startErr != nil {
 			s.cancelMCPStartupBuffer()
-			return fmt.Errorf("resume sdk session: %v; fresh start: %w", err, startErr)
+			return fmt.Errorf("resume sdk session: %v; fresh start: %w", rerr, startErr)
 		}
 		s.emitConfiguredMCPServersPending()
 		s.flushMCPStartupBuffer()
@@ -151,11 +175,14 @@ func (s *sdkSession) startResumed() error {
 	}
 	s.emitConfiguredMCPServersPending()
 	s.flushMCPStartupBuffer()
+	tTranscript := time.Now()
 	evs, err := s.sess.Transcript(s.ctx)
+	s.logPhase("transcript", tTranscript, err)
 	if err != nil {
 		s.logf("SDK transcript replay failed for session %q: %v", s.name, err)
 		return nil
 	}
+	tReplay := time.Now()
 	for _, ev := range evs {
 		// MCP status and skills are re-pulled live on resume (MCP via RPC.MCP.List
 		// polling below, skills via RPC.Skills.Discover), so skip replaying their
@@ -165,15 +192,18 @@ func (s *sdkSession) startResumed() error {
 		}
 		s.translateAndEmit(ev)
 	}
+	s.logPhase("transcript-replay", tReplay, nil)
 	// Proactively refresh live session state (MCP status, AIC, context window) that the
 	// transcript replay does not carry, so those panes populate without the first turn.
 	s.refreshSessionState()
 	// Custom instructions, agents, and skills arrive via RPC pulls (not the event
 	// stream), so emit one-time snapshots on stream start so their pages populate
 	// (v23/v24). Skills are additionally re-emitted on each live skills-loaded event.
+	tEmit := time.Now()
 	s.emitInstructions(s.ctx)
 	s.emitAgents(s.ctx)
 	s.emitSkills(s.ctx)
+	s.logPhase("emit-snapshots", tEmit, nil)
 	// If the replayed transcript was interrupted before its terminal frame (e.g. the
 	// daemon was killed mid-turn), settle the dangling turn so the resumed session
 	// presents as idle instead of stuck "running".

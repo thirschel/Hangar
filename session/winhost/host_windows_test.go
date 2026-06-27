@@ -39,6 +39,12 @@ type fakeSession struct {
 	sendHook      func(*fakeSession, []byte) error
 	failStart     bool
 	startErr      error
+	// startEntered (when non-nil) is closed once as start() begins, and startBlock
+	// (when non-nil) parks start() until it is closed — together they let a test
+	// hold a session "mid-start" to prove the host does not keep h.mu across the
+	// (possibly slow) launch. [HOL-1]
+	startEntered  chan struct{}
+	startBlock    chan struct{}
 	exitCode      int
 }
 
@@ -99,6 +105,12 @@ func requireConPTY(t *testing.T) {
 }
 
 func (f *fakeSession) start() error {
+	if f.startEntered != nil {
+		close(f.startEntered)
+	}
+	if f.startBlock != nil {
+		<-f.startBlock
+	}
 	if f.failStart {
 		if f.startErr != nil {
 			return f.startErr

@@ -66,6 +66,12 @@ type managedSession interface {
 type host struct {
 	mu         sync.RWMutex
 	sessions   map[string]managedSession
+	// starting holds session names whose (possibly slow) start/resume is in
+	// progress. It is guarded by mu and lets startSDKSession /
+	// startManagedSessionWithShell reserve a name, release mu across the slow
+	// launch, then register the live session — so a slow start never holds mu and
+	// blocks getSession/list (the ListWorkspaces poll). See reserveSessionStart.
+	starting   map[string]struct{}
 	newSession func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession
 	// startSDKSessionHook, when non-nil, replaces the real rich (Copilot SDK)
 	// backend in startSDKSession. Production leaves it nil; unit tests set it to
@@ -92,6 +98,7 @@ type host struct {
 func newHost(logw io.Writer, idle time.Duration) *host {
 	h := &host{
 		sessions: make(map[string]managedSession),
+		starting: make(map[string]struct{}),
 		newSession: func(name, program, workDir, shell string, cols, rows int, autoYes bool, logger *log.Logger) managedSession {
 			return newConptySession(name, program, workDir, shell, cols, rows, autoYes, logger)
 		},
@@ -116,6 +123,39 @@ func (h *host) touch() {
 	h.mu.Lock()
 	h.lastActive = time.Now()
 	h.mu.Unlock()
+}
+
+// reserveSessionStart claims a session name so its (possibly slow) start/resume
+// can run WITHOUT holding h.mu. It fails if the name is already live or already
+// being started. On success the caller MUST pair it with finishSessionStart so
+// the reservation is always released (even on a failed start). This is what keeps
+// a slow Copilot SDK launch / ConPTY spawn from blocking getSession/list — and
+// thus the ListWorkspaces poll — for the whole start. [HOL-1]
+func (h *host) reserveSessionStart(name string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, exists := h.sessions[name]; exists {
+		return fmt.Errorf("session already exists: %s", name)
+	}
+	if _, starting := h.starting[name]; starting {
+		return fmt.Errorf("session already starting: %s", name)
+	}
+	h.starting[name] = struct{}{}
+	return nil
+}
+
+// finishSessionStart releases the reservation taken by reserveSessionStart and,
+// when the start succeeded, registers the live session. It must be called exactly
+// once per successful reserveSessionStart (success or failure) so a failed start
+// frees the name for a retry.
+func (h *host) finishSessionStart(name string, s managedSession, startErr error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.starting, name)
+	if startErr == nil && s != nil {
+		h.sessions[name] = s
+		h.lastActive = time.Now()
+	}
 }
 
 func (h *host) serve(ln net.Listener) {
@@ -390,17 +430,17 @@ func (h *host) startManagedSession(name, program, workDir string, cols, rows int
 // startManagedSessionWithShell is like startManagedSession but accepts a shell
 // parameter ("cmd", "powershell", "pwsh") controlling how the program is launched.
 func (h *host) startManagedSessionWithShell(name, program, workDir, shell string, cols, rows int, autoYes bool) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, exists := h.sessions[name]; exists {
-		return fmt.Errorf("session already exists: %s", name)
+	if err := h.reserveSessionStart(name); err != nil {
+		return err
 	}
+	// newSession + start() run WITHOUT h.mu: a slow ConPTY/agent launch must not
+	// block getSession/list (the ListWorkspaces poll) on other connections. [HOL-1]
 	s := h.newSession(name, program, workDir, shell, cols, rows, autoYes, h.logger)
-	if err := s.start(); err != nil {
-		return fmt.Errorf("start session: %w", err)
+	startErr := s.start()
+	h.finishSessionStart(name, s, startErr)
+	if startErr != nil {
+		return fmt.Errorf("start session: %w", startErr)
 	}
-	h.sessions[name] = s
-	h.lastActive = time.Now()
 	programName, argCount := safeProgramSummary(program, shell)
 	h.logger.Printf("created session %q (programName=%q argCount=%d shell=%q cols=%d rows=%d)", name, programName, argCount, shell, cols, rows)
 	return nil
@@ -420,27 +460,30 @@ func (h *host) startSDKSession(p sdkSessionParams) error {
 	if h.startSDKSessionHook != nil {
 		return h.startSDKSessionHook(p)
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, exists := h.sessions[p.name]; exists {
-		return fmt.Errorf("session already exists: %s", p.name)
+	if err := h.reserveSessionStart(p.name); err != nil {
+		return err
 	}
+	// newSDKSession + start/startResumed (the Copilot SDK launch, transcript replay
+	// and MCP connect) run WITHOUT h.mu. These can take many seconds; holding h.mu
+	// across them froze every ListWorkspaces/getSession poll for the whole start. [HOL-1]
 	s := newSDKSession(p, nil, h.logger)
-	var err error
+	var startErr error
 	if p.resume {
-		err = s.startResumed()
+		startErr = s.startResumed()
 	} else {
-		err = s.start()
+		startErr = s.start()
 	}
-	if err != nil {
-		return fmt.Errorf("start sdk session: %w", err)
+	if startErr == nil {
+		// Emit the active model after start/resume (and after any transcript replay)
+		// so a (re)attaching desktop restores the model selector (v18). A no-op for a
+		// fresh chat with no selection yet. Done before registering, mirroring the
+		// previous order.
+		s.emitModelFrame()
 	}
-	// Emit the active model after start/resume (and after any transcript replay) so a
-	// (re)attaching desktop restores the model selector (v18). A no-op for a fresh
-	// chat with no selection yet.
-	s.emitModelFrame()
-	h.sessions[p.name] = s
-	h.lastActive = time.Now()
+	h.finishSessionStart(p.name, s, startErr)
+	if startErr != nil {
+		return fmt.Errorf("start sdk session: %w", startErr)
+	}
 	h.logger.Printf("created SDK (rich) session %q program=%q workDir=%q resume=%v", p.name, filepath.Base(p.program), p.workDir, p.resume)
 	return nil
 }
