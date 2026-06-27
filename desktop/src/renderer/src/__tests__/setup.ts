@@ -47,6 +47,8 @@ const mockCs = {
   mcpUpsertServer: async () => ({ servers: {}, repoEnabled: {} }),
   mcpRemoveServer: async () => ({ servers: {}, repoEnabled: {} }),
   mcpSetEnabled: async () => ({ servers: {}, repoEnabled: {} }),
+  clipboardWrite: asyncNoop,
+  clipboardRead: async () => '',
   getAppInfo: async () => ({
     version: '0.1.0',
     appName: 'hangar-desktop',

@@ -324,6 +324,11 @@ const api = {
   pickFiles: (): Promise<string[]> => ipcRenderer.invoke('cs:pick-files'),
   getDefaultProgram: (): Promise<string> => ipcRenderer.invoke('cs:get-default-program'),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('cs:open-external', url),
+  // Terminal clipboard goes through the main-process clipboard module (Electron's
+  // navigator.clipboard is unreliable from xterm's keydown path and gates readText
+  // behind the clipboard-read permission). See TermView copySelection()/paste().
+  clipboardWrite: (text: string): Promise<void> => ipcRenderer.invoke('cs:clipboard-write', text),
+  clipboardRead: (): Promise<string> => ipcRenderer.invoke('cs:clipboard-read'),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('cs:get-settings'),
   mcpRead: (): Promise<McpCatalog> => ipcRenderer.invoke('cs:mcp-read'),
   mcpUpsertServer: (name: string, def: McpServerDef): Promise<McpCatalog> =>

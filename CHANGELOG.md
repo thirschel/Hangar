@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. This file is maintained automatically by [semantic-release](https://github.com/semantic-release/semantic-release) from [Conventional Commits](https://www.conventionalcommits.org/) — do not edit it by hand.
 
+## [1.10.1](https://github.com/thirschel/Hangar/compare/v1.10.0...v1.10.1) (2026-06-24)
+
+### Bug Fixes
+
+* **desktop:** route Agent terminal copy/paste through main-process clipboard ([#92](https://github.com/thirschel/Hangar/issues/92)) ([5d201a0](https://github.com/thirschel/Hangar/commit/5d201a028cf538e82da8076a9b647f4776c0a105)), closes [#79](https://github.com/thirschel/Hangar/issues/79) [#78](https://github.com/thirschel/Hangar/issues/78) [#88](https://github.com/thirschel/Hangar/issues/88)
+
+## [1.10.0](https://github.com/thirschel/Hangar/compare/v1.9.2...v1.10.0) (2026-06-22)
+
+### Features
+
+* **desktop:** in-place (no-worktree) sessions (promote dev → main) ([#91](https://github.com/thirschel/Hangar/issues/91)) ([f147f03](https://github.com/thirschel/Hangar/commit/f147f030522caabe9ded5b404b115e6607b19edf)), closes [#79](https://github.com/thirschel/Hangar/issues/79) [#78](https://github.com/thirschel/Hangar/issues/78) [#88](https://github.com/thirschel/Hangar/issues/88)
+
 ## [1.9.2](https://github.com/thirschel/Hangar/compare/v1.9.1...v1.9.2) (2026-06-22)
 
 ### Bug Fixes

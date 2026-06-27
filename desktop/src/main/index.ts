@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, Menu, Notification, shell } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -961,6 +961,16 @@ ipcMain.handle('cs:open-external', async (_event, url: string): Promise<void> =>
   }
 });
 
+// Terminal copy/paste go through the main-process clipboard module rather than the
+// renderer's navigator.clipboard. The async clipboard API is unreliable from xterm's
+// keydown path in Electron (write silently drops) and readText() is gated behind the
+// clipboard-read permission (paste fails with no permission handler set). The main
+// clipboard module needs no permission, focus, or user activation, so both directions
+// work deterministically. See TermView copySelection()/paste().
+ipcMain.handle('cs:clipboard-write', async (_event, text: string): Promise<void> => {
+  clipboard.writeText(typeof text === 'string' ? text : String(text));
+});
+ipcMain.handle('cs:clipboard-read', async (): Promise<string> => clipboard.readText());
 
 ipcMain.handle('cs:get-log-paths', async (): Promise<LogPaths> => diagnosticLogPaths());
 
