@@ -726,9 +726,9 @@ ipcMain.handle(
   'rich:send-message',
   async (
     _event,
-    args: { session: string; message: string; attachments?: string[] },
+    args: { session: string; message: string; attachments?: string[]; agentMode?: string },
   ): Promise<void> => {
-    await callControl((c) => c.sendMessage(args.session, args.message, args.attachments));
+    await callControl((c) => c.sendMessage(args.session, args.message, args.attachments, args.agentMode));
   },
 );
 
@@ -753,6 +753,18 @@ ipcMain.handle(
     args: { session: string; requestId: string; answer: string; wasFreeform: boolean },
   ): Promise<void> => {
     await callControl((c) => c.respondUserInput(args.session, args.requestId, args.answer, args.wasFreeform));
+  },
+);
+
+ipcMain.handle(
+  'rich:respond-exit-plan-mode',
+  async (
+    _event,
+    args: { session: string; requestId: string; approved: boolean; selectedAction: string; feedback: string },
+  ): Promise<void> => {
+    await callControl((c) =>
+      c.respondExitPlanMode(args.session, args.requestId, args.approved, args.selectedAction, args.feedback),
+    );
   },
 );
 

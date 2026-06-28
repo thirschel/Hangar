@@ -626,6 +626,19 @@ func sdkEventFrame(ev copilot.SessionEvent) (proto.EventFrame, bool) {
 			Kind:      proto.EventKindInputResolved,
 			RequestID: data.RequestID,
 		}, true
+	case *copilot.ExitPlanModeCompletedData:
+		// An answered exit-plan-mode request (live: post-RespondExitPlanMode; resume:
+		// replayed from Transcript). Dismiss the plan-review card and record the chosen
+		// action so a restarted session does not re-show it (v25).
+		frame := proto.EventFrame{
+			Kind:      proto.EventKindExitPlanModeResolved,
+			RequestID: data.RequestID,
+			Approved:  boolPtrValue(data.Approved),
+		}
+		if data.SelectedAction != nil {
+			frame.SelectedAction = string(*data.SelectedAction)
+		}
+		return frame, true
 	case *copilot.SessionModelChangeData:
 		// A live (or replayed) model switch; carry the new selection so the desktop
 		// keeps the model selector in sync (v18).
@@ -674,12 +687,12 @@ func (s *sdkSession) richUnsubscribe(sub *richSub) {
 	s.mu.Unlock()
 }
 
-func (s *sdkSession) richSend(ctx context.Context, text string, attachments []string) error {
+func (s *sdkSession) richSend(ctx context.Context, text string, attachments []string, mode string) error {
 	send := s.sendFn
 	if send == nil {
 		send = s.sess.Send
 	}
-	err := send(ctx, text, attachments)
+	err := send(ctx, text, attachments, mode)
 	s.noteExitFrame()
 	return err
 }
@@ -713,6 +726,10 @@ func (s *sdkSession) richRespondPermission(ctx context.Context, requestID string
 
 func (s *sdkSession) richRespondUserInput(requestID, answer string, freeform bool) error {
 	return s.sess.RespondUserInput(requestID, answer, freeform)
+}
+
+func (s *sdkSession) richRespondExitPlanMode(requestID string, approved bool, selectedAction, feedback string) error {
+	return s.sess.RespondExitPlanMode(requestID, approved, selectedAction, feedback)
 }
 
 func (s *sdkSession) richListModels(ctx context.Context) ([]proto.ModelInfo, error) {

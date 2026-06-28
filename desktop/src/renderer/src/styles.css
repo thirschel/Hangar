@@ -4093,6 +4093,54 @@ body.is-row-resizing .center-terminal__resizer::after {
   max-width: 220px;
 }
 
+/* Work-mode switcher (Copilot CLI parity). The pill text + composer box border are
+   tinted by the active mode: white = interactive (default), blue = plan, purple =
+   autopilot. Shift+Tab (or clicking the pill) cycles the mode. */
+.chat-composer__mode {
+  gap: 6px;
+}
+
+.chat-composer__mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.chat-composer--mode-plan .chat-composer__mode {
+  color: #2f81f7;
+  border-color: #2f81f7;
+}
+
+.chat-composer--mode-plan .chat-composer__box {
+  border-color: #2f81f7;
+}
+
+.chat-composer--mode-autopilot .chat-composer__mode {
+  color: #a475f9;
+  border-color: #a475f9;
+}
+
+.chat-composer--mode-autopilot .chat-composer__box {
+  border-color: #a475f9;
+}
+
+/* Plan-review card: the agent's plan markdown rendered as scrollable monospace. */
+.chat-plan__content {
+  margin: var(--space-1) 0 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-control);
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @keyframes chat-menu-pop-in {
   from {
     opacity: 0;

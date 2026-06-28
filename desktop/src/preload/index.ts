@@ -288,8 +288,8 @@ const api = {
     ipcRenderer.invoke('rich:open-stream', { session, since }),
   closeRichStream: (session: string): Promise<void> =>
     ipcRenderer.invoke('rich:close-stream', session),
-  sendMessage: (session: string, message: string, attachments?: string[]): Promise<void> =>
-    ipcRenderer.invoke('rich:send-message', { session, message, attachments }),
+  sendMessage: (session: string, message: string, attachments?: string[], agentMode?: string): Promise<void> =>
+    ipcRenderer.invoke('rich:send-message', { session, message, attachments, agentMode }),
   abortTurn: (session: string): Promise<void> =>
     ipcRenderer.invoke('rich:abort-turn', session),
   respondPermission: (
@@ -305,6 +305,14 @@ const api = {
     wasFreeform: boolean,
   ): Promise<void> =>
     ipcRenderer.invoke('rich:respond-user-input', { session, requestId, answer, wasFreeform }),
+  respondExitPlanMode: (
+    session: string,
+    requestId: string,
+    approved: boolean,
+    selectedAction: string,
+    feedback: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke('rich:respond-exit-plan-mode', { session, requestId, approved, selectedAction, feedback }),
   getTranscript: (session: string, since = 0): Promise<EventFrame[]> =>
     ipcRenderer.invoke('rich:get-transcript', { session, since }),
   // Live model selector (session-scoped, same session id as the other rich calls).

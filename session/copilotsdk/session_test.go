@@ -435,6 +435,139 @@ func TestProcessDoneIgnoresOldClient(t *testing.T) {
 	}
 }
 
+// TestOnExitPlanModeApproveAndRespond proves the plan round-trip: onExitPlanMode
+// surfaces the plan via OnPlan and blocks until RespondExitPlanMode answers it,
+// then returns the user's approval + selected action + feedback to the SDK.
+func TestOnExitPlanModeApproveAndRespond(t *testing.T) {
+	got := make(chan PlanPrompt, 1)
+	s := New(Config{Logger: log.New(io.Discard, "", 0), OnPlan: func(p PlanPrompt) { got <- p }})
+
+	type res struct {
+		r   copilot.ExitPlanModeResult
+		err error
+	}
+	done := make(chan res, 1)
+	go func() {
+		r, err := s.onExitPlanMode(copilot.ExitPlanModeRequest{
+			Summary:           "do X",
+			PlanContent:       "## plan",
+			Actions:           []string{"interactive", "autopilot", "exit_only"},
+			RecommendedAction: "autopilot",
+		}, copilot.ExitPlanModeInvocation{})
+		done <- res{r, err}
+	}()
+
+	var p PlanPrompt
+	select {
+	case p = <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnPlan was not called within 2s")
+	}
+	if p.Summary != "do X" || p.RecommendedAction != "autopilot" || len(p.Actions) != 3 || p.RequestID == "" {
+		t.Fatalf("plan prompt = %+v", p)
+	}
+	if err := s.RespondExitPlanMode(p.RequestID, true, "autopilot", "lgtm"); err != nil {
+		t.Fatalf("RespondExitPlanMode: %v", err)
+	}
+	select {
+	case out := <-done:
+		if out.err != nil || !out.r.Approved || out.r.SelectedAction != "autopilot" || out.r.Feedback != "lgtm" {
+			t.Fatalf("onExitPlanMode result = %+v err=%v", out.r, out.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("onExitPlanMode did not return within 2s")
+	}
+}
+
+// TestRespondExitPlanModeNoPending proves answering an unknown plan request is a
+// reported no-op (and does not panic).
+func TestRespondExitPlanModeNoPending(t *testing.T) {
+	s := New(Config{Logger: log.New(io.Discard, "", 0)})
+	err := s.RespondExitPlanMode("nope", true, "autopilot", "")
+	if err == nil || !strings.Contains(err.Error(), "no pending plan request") {
+		t.Fatalf("RespondExitPlanMode err = %v, want no-pending", err)
+	}
+}
+
+// TestOnExitPlanModeNoClientDeclines proves that with no interactive client (OnPlan
+// nil) onExitPlanMode declines (Approved=false) rather than auto-approving execution,
+// so a detached session never silently runs an unreviewed plan.
+func TestOnExitPlanModeNoClientDeclines(t *testing.T) {
+	s := New(Config{Logger: log.New(io.Discard, "", 0)})
+	r, err := s.onExitPlanMode(copilot.ExitPlanModeRequest{Summary: "x"}, copilot.ExitPlanModeInvocation{})
+	if err != nil {
+		t.Fatalf("onExitPlanMode err = %v", err)
+	}
+	if r.Approved {
+		t.Fatalf("expected declined (Approved=false) when no client, got %+v", r)
+	}
+}
+
+// TestBuildMessageOptionsPlanPrefixesAndHidesMarker proves the plan-mode fix: the
+// agent-facing prompt gets the "[[PLAN]]" marker (required because copilot 1.0.66
+// ignores AgentMode alone) while DisplayPrompt keeps the user's clean text for the
+// timeline, plus AgentMode=plan.
+func TestBuildMessageOptionsPlanPrefixesAndHidesMarker(t *testing.T) {
+	opts := buildMessageOptions("do the thing", nil, "plan")
+	if opts.Prompt != "[[PLAN]] do the thing" {
+		t.Fatalf("plan Prompt = %q, want the [[PLAN]] marker prepended", opts.Prompt)
+	}
+	if opts.DisplayPrompt != "do the thing" {
+		t.Fatalf("plan DisplayPrompt = %q, want the clean user text", opts.DisplayPrompt)
+	}
+	if opts.AgentMode != copilot.AgentModePlan {
+		t.Fatalf("plan AgentMode = %q, want plan", opts.AgentMode)
+	}
+}
+
+func TestBuildMessageOptionsAutopilot(t *testing.T) {
+	opts := buildMessageOptions("go", nil, "autopilot")
+	if opts.Prompt != "go" || opts.DisplayPrompt != "" {
+		t.Fatalf("autopilot must not prefix/hide: Prompt=%q DisplayPrompt=%q", opts.Prompt, opts.DisplayPrompt)
+	}
+	if opts.AgentMode != copilot.AgentModeAutopilot {
+		t.Fatalf("autopilot AgentMode = %q, want autopilot", opts.AgentMode)
+	}
+}
+
+func TestBuildMessageOptionsInteractiveUnchanged(t *testing.T) {
+	opts := buildMessageOptions("hi", nil, "")
+	if opts.Prompt != "hi" || opts.DisplayPrompt != "" || opts.AgentMode != "" {
+		t.Fatalf("interactive send must be byte-for-byte unchanged: %+v", opts)
+	}
+}
+
+// TestDecideAutopilotTurnAutoApproves proves an autopilot turn auto-approves tool
+// permissions (so an autopilot send / continuation runs autonomously), while the
+// default (AutoYes off, no autopilot turn) leaves the request pending.
+func TestDecideAutopilotTurnAutoApproves(t *testing.T) {
+	s := New(Config{Logger: log.New(io.Discard, "", 0)})
+	if approve, pend := s.decide(nil); approve || !pend {
+		t.Fatalf("default decide = approve=%v pend=%v, want pending", approve, pend)
+	}
+	s.autopilotTurn.Store(true)
+	if approve, pend := s.decide(nil); !approve || pend {
+		t.Fatalf("autopilot-turn decide = approve=%v pend=%v, want auto-approve", approve, pend)
+	}
+}
+
+// TestRespondExitPlanModeAutopilotArmsTurn proves approving a plan with the
+// "autopilot" action arms the autopilot turn so the continuation runs autonomously.
+func TestRespondExitPlanModeAutopilotArmsTurn(t *testing.T) {
+	got := make(chan PlanPrompt, 1)
+	s := New(Config{Logger: log.New(io.Discard, "", 0), OnPlan: func(p PlanPrompt) { got <- p }})
+	go func() {
+		_, _ = s.onExitPlanMode(copilot.ExitPlanModeRequest{Summary: "x", Actions: []string{"autopilot"}}, copilot.ExitPlanModeInvocation{})
+	}()
+	p := <-got
+	if err := s.RespondExitPlanMode(p.RequestID, true, "autopilot", ""); err != nil {
+		t.Fatalf("RespondExitPlanMode: %v", err)
+	}
+	if !s.autopilotTurn.Load() {
+		t.Fatal("approving a plan with the autopilot action must arm the autopilot turn")
+	}
+}
+
 func TestHandleEventClearsWaitingOnResumedActivity(t *testing.T) {
 	cases := []struct {
 		name string
