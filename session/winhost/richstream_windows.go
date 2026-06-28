@@ -744,6 +744,54 @@ func (s *sdkSession) richSetModel(ctx context.Context, modelID, effort, contextT
 	return s.sess.SetModel(ctx, modelID, effort, contextTier)
 }
 
+func (s *sdkSession) richListCommands(ctx context.Context) ([]proto.CommandInfo, error) {
+	details, err := s.sess.ListCommands(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return commandInfos(details), nil
+}
+
+func (s *sdkSession) richInvokeCommand(ctx context.Context, name, input string) (*proto.CommandResult, error) {
+	res, err := s.sess.InvokeCommand(ctx, name, input)
+	if err != nil {
+		return nil, err
+	}
+	return commandResult(res), nil
+}
+
+func commandInfos(details []copilotsdk.CommandDetail) []proto.CommandInfo {
+	out := make([]proto.CommandInfo, 0, len(details))
+	for _, d := range details {
+		out = append(out, proto.CommandInfo{
+			Name:        d.Name,
+			Description: d.Description,
+			Kind:        d.Kind,
+			Aliases:     append([]string(nil), d.Aliases...),
+			InputHint:   d.InputHint,
+		})
+	}
+	return out
+}
+
+func commandResult(r copilotsdk.CommandResult) *proto.CommandResult {
+	opts := make([]proto.SubcommandOption, 0, len(r.SubcommandOptions))
+	for _, o := range r.SubcommandOptions {
+		opts = append(opts, proto.SubcommandOption{Name: o.Name, Description: o.Description, Group: o.Group})
+	}
+	return &proto.CommandResult{
+		Kind:              r.Kind,
+		Text:              r.Text,
+		Markdown:          r.Markdown,
+		Prompt:            r.Prompt,
+		DisplayPrompt:     r.DisplayPrompt,
+		Message:           r.Message,
+		SubcommandTitle:   r.SubcommandTitle,
+		SubcommandCommand: r.SubcommandCommand,
+		SubcommandOptions: opts,
+	}
+}
+
 func (s *sdkSession) richTranscript(since uint64) []proto.EventFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()

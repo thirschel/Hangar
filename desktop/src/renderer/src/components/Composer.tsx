@@ -1,6 +1,6 @@
 import type { FormEvent, JSX, ReactNode } from 'react';
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import type { ModelInfo } from '../../../main/host-client';
+import type { CommandInfo, ModelInfo } from '../../../main/host-client';
 import { MODE_LABEL, type WorkMode } from './workMode';
 
 /**
@@ -66,6 +66,8 @@ export type ComposerProps = {
   mode?: WorkMode;
   /** Cycle the work mode (Shift+Tab in the box, or clicking the mode pill). */
   onCycleMode?: () => void;
+  /** Available slash commands for the autocomplete box (name/description/kind). */
+  commands?: CommandInfo[];
 };
 
 // The two context tiers offered by the Context submenu. `value` is the raw tier
@@ -113,6 +115,15 @@ function StatusSpinner(): JSX.Element {
   );
 }
 
+// commandMatches: case-insensitive prefix match on the command name or any alias.
+// An empty query matches everything (the box opens on a bare "/").
+function commandMatches(c: CommandInfo, query: string): boolean {
+  if (query === '') return true;
+  const q = query.toLowerCase();
+  if (c.name.toLowerCase().startsWith(q)) return true;
+  return (c.aliases ?? []).some((a) => a.toLowerCase().startsWith(q));
+}
+
 function ComposerView({
   turnInProgress,
   disabledSend = false,
@@ -127,14 +138,18 @@ function ComposerView({
   onApplyModel,
   mode = 'interactive',
   onCycleMode,
+  commands,
 }: ComposerProps): JSX.Element {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<string[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [openSection, setOpenSection] = useState<ModelMenuSection | null>(null);
   const [escArmed, setEscArmed] = useState(false);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const submenuRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const escTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trimmed = text.trim();
   // Send is allowed with trimmed text OR at least one attachment (a files-only
@@ -154,6 +169,31 @@ function ComposerView({
   const effort = currentEffort ?? currentModel?.defaultEffort ?? '';
   const contextTier = currentContextTier ?? 'default';
   const modelName = currentModel?.name ?? currentModel?.id ?? currentModelId ?? 'Model';
+
+  // Slash-command autocomplete: the box is open while the input is a single "/token"
+  // (no space yet) that matches >=1 command and has not been dismissed. It re-filters
+  // on every keystroke and closes once a command is selected (the completion adds a
+  // trailing space) or a space follows the slash.
+  const slashMatch = /^\/(\S*)$/.exec(text);
+  const slashMatches =
+    slashMatch && !slashDismissed && (commands?.length ?? 0) > 0
+      ? (commands as CommandInfo[]).filter((c) => commandMatches(c, slashMatch[1])).slice(0, 50)
+      : [];
+  const slashOpen = slashMatches.length > 0;
+  const slashSel = slashOpen ? Math.min(slashIndex, slashMatches.length - 1) : 0;
+
+  const completeSlash = (cmd: CommandInfo): void => {
+    setText(`/${cmd.name} `);
+    setSlashDismissed(true);
+    setSlashIndex(0);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  };
 
   // Close the menu (and collapse any open submenu) on an outside click or Escape
   // while it is open. Bound only while open so we don't keep document listeners
@@ -333,6 +373,38 @@ function ComposerView({
         </div>
       )}
       <div className="chat-composer__box">
+        {slashOpen && (
+          <div className="chat-composer__slash-menu" role="listbox" aria-label="Slash commands">
+            {slashMatches.map((cmd, i) => (
+              <button
+                key={cmd.name}
+                type="button"
+                role="option"
+                aria-selected={i === slashSel}
+                className={
+                  i === slashSel
+                    ? 'chat-composer__slash-item chat-composer__slash-item--active'
+                    : 'chat-composer__slash-item'
+                }
+                onMouseEnter={() => setSlashIndex(i)}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  completeSlash(cmd);
+                }}
+              >
+                <span className="chat-composer__slash-name">/{cmd.name}</span>
+                {cmd.kind !== undefined && cmd.kind !== '' && (
+                  <span className={`chat-composer__slash-kind chat-composer__slash-kind--${cmd.kind}`}>
+                    {cmd.kind}
+                  </span>
+                )}
+                {cmd.description !== undefined && cmd.description !== '' && (
+                  <span className="chat-composer__slash-desc">{cmd.description}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
         {attachments.length > 0 && (
           <ul className="chat-composer__attachments" aria-label="Attachments">
             {attachments.map((path) => (
@@ -354,12 +426,42 @@ function ComposerView({
           </ul>
         )}
         <textarea
+          ref={textareaRef}
           className="chat-composer__input"
           value={text}
           placeholder={'Message Copilot\u2026'}
           rows={3}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value);
+            setSlashDismissed(false);
+            setSlashIndex(0);
+          }}
           onKeyDown={(event) => {
+            // Slash autocomplete takes priority while open: Arrow keys navigate,
+            // Tab/Enter complete the highlighted command, Escape dismisses the box.
+            if (slashOpen) {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setSlashIndex((i) => Math.min(i + 1, slashMatches.length - 1));
+                return;
+              }
+              if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setSlashIndex((i) => Math.max(i - 1, 0));
+                return;
+              }
+              if (event.key === 'Tab' || event.key === 'Enter') {
+                event.preventDefault();
+                const cmd = slashMatches[slashSel];
+                if (cmd) completeSlash(cmd);
+                return;
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setSlashDismissed(true);
+                return;
+              }
+            }
             if (event.key === 'Escape') {
               if (modelMenuOpen) return;
               if (!turnInProgress) return;

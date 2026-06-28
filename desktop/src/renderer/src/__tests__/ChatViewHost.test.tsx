@@ -1555,4 +1555,85 @@ describe('ChatViewHost', () => {
       vi.useRealTimers();
     }
   });
+
+  it('runs a /text command and shows its output as a system message (no turn)', async () => {
+    window.cs.invokeCommand = vi.fn().mockResolvedValue({ kind: 'text', text: 'Here is help' });
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.change(screen.getByPlaceholderText('Message Copilot\u2026'), {
+      target: { value: '/help' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    });
+
+    expect(window.cs.invokeCommand).toHaveBeenCalledWith('rich-session', 'help', '');
+    expect(window.cs.sendMessage).not.toHaveBeenCalled();
+    // The typed command shows as a user bubble; the result as a muted system line.
+    expect(screen.getByText('/help').closest('.chat-msg--user')).not.toBeNull();
+    expect(await screen.findByText('Here is help')).toBeInTheDocument();
+  });
+
+  it('runs an /agentPrompt command by sending its prompt as a turn', async () => {
+    window.cs.invokeCommand = vi
+      .fn()
+      .mockResolvedValue({ kind: 'agentPrompt', prompt: 'Do the thing', displayPrompt: '' });
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.change(screen.getByPlaceholderText('Message Copilot\u2026'), {
+      target: { value: '/review src' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    });
+
+    expect(window.cs.invokeCommand).toHaveBeenCalledWith('rich-session', 'review', 'src');
+    await waitFor(() =>
+      expect(window.cs.sendMessage).toHaveBeenCalledWith(
+        'rich-session',
+        'Do the thing',
+        [],
+        undefined,
+      ),
+    );
+  });
+
+  it('shows a subcommand picker and re-invokes with the chosen option', async () => {
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce({
+        kind: 'subcommand',
+        subcommandCommand: 'model',
+        subcommandTitle: 'Pick a model',
+        subcommandOptions: [
+          { name: 'gpt-5', description: 'Fast' },
+          { name: 'claude', description: 'Smart' },
+        ],
+      })
+      .mockResolvedValueOnce({ kind: 'completed', message: 'Model set to claude' });
+    window.cs.invokeCommand = invoke;
+    render(<ChatViewHost workspace={makeWorkspace()} />);
+    await vi.waitFor(() => expect(richFrameCallback).toBeDefined());
+
+    fireEvent.change(screen.getByPlaceholderText('Message Copilot\u2026'), {
+      target: { value: '/model' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    });
+
+    const picker = await screen.findByRole('dialog', { name: 'Pick a model' });
+    expect(within(picker).getByRole('button', { name: /gpt-5/ })).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(picker).getByRole('button', { name: /claude/ }));
+    });
+
+    // The picker closes and the parent command re-invokes with the option name.
+    expect(invoke).toHaveBeenNthCalledWith(2, 'rich-session', 'model', 'claude');
+    expect(await screen.findByText('Model set to claude')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Pick a model' })).not.toBeInTheDocument();
+  });
 });

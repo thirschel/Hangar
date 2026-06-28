@@ -39,6 +39,8 @@ const mockCs = {
   getTranscript: async () => [],
   listModels: async () => [],
   setModel: asyncNoop,
+  listCommands: async () => [],
+  invokeCommand: async () => ({ kind: 'completed' }),
   detectShells: async () => [],
   pickFolder: async () => null,
   pickFiles: async () => [],

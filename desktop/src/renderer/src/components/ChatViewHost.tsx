@@ -2,11 +2,14 @@ import type { FormEvent, JSX } from 'react';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   AgentInfo,
+  CommandInfo,
+  CommandResult,
   EventFrame,
   InstructionInfo,
   McpServerInfo,
   ModelInfo,
   SkillInfo,
+  SubcommandOption,
   WorkspaceInfo,
 } from '../../../main/host-client';
 import { Markdown } from './Markdown';
@@ -70,6 +73,9 @@ const NAV_TABS: ChatNavTab[] = [
 // assistant / tool / permission / usage / ... frames exist), so ChatView injects
 // an optimistic, client-side frame for each sent message to show the user bubble.
 const USER_LOCAL_KIND = 'user.local';
+// Local-only frame for slash-command output (text / completed message) rendered as
+// a muted system message in the transcript; never sent to the daemon.
+const SYSTEM_LOCAL_KIND = 'system.local';
 const SCROLL_SLOP = 48;
 
 type TranscriptEntry =
@@ -129,6 +135,7 @@ type TranscriptEntry =
       answerLabel?: string;
     }
   | { id: string; kind: 'idle'; aborted: boolean; timestamp?: number }
+  | { id: string; kind: 'system'; text: string }
   | { id: string; kind: 'error'; text: string };
 
 type TranscriptModel = {
@@ -302,6 +309,9 @@ function buildTranscript(frames: EventFrame[], sessionName: string): TranscriptM
     switch (frame.kind) {
       case USER_LOCAL_KIND:
         entries.push({ id: `user-${frame.seq}`, kind: 'user', text: frame.text ?? '' });
+        break;
+      case SYSTEM_LOCAL_KIND:
+        entries.push({ id: `system-${frame.seq}`, kind: 'system', text: frame.text ?? '' });
         break;
       case 'assistant.delta': {
         pendingAssistantText += frame.text ?? '';
@@ -944,6 +954,15 @@ export function ChatViewHost({
   // (model + reasoning effort + context tier) until the daemon's usage frames
   // report the switch. All reset per session.
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [commands, setCommands] = useState<CommandInfo[]>([]);
+  const [pendingPicker, setPendingPicker] = useState<{
+    command: string;
+    title: string;
+    options: SubcommandOption[];
+  } | null>(null);
+  // Holds the active fetchCommands so a 'skills' frame can trigger a refetch
+  // (skills load asynchronously after the command list first resolves).
+  const refetchCommandsRef = useRef<() => void>(() => {});
   const [selectedModelId, setSelectedModelId] = useState<string | undefined>(undefined);
   // The user's explicit reasoning-effort pick; undefined falls back to the active
   // model's default (see currentEffort below). Reset when the model changes.
@@ -1166,6 +1185,10 @@ export function ChatViewHost({
       cached.set(frame.seq, frame);
       pendingFrames.push(frame);
       scheduleFlush();
+      // Skills load asynchronously after the session starts; when a skills
+      // snapshot arrives, refetch the command list so new skill commands show
+      // up in the composer's slash autocomplete.
+      if (frame.kind === 'skills') refetchCommandsRef.current();
     };
 
     const unsubscribeFrame = window.cs.onRichFrame(({ session, frame }) => {
@@ -1280,6 +1303,46 @@ export function ChatViewHost({
     };
   }, [workspace.sessionName]);
 
+  // Slash commands (+ skills) for the composer autocomplete. Like the model list
+  // this only feeds the picker, so a failure right after a daemon restart is
+  // NON-fatal -- retry a few times. Skills load asynchronously, so addFrame also
+  // re-invokes the captured fetch when a 'skills' frame arrives.
+  useEffect(() => {
+    let cancelled = false;
+    setCommands([]);
+    setPendingPicker(null);
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const fetchCommands = (): void => {
+      if (cancelled) return;
+      void window.cs
+        .listCommands(workspace.sessionName)
+        .then((list) => {
+          if (cancelled) return;
+          setCommands(list);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          attempts += 1;
+          if (attempts < 6) {
+            retryTimer = setTimeout(fetchCommands, 800);
+          } else {
+            diag('rich list-commands failed (non-fatal)', {
+              session: workspace.sessionName,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        });
+    };
+    refetchCommandsRef.current = fetchCommands;
+    fetchCommands();
+    return () => {
+      cancelled = true;
+      refetchCommandsRef.current = () => {};
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [workspace.sessionName]);
+
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && shouldStickToBottom.current) {
@@ -1356,15 +1419,110 @@ export function ChatViewHost({
   const cycleMode = useCallback((): void => setAgentMode(nextWorkMode), []);
 
   // --- Composer slot contract (consumed by <Composer/>; see slot below) -----
+  // --- Slash-command execution ----------------------------------------------
+  // Append a muted system message to the transcript (a local-only frame).
+  const pushSystem = useCallback(
+    (text: string): void => {
+      setLocalUserFrames((current) => [
+        ...current,
+        { seq: nextLocalSeq(), kind: SYSTEM_LOCAL_KIND, text },
+      ]);
+    },
+    [nextLocalSeq],
+  );
+
+  // Route a normalized command result: text/completed -> system message;
+  // agentPrompt -> run a real turn; subcommand -> open the picker.
+  const applyCommandResult = useCallback(
+    (
+      commandName: string,
+      result: CommandResult,
+      sessionName: string,
+      mode: WorkMode | undefined,
+    ): void => {
+      switch (result.kind) {
+        case 'agentPrompt': {
+          const prompt = result.prompt ?? '';
+          if (!prompt) return;
+          setOptimisticTurn(true);
+          void window.cs.sendMessage(sessionName, prompt, [], mode).catch((error: unknown) => {
+            if (!isCurrentWorkspace(workspace.id, sessionName)) return;
+            setOptimisticTurn(false);
+            setStreamError(error instanceof Error ? error.message : String(error));
+          });
+          break;
+        }
+        case 'subcommand':
+          setPendingPicker({
+            command: result.subcommandCommand || commandName,
+            title: result.subcommandTitle || 'Select an option',
+            options: result.subcommandOptions ?? [],
+          });
+          break;
+        case 'completed':
+          if (result.message) pushSystem(result.message);
+          break;
+        case 'text':
+        default:
+          pushSystem(result.text ?? '');
+          break;
+      }
+    },
+    [isCurrentWorkspace, pushSystem, workspace.id],
+  );
+
+  const invokeAndRoute = useCallback(
+    (commandName: string, input: string, sessionName: string, mode: WorkMode | undefined): void => {
+      void window.cs
+        .invokeCommand(sessionName, commandName, input)
+        .then((result) => {
+          if (!isCurrentWorkspace(workspace.id, sessionName)) return;
+          applyCommandResult(commandName, result, sessionName, mode);
+        })
+        .catch((error: unknown) => {
+          if (!isCurrentWorkspace(workspace.id, sessionName)) return;
+          pushSystem(`Command failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+    },
+    [applyCommandResult, isCurrentWorkspace, pushSystem, workspace.id],
+  );
+
+  // Selecting a subcommand option re-invokes the parent command with the option
+  // name and routes the next result (the picker closes first).
+  const runPickedOption = useCallback(
+    (option: SubcommandOption): void => {
+      const sessionName = workspace.sessionName;
+      const mode = agentMode === 'interactive' ? undefined : agentMode;
+      setPendingPicker((picker) => {
+        if (picker) invokeAndRoute(picker.command, option.name, sessionName, mode);
+        return null;
+      });
+    },
+    [agentMode, invokeAndRoute, workspace.sessionName],
+  );
+
   const handleSend = useCallback((text: string, attachments: string[]): void => {
     const message = text.trim();
     if (!message && attachments.length === 0) return;
+    const sessionName = workspace.sessionName;
+    const mode = agentMode === 'interactive' ? undefined : agentMode;
+    // A leading "/command [args]" with no attachments is a slash command: show
+    // the typed command as a user bubble, then invoke + route instead of sending
+    // a chat turn. A bare "/" (or "/ something") falls through to a normal send.
+    const slash = attachments.length === 0 ? /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(message) : null;
+    if (slash) {
+      const cmdSeq = nextLocalSeq();
+      setLocalUserFrames((current) => [
+        ...current,
+        { seq: cmdSeq, kind: USER_LOCAL_KIND, text: message },
+      ]);
+      invokeAndRoute(slash[1], (slash[2] ?? '').trim(), sessionName, mode);
+      return;
+    }
     const seq = nextLocalSeq();
     const bubbleText = composeUserBubble(message, attachments);
     setLocalUserFrames((current) => [...current, { seq, kind: USER_LOCAL_KIND, text: bubbleText }]);
     setOptimisticTurn(true);
-    const sessionName = workspace.sessionName;
-    const mode = agentMode === 'interactive' ? undefined : agentMode;
     void window.cs
       .sendMessage(sessionName, message, attachments, mode)
       .catch((error: unknown) => {
@@ -1372,7 +1530,7 @@ export function ChatViewHost({
         setOptimisticTurn(false);
         setStreamError(error instanceof Error ? error.message : String(error));
       });
-  }, [agentMode, isCurrentWorkspace, nextLocalSeq, workspace.id, workspace.sessionName]);
+  }, [agentMode, invokeAndRoute, isCurrentWorkspace, nextLocalSeq, workspace.id, workspace.sessionName]);
 
   const handleStop = useCallback((): void => {
     setOptimisticTurn(false);
@@ -1613,6 +1771,36 @@ export function ChatViewHost({
           </div>
 
           <div className="chat-view__composer-slot">
+            {pendingPicker && (
+              <div className="chat-picker" role="dialog" aria-label={pendingPicker.title}>
+                <div className="chat-picker__header">
+                  <span className="chat-picker__title">{pendingPicker.title}</span>
+                  <button
+                    type="button"
+                    className="chat-picker__close"
+                    aria-label="Cancel"
+                    onClick={() => setPendingPicker(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="chat-picker__options">
+                  {pendingPicker.options.map((opt) => (
+                    <button
+                      key={opt.name}
+                      type="button"
+                      className="chat-picker__option"
+                      onClick={() => runPickedOption(opt)}
+                    >
+                      <span className="chat-picker__option-name">{opt.name}</span>
+                      {opt.description && (
+                        <span className="chat-picker__option-desc">{opt.description}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <Composer
               turnInProgress={turnInProgress}
               onSend={handleSend}
@@ -1620,6 +1808,7 @@ export function ChatViewHost({
               status={activityStatus}
               info={composerInfo}
               models={models}
+              commands={commands}
               currentModelId={currentModelId}
               currentEffort={currentEffort}
               currentContextTier={currentContextTier}
@@ -1795,6 +1984,14 @@ const ChatEntryView = memo(function ChatEntryView({
       }
       // A tiny faded centered turn marker (the CLI shows no usage line at all).
       return <div className="chat-entry--idle">{formatCompletedTime(entry.timestamp)}</div>;
+    case 'system':
+      // Slash-command text / completed output, rendered as a muted full-width
+      // message (Markdown-aware; most command output is markdown).
+      return (
+        <div className="chat-entry chat-entry--system">
+          <Markdown text={entry.text} />
+        </div>
+      );
     case 'error':
       return (
         <div className="chat-entry chat-entry--error" role="alert">

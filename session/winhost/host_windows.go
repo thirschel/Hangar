@@ -419,6 +419,10 @@ func (h *host) dispatch(req *proto.Request) *proto.Response {
 		return h.listRichModels(req)
 	case proto.MethodSetModel:
 		return h.setRichModel(req)
+	case proto.MethodListCommands:
+		return h.listRichCommands(req)
+	case proto.MethodInvokeCommand:
+		return h.invokeRichCommand(req)
 	case proto.MethodShutdown:
 		return &proto.Response{ID: req.ID, OK: true}
 	case proto.MethodListWorkspaces:
@@ -831,6 +835,30 @@ func (h *host) setRichModel(req *proto.Request) *proto.Response {
 	// model is blank after a daemon restart. Keyed by session name like the switch.
 	h.workspaces.setRichModelSelection(req.Session, req.Model, req.Effort, req.ContextTier)
 	return &proto.Response{ID: req.ID, OK: true}
+}
+
+func (h *host) listRichCommands(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	commands, err := sess.richListCommands(context.Background())
+	if err != nil {
+		return proto.Errorf(req.ID, "list commands: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true, Commands: commands}
+}
+
+func (h *host) invokeRichCommand(req *proto.Request) *proto.Response {
+	sess, errResp := h.richSession(req)
+	if errResp != nil {
+		return errResp
+	}
+	result, err := sess.richInvokeCommand(context.Background(), req.Command, req.Input)
+	if err != nil {
+		return proto.Errorf(req.ID, "invoke command: %v", err)
+	}
+	return &proto.Response{ID: req.ID, OK: true, CommandResult: result}
 }
 
 func (h *host) runRichStream(sess *sdkSession, ln net.Listener, token string, since uint64) {

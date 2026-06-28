@@ -3942,6 +3942,7 @@ body.is-row-resizing .center-terminal__resizer::after {
 
 /* Elevated, rounded container grouping the textarea + actions row. */
 .chat-composer__box {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -4139,6 +4140,162 @@ body.is-row-resizing .center-terminal__resizer::after {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Slash-command autocomplete: a scrollable popover ABOVE the input listing filtered
+   commands; ArrowUp/Down move the highlight, Tab/Enter complete (mirrors the model menu). */
+.chat-composer__slash-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + var(--space-1));
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  animation: chat-menu-pop-in 0.12s var(--ease) both;
+}
+
+.chat-composer__slash-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms var(--ease);
+}
+
+.chat-composer__slash-item:hover,
+.chat-composer__slash-item--active {
+  background: var(--bg-hover);
+}
+
+.chat-composer__slash-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chat-composer__slash-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-control);
+  color: var(--text-muted);
+}
+
+.chat-composer__slash-kind--skill {
+  color: #a475f9;
+}
+
+.chat-composer__slash-desc {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Slash-command output rendered into the transcript as a muted system message. */
+.chat-entry--system {
+  align-self: stretch;
+  margin: var(--space-1) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* Subcommand picker: a small popover above the composer with option buttons. */
+.chat-picker {
+  margin-bottom: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.chat-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-picker__title {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+
+.chat-picker__close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.chat-picker__close:hover {
+  color: var(--text);
+}
+
+.chat-picker__options {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.chat-picker__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition: background 120ms var(--ease);
+}
+
+.chat-picker__option:hover {
+  background: var(--bg-hover);
+}
+
+.chat-picker__option-name {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-weight: 600;
+}
+
+.chat-picker__option-desc {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
 }
 
 @keyframes chat-menu-pop-in {

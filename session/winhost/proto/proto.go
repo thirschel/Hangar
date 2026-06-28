@@ -109,7 +109,11 @@ import (
 // and is answered by MethodRespondExitPlanMode (Approved/SelectedAction/Feedback),
 // with EventKindExitPlanModeResolved replaying the answer on resume. Additive: an
 // omitted AgentMode sends exactly as v24.
-const Version = 25
+// v26 adds slash commands: MethodListCommands (-> Response.Commands) lists the
+// session's builtin/skill/client commands; MethodInvokeCommand (Request.Command +
+// Input) runs one and returns Response.CommandResult (text/agentPrompt/completed/
+// subcommand). Additive: new methods + response fields; existing surface unchanged.
+const Version = 26
 
 // MaxFrameSize bounds a single JSON frame. CapturePane(full) and CaptureHistory
 // can include the whole scrollback, so this is generous but still guards against
@@ -187,6 +191,11 @@ const (
 	// exit_plan_mode.requested (Approved + SelectedAction + Feedback). The per-turn
 	// mode itself rides on Request.AgentMode of a MethodSendMessage call.
 	MethodRespondExitPlanMode = "RespondExitPlanMode"
+
+	// Slash commands (v26): list the session's available commands (builtins + skills
+	// + client) and invoke one. Scoped by Request.Session like the other rich methods.
+	MethodListCommands  = "ListCommands"  // -> Response.Commands
+	MethodInvokeCommand = "InvokeCommand" // Request.Command (name) + Input (args) -> Response.CommandResult
 )
 
 // Capture modes for MethodCapturePane.
@@ -301,6 +310,10 @@ type Request struct {
 	Approved       bool   `json:"approved,omitempty"`
 	SelectedAction string `json:"selectedAction,omitempty"`
 	Feedback       string `json:"feedback,omitempty"`
+
+	// Slash commands (v26): MethodInvokeCommand reuses the existing Command field (the
+	// command name, no leading slash) and adds Input for the raw args after the name.
+	Input string `json:"input,omitempty"`
 }
 
 // SessionInfo is returned by ListSessions.
@@ -432,6 +445,11 @@ type Response struct {
 
 	// Rich model selector (v14): the MethodListModels result.
 	Models []ModelInfo `json:"models,omitempty"`
+
+	// Slash commands (v26): MethodListCommands -> Commands; MethodInvokeCommand ->
+	// CommandResult (one of text/agentPrompt/completed/subcommand).
+	Commands      []CommandInfo  `json:"commands,omitempty"`
+	CommandResult *CommandResult `json:"commandResult,omitempty"`
 }
 
 // EventFrame is one structured event on a rich session's event stream (v11). It is
@@ -599,6 +617,45 @@ type ModelInfo struct {
 	// options so the desktop can offer a per-model effort picker on the model switch.
 	SupportedEfforts []string `json:"supportedEfforts,omitempty"` // from SDK SupportedReasoningEfforts
 	DefaultEffort    string   `json:"defaultEffort,omitempty"`    // from SDK DefaultReasoningEffort
+}
+
+// CommandInfo is one available slash command for the rich composer's autocomplete
+// (v26). Kind is "builtin" | "skill" | "client".
+type CommandInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Kind        string   `json:"kind,omitempty"`
+	Aliases     []string `json:"aliases,omitempty"`
+	InputHint   string   `json:"inputHint,omitempty"`
+}
+
+// Command result kinds for CommandResult.Kind (v26).
+const (
+	CommandResultText        = "text"        // Text (+Markdown) to render as a message
+	CommandResultAgentPrompt = "agentPrompt" // submit Prompt to the agent (DisplayPrompt shown)
+	CommandResultCompleted   = "completed"   // side-effect done; optional Message
+	CommandResultSubcommand  = "subcommand"  // present SubcommandOptions for selection
+)
+
+// CommandResult is the normalized result of MethodInvokeCommand (v26). Only the
+// fields relevant to Kind are populated.
+type CommandResult struct {
+	Kind              string             `json:"kind"`
+	Text              string             `json:"text,omitempty"`              // text
+	Markdown          bool               `json:"markdown,omitempty"`          // text: render as markdown
+	Prompt            string             `json:"prompt,omitempty"`            // agentPrompt: submit to the agent
+	DisplayPrompt     string             `json:"displayPrompt,omitempty"`     // agentPrompt: show to the user
+	Message           string             `json:"message,omitempty"`           // completed: optional note
+	SubcommandTitle   string             `json:"subcommandTitle,omitempty"`   // subcommand: picker title
+	SubcommandCommand string             `json:"subcommandCommand,omitempty"` // subcommand: parent command to re-invoke
+	SubcommandOptions []SubcommandOption `json:"subcommandOptions,omitempty"` // subcommand: options
+}
+
+// SubcommandOption is one selectable subcommand (v26).
+type SubcommandOption struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Group       string `json:"group,omitempty"`
 }
 
 // Decision values for MethodRespondPermission (v12).
