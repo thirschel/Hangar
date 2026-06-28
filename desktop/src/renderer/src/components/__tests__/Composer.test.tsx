@@ -426,3 +426,78 @@ describe('Composer attachments', () => {
     expect(onSend).toHaveBeenCalledWith('', ['/a/x.go']);
   });
 });
+
+describe('Composer slash commands', () => {
+  const cmds = [
+    { name: 'help', description: 'Show help', kind: 'builtin' },
+    { name: 'clear', description: 'Clear the chat', kind: 'builtin' },
+    { name: 'plan-review', description: 'Review a plan', kind: 'skill' },
+  ];
+
+  it('opens the slash box on "/" and filters by prefix as you type', () => {
+    render(<Composer {...baseProps({ commands: cmds })} />);
+    const textbox = screen.getByRole('textbox');
+
+    fireEvent.change(textbox, { target: { value: '/' } });
+    const box = screen.getByRole('listbox', { name: 'Slash commands' });
+    expect(within(box).getAllByRole('option')).toHaveLength(3);
+
+    fireEvent.change(textbox, { target: { value: '/cl' } });
+    const options = within(screen.getByRole('listbox')).getAllByRole('option');
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent('/clear');
+  });
+
+  it('navigates with ArrowDown and completes the highlighted command on Tab', () => {
+    const onSend = vi.fn();
+    render(<Composer {...baseProps({ commands: cmds, onSend })} />);
+    const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+
+    fireEvent.change(textbox, { target: { value: '/' } });
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')[0]).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    fireEvent.keyDown(textbox, { key: 'ArrowDown' });
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')[1]).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+
+    // Tab completes to "/clear " (trailing space) and closes the box; no send.
+    fireEvent.keyDown(textbox, { key: 'Tab' });
+    expect(textbox.value).toBe('/clear ');
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).not.toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('Enter completes the command instead of sending while the box is open', () => {
+    const onSend = vi.fn();
+    render(<Composer {...baseProps({ commands: cmds, onSend })} />);
+    const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+
+    fireEvent.change(textbox, { target: { value: '/he' } });
+    fireEvent.keyDown(textbox, { key: 'Enter' });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(textbox.value).toBe('/help ');
+  });
+
+  it('hides the box once a space follows the slash token', () => {
+    render(<Composer {...baseProps({ commands: cmds })} />);
+    const textbox = screen.getByRole('textbox');
+
+    fireEvent.change(textbox, { target: { value: '/help' } });
+    expect(screen.getByRole('listbox', { name: 'Slash commands' })).toBeInTheDocument();
+
+    fireEvent.change(textbox, { target: { value: '/help ' } });
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).not.toBeInTheDocument();
+  });
+
+  it('does not open the box when no commands are available', () => {
+    render(<Composer {...baseProps({ commands: [] })} />);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/' } });
+    expect(screen.queryByRole('listbox', { name: 'Slash commands' })).not.toBeInTheDocument();
+  });
+});

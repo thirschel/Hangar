@@ -183,6 +183,34 @@ export interface ModelInfo {
   defaultEffort?: string;
 }
 
+// Slash commands (v26): one available command for the composer autocomplete.
+export interface CommandInfo {
+  name: string;
+  description?: string;
+  kind?: string; // 'builtin' | 'skill' | 'client'
+  aliases?: string[];
+  inputHint?: string;
+}
+
+export interface SubcommandOption {
+  name: string;
+  description?: string;
+  group?: string;
+}
+
+// Normalized result of invoking a slash command (one of text/agentPrompt/completed/subcommand).
+export interface CommandResult {
+  kind: string;
+  text?: string;
+  markdown?: boolean;
+  prompt?: string;
+  displayPrompt?: string;
+  message?: string;
+  subcommandTitle?: string;
+  subcommandCommand?: string;
+  subcommandOptions?: SubcommandOption[];
+}
+
 export interface HostInfo {
   pipeName: string;
   pid: number;
@@ -237,6 +265,8 @@ export interface Request {
     | 'RespondExitPlanMode'
     | 'ListModels'
     | 'SetModel'
+    | 'ListCommands'
+    | 'InvokeCommand'
     | string;
   session?: string;
   program?: string;
@@ -287,6 +317,8 @@ export interface Request {
   rich?: boolean;
   // Run methods (v3)
   command?: string;
+  // InvokeCommand (v26): raw args after the command name (command name reuses `command`).
+  input?: string;
   sinceOffset?: number;
   since?: number;
   // Regenerate (v5)
@@ -337,6 +369,9 @@ export interface Response {
   frames?: EventFrame[];
   // Live model selector: ListModels returns the selectable models.
   models?: ModelInfo[];
+  // Slash commands (v26): ListCommands -> commands; InvokeCommand -> commandResult.
+  commands?: CommandInfo[];
+  commandResult?: CommandResult;
 }
 
 type PendingCall = {
@@ -649,6 +684,22 @@ export class ControlClient {
     if (!response.ok) {
       throw new Error(response.error || 'SetModel failed');
     }
+  }
+
+  public async listCommands(session: string): Promise<CommandInfo[]> {
+    const response = await this.call({ method: 'ListCommands', session });
+    if (!response.ok) {
+      throw new Error(response.error || 'ListCommands failed');
+    }
+    return response.commands ?? [];
+  }
+
+  public async invokeCommand(session: string, command: string, input: string): Promise<CommandResult> {
+    const response = await this.call({ method: 'InvokeCommand', session, command, input });
+    if (!response.ok || !response.commandResult) {
+      throw new Error(response.error || 'InvokeCommand failed');
+    }
+    return response.commandResult;
   }
 
   private rejectAll(error: Error): void {

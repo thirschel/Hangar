@@ -20,6 +20,8 @@ import {
   type DirEntry,
   type EventFrame,
   type FileContents,
+  type CommandInfo,
+  type CommandResult,
   type ModelInfo,
 } from './host-client';
 import {
@@ -783,6 +785,17 @@ ipcMain.handle(
     args: { session: string; modelId: string; effort?: string; contextTier?: string },
   ): Promise<void> => {
     await callControl((c) => c.setModel(args.session, args.modelId, args.effort, args.contextTier));
+  },
+);
+
+ipcMain.handle('rich:list-commands', async (_event, session: string): Promise<CommandInfo[]> => {
+  return callControl((c) => c.listCommands(session));
+});
+
+ipcMain.handle(
+  'rich:invoke-command',
+  async (_event, args: { session: string; command: string; input: string }): Promise<CommandResult> => {
+    return callControl((c) => c.invokeCommand(args.session, args.command, args.input));
   },
 );
 

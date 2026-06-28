@@ -5,6 +5,8 @@ import type {
   EventFrame,
   FileContents,
   FileDiffInfo,
+  CommandInfo,
+  CommandResult,
   ModelInfo,
   Request,
   Response,
@@ -325,6 +327,10 @@ const api = {
     contextTier?: string,
   ): Promise<void> =>
     ipcRenderer.invoke('rich:set-model', { session: sessionName, modelId, effort, contextTier }),
+  listCommands: (session: string): Promise<CommandInfo[]> =>
+    ipcRenderer.invoke('rich:list-commands', session),
+  invokeCommand: (session: string, command: string, input: string): Promise<CommandResult> =>
+    ipcRenderer.invoke('rich:invoke-command', { session, command, input }),
   detectShells: (): Promise<ShellProfile[]> => ipcRenderer.invoke('cs:detect-shells'),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('cs:pick-folder'),
   // Native multi-select open-file dialog for message attachments; returns the
