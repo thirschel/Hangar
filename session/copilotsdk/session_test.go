@@ -503,6 +503,71 @@ func TestOnExitPlanModeNoClientDeclines(t *testing.T) {
 	}
 }
 
+// TestBuildMessageOptionsPlanPrefixesAndHidesMarker proves the plan-mode fix: the
+// agent-facing prompt gets the "[[PLAN]]" marker (required because copilot 1.0.66
+// ignores AgentMode alone) while DisplayPrompt keeps the user's clean text for the
+// timeline, plus AgentMode=plan.
+func TestBuildMessageOptionsPlanPrefixesAndHidesMarker(t *testing.T) {
+	opts := buildMessageOptions("do the thing", nil, "plan")
+	if opts.Prompt != "[[PLAN]] do the thing" {
+		t.Fatalf("plan Prompt = %q, want the [[PLAN]] marker prepended", opts.Prompt)
+	}
+	if opts.DisplayPrompt != "do the thing" {
+		t.Fatalf("plan DisplayPrompt = %q, want the clean user text", opts.DisplayPrompt)
+	}
+	if opts.AgentMode != copilot.AgentModePlan {
+		t.Fatalf("plan AgentMode = %q, want plan", opts.AgentMode)
+	}
+}
+
+func TestBuildMessageOptionsAutopilot(t *testing.T) {
+	opts := buildMessageOptions("go", nil, "autopilot")
+	if opts.Prompt != "go" || opts.DisplayPrompt != "" {
+		t.Fatalf("autopilot must not prefix/hide: Prompt=%q DisplayPrompt=%q", opts.Prompt, opts.DisplayPrompt)
+	}
+	if opts.AgentMode != copilot.AgentModeAutopilot {
+		t.Fatalf("autopilot AgentMode = %q, want autopilot", opts.AgentMode)
+	}
+}
+
+func TestBuildMessageOptionsInteractiveUnchanged(t *testing.T) {
+	opts := buildMessageOptions("hi", nil, "")
+	if opts.Prompt != "hi" || opts.DisplayPrompt != "" || opts.AgentMode != "" {
+		t.Fatalf("interactive send must be byte-for-byte unchanged: %+v", opts)
+	}
+}
+
+// TestDecideAutopilotTurnAutoApproves proves an autopilot turn auto-approves tool
+// permissions (so an autopilot send / continuation runs autonomously), while the
+// default (AutoYes off, no autopilot turn) leaves the request pending.
+func TestDecideAutopilotTurnAutoApproves(t *testing.T) {
+	s := New(Config{Logger: log.New(io.Discard, "", 0)})
+	if approve, pend := s.decide(nil); approve || !pend {
+		t.Fatalf("default decide = approve=%v pend=%v, want pending", approve, pend)
+	}
+	s.autopilotTurn.Store(true)
+	if approve, pend := s.decide(nil); !approve || pend {
+		t.Fatalf("autopilot-turn decide = approve=%v pend=%v, want auto-approve", approve, pend)
+	}
+}
+
+// TestRespondExitPlanModeAutopilotArmsTurn proves approving a plan with the
+// "autopilot" action arms the autopilot turn so the continuation runs autonomously.
+func TestRespondExitPlanModeAutopilotArmsTurn(t *testing.T) {
+	got := make(chan PlanPrompt, 1)
+	s := New(Config{Logger: log.New(io.Discard, "", 0), OnPlan: func(p PlanPrompt) { got <- p }})
+	go func() {
+		_, _ = s.onExitPlanMode(copilot.ExitPlanModeRequest{Summary: "x", Actions: []string{"autopilot"}}, copilot.ExitPlanModeInvocation{})
+	}()
+	p := <-got
+	if err := s.RespondExitPlanMode(p.RequestID, true, "autopilot", ""); err != nil {
+		t.Fatalf("RespondExitPlanMode: %v", err)
+	}
+	if !s.autopilotTurn.Load() {
+		t.Fatal("approving a plan with the autopilot action must arm the autopilot turn")
+	}
+}
+
 func TestHandleEventClearsWaitingOnResumedActivity(t *testing.T) {
 	cases := []struct {
 		name string

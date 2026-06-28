@@ -153,13 +153,14 @@ type Session struct {
 	// Context-usage header + model selector (v14). currentModel is seeded from
 	// cfg.Model and updated on SessionModelChangeData (best-effort; "" when unknown).
 	// usage* hold the most recent context-window usage reported by the SDK.
-	currentModel string
-	usageCurrent int64
-	usageLimit   int64
-	usageAicNano float64
-	usageKnown   bool
-	autoYes      atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
-	lastOutput   atomic.Int64 // unix-ms of the last output-changing event
+	currentModel  string
+	usageCurrent  int64
+	usageLimit    int64
+	usageAicNano  float64
+	usageKnown    bool
+	autoYes       atomic.Bool  // runtime-toggleable auto-approval (host SetAutoYes)
+	autopilotTurn atomic.Bool  // per-turn auto-approval for an autopilot send/continuation; cleared on idle
+	lastOutput    atomic.Int64 // unix-ms of the last output-changing event
 
 	promptMu    sync.Mutex
 	prompts     map[string]chan userInputReply
@@ -327,15 +328,28 @@ func (s *Session) Send(ctx context.Context, prompt string, attachments []string,
 		return fmt.Errorf("session not started")
 	}
 	s.setStatus(StatusRunning)
-	opts := copilot.MessageOptions{Prompt: prompt}
-	opts.Attachments = attachmentsFromPaths(attachments)
-	// Plan/Autopilot work modes (v25): an empty mode is interactive (omitted), so a
-	// modeless send is byte-for-byte the pre-v25 request.
-	if mode != "" {
-		opts.AgentMode = copilot.AgentMode(mode)
-	}
-	_, err := sess.Send(ctx, opts)
+	// Autopilot auto-approves tools for the turn (cleared on idle); plan/interactive do not.
+	s.autopilotTurn.Store(mode == "autopilot")
+	_, err := sess.Send(ctx, buildMessageOptions(prompt, attachments, mode))
 	return s.noteErr(err)
+}
+
+// buildMessageOptions maps a Hangar work mode onto SDK MessageOptions. copilot CLI
+// 1.0.66 ignores AgentMode on its own, so plan mode ALSO prepends the agent-facing
+// "[[PLAN]]" marker (DisplayPrompt hides it from the timeline) to engage the
+// structured exit_plan_mode flow. An empty mode is interactive — byte-for-byte the
+// pre-mode request.
+func buildMessageOptions(prompt string, attachments []string, mode string) copilot.MessageOptions {
+	opts := copilot.MessageOptions{Prompt: prompt, Attachments: attachmentsFromPaths(attachments)}
+	switch mode {
+	case "plan":
+		opts.Prompt = "[[PLAN]] " + prompt
+		opts.DisplayPrompt = prompt
+		opts.AgentMode = copilot.AgentModePlan
+	case "autopilot":
+		opts.AgentMode = copilot.AgentModeAutopilot
+	}
+	return opts
 }
 
 // attachmentsFromPaths maps absolute file paths to Copilot SDK file attachments,
@@ -885,6 +899,7 @@ func (s *Session) handleEvent(ev copilot.SessionEvent) {
 			s.setStatus(StatusRunning)
 		case *copilot.SessionIdleData:
 			s.setStatus(StatusReady)
+			s.autopilotTurn.Store(false)
 		case *copilot.SessionMCPServersLoadedData:
 			s.captureMCPServersLoaded(data)
 		case *copilot.SessionMCPServerStatusChangedData:
@@ -929,6 +944,9 @@ func (s *Session) onPermission(req copilot.PermissionRequest, _ copilot.Permissi
 }
 
 func (s *Session) decide(req copilot.PermissionRequest) (approve, pend bool) {
+	if s.autopilotTurn.Load() {
+		return true, false
+	}
 	if s.cfg.Decide != nil {
 		return s.cfg.Decide(req)
 	}
@@ -1108,6 +1126,11 @@ func (s *Session) RespondExitPlanMode(requestID string, approved bool, selectedA
 	s.promptMu.Unlock()
 	if !ok {
 		return fmt.Errorf("no pending plan request: %s", requestID)
+	}
+	// Approving a plan with the "autopilot" action continues the SAME turn
+	// autonomously, so auto-approve tools for the rest of the turn.
+	if approved && selectedAction == "autopilot" {
+		s.autopilotTurn.Store(true)
 	}
 	return nil
 }
